@@ -1,5 +1,5 @@
 #!/bin/sh
-# Writes one timestamped backup folder containing both databases and Forgejo's files.
+# Writes one timestamped backup folder containing every database and Forgejo's files.
 # Keycloak keeps all its state in its database, so it has no separate file backup.
 set -eu
 
@@ -8,7 +8,7 @@ partial="/backups/.partial-$name"
 trap 'rm -rf "$partial"' EXIT
 mkdir -p "$partial"
 
-for db in keycloak forgejo; do
+for db in dreamdevops keycloak forgejo; do
   echo "Dumping database: $db"
   pg_dump -Fc -d "$db" -f "$partial/$db.dump"
 done

@@ -44,7 +44,17 @@ roles_are_isolated() {
     && [ "$(psql -Atc "select has_database_privilege('keycloak', 'forgejo', 'connect')" postgres)" = "f" ]
 }
 
+platform_roles_are_restricted() {
+  [ "$(psql -Atc "select count(*) from pg_roles where rolname like 'dreamdevops\_%' and not rolsuper and not rolbypassrls" postgres)" = "4" ]
+}
+
+platform_database_exists() {
+  psql -Atc 'select 1' dreamdevops
+}
+
 check "PostgreSQL accepts connections" pg_isready -h postgres
+check "DreamDevOps database exists" platform_database_exists
+check "DreamDevOps roles can't bypass row-level security" platform_roles_are_restricted
 check "Tool database roles cannot reach each other's data" roles_are_isolated
 check "Forgejo is healthy" wget -qO- http://forgejo:3000/api/healthz
 check "Forgejo accepts the administrator login" forgejo_login

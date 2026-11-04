@@ -4,7 +4,7 @@ Runs the shared tools DreamDevOps needs on your own machine, using Docker Deskto
 
 | Tool | Purpose | Address |
 |---|---|---|
-| PostgreSQL | Databases for Keycloak and Forgejo | `localhost:5433` |
+| PostgreSQL | Databases for DreamDevOps, Keycloak and Forgejo | `localhost:5433` |
 | Keycloak | Login provider | <http://localhost:8081> |
 | Forgejo | Git hosting | <http://localhost:3000>, SSH on `localhost:2222` |
 
@@ -24,6 +24,18 @@ Then start the stack. The command returns once everything is ready, which takes 
 docker compose run --rm start
 ```
 
+Then, from the repository root, install the dependencies and create the DreamDevOps tables:
+
+```bash
+npm install
+```
+
+```bash
+npm run db:migrate
+```
+
+If you already had a `.env` file, copy any new values from `.env.example` into it first.
+
 ## Everyday commands
 
 | Task | Command |
@@ -37,14 +49,14 @@ docker compose run --rm start
 
 ## Backup and restore
 
-Backups go into `backups/`, which Git ignores. Each one is a timestamped folder with both databases and Forgejo's files.
+Backups go into `backups/`, which Git ignores. Each one is a timestamped folder with all three databases and Forgejo's files. Backups made before the DreamDevOps database existed can't be restored with these commands.
 
 | Task | Command |
 |---|---|
 | Create a backup | `docker compose run --rm backup` |
 | Prove the latest backup can be restored, without touching live data | `docker compose run --rm restore-test` |
 
-Restoring replaces all local Keycloak and Forgejo data. To restore the latest backup, stop both tools first:
+Restoring replaces all local DreamDevOps, Keycloak and Forgejo data. To restore the latest backup, stop both tools and anything else using the database:
 
 ```bash
 docker compose stop keycloak forgejo

@@ -98,10 +98,38 @@ services:
       forgejo:
         condition: service_healthy
 
+  # Creates the DreamDevOps database and roles, then exits. Safe to run repeatedly.
+  platform-db-init:
+    image: postgres:17.11-alpine
+    entrypoint:
+      - psql
+      - --no-psqlrc
+      - -d
+      - postgres
+      - -v
+      - owner_password=${DREAMDEVOPS_DB_OWNER_PASSWORD:?copy the new values from .env.example to .env}
+      - -v
+      - app_password=${DREAMDEVOPS_DB_APP_PASSWORD:?copy the new values from .env.example to .env}
+      - -v
+      - relay_password=${DREAMDEVOPS_DB_RELAY_PASSWORD:?copy the new values from .env.example to .env}
+      - -v
+      - jobs_password=${DREAMDEVOPS_DB_JOBS_PASSWORD:?copy the new values from .env.example to .env}
+      - -f
+      - /init/init-platform-database.sql
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_SUPERUSER}
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+    volumes:
+      - ./postgres:/init:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # The services below run only on request: docker compose run --rm <name>
 
   # Starts everything and returns once it is ready. "docker compose up --wait"
-  # can't do this, because it treats forgejo-init's normal exit as a failure.
+  # can't do this, because it treats the setup services' normal exit as a failure.
   start:
     image: postgres:17.11-alpine
     profiles: [ops]
@@ -112,6 +140,8 @@ services:
       forgejo:
         condition: service_healthy
       forgejo-init:
+        condition: service_completed_successfully
+      platform-db-init:
         condition: service_completed_successfully
 
   smoke-test:

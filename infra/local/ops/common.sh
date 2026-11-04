@@ -19,7 +19,7 @@ select_backup() {
       ;;
   esac
 
-  for file in keycloak.dump forgejo.dump forgejo-data.tar.gz; do
+  for file in dreamdevops.dump keycloak.dump forgejo.dump forgejo-data.tar.gz; do
     if [ ! -s "/backups/$selected/$file" ]; then
       echo "Backup $selected is missing $file." >&2
       exit 1
