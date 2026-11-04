@@ -43,6 +43,9 @@ testem.log
 .env.*
 !.env.example
 
+# Local stack backups
+/infra/local/backups/
+
 # System files
 .DS_Store
 Thumbs.db

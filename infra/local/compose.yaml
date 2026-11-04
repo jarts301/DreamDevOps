@@ -1,0 +1,192 @@
+# Local development stack for DreamDevOps.
+# Every port binds to 127.0.0.1, so nothing is reachable from other machines.
+# See README.md in this folder for usage.
+name: dreamdevops-local
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:?copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?copy .env.example to .env}
+      POSTGRES_DB: postgres
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?copy .env.example to .env}
+      FORGEJO_DB_PASSWORD: ${FORGEJO_DB_PASSWORD:?copy .env.example to .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?copy .env.example to .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?copy .env.example to .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8081}:8080"
+    healthcheck:
+      # The image has no curl, so this speaks HTTP through bash's /dev/tcp.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000;
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          grep -q '"status": "UP"' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:15.0.11
+    restart: unless-stopped
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: postgres:5432
+      FORGEJO__database__NAME: forgejo
+      FORGEJO__database__USER: forgejo
+      FORGEJO__database__PASSWD: ${FORGEJO_DB_PASSWORD}
+      FORGEJO__server__DOMAIN: localhost
+      FORGEJO__server__ROOT_URL: http://localhost:${FORGEJO_HTTP_PORT:-3000}/
+      FORGEJO__server__SSH_DOMAIN: localhost
+      FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_PORT:-2222}
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+    volumes:
+      - forgejo-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FORGEJO_HTTP_PORT:-3000}:3000"
+      - "127.0.0.1:${FORGEJO_SSH_PORT:-2222}:22"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # Creates the first Forgejo administrator, then exits. Safe to run repeatedly.
+  forgejo-init:
+    image: codeberg.org/forgejo/forgejo:15.0.11
+    user: "1000:1000"
+    entrypoint: ["/bin/sh", "/ops/forgejo-init.sh"]
+    environment:
+      FORGEJO_ADMIN_USERNAME: ${FORGEJO_ADMIN_USERNAME:?copy .env.example to .env}
+      FORGEJO_ADMIN_PASSWORD: ${FORGEJO_ADMIN_PASSWORD:?copy .env.example to .env}
+      FORGEJO_ADMIN_EMAIL: ${FORGEJO_ADMIN_EMAIL:?copy .env.example to .env}
+    volumes:
+      - forgejo-data:/data
+      - ./ops:/ops:ro
+    depends_on:
+      forgejo:
+        condition: service_healthy
+
+  # The services below run only on request: docker compose run --rm <name>
+
+  # Starts everything and returns once it is ready. "docker compose up --wait"
+  # can't do this, because it treats forgejo-init's normal exit as a failure.
+  start:
+    image: postgres:17.11-alpine
+    profiles: [ops]
+    entrypoint: ["/bin/sh", "-c", "echo 'Local stack is ready.'"]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      forgejo:
+        condition: service_healthy
+      forgejo-init:
+        condition: service_completed_successfully
+
+  smoke-test:
+    image: postgres:17.11-alpine
+    profiles: [ops]
+    entrypoint: ["/bin/sh", "/ops/smoke-test.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_SUPERUSER}
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      FORGEJO_ADMIN_USERNAME: ${FORGEJO_ADMIN_USERNAME}
+      FORGEJO_ADMIN_PASSWORD: ${FORGEJO_ADMIN_PASSWORD}
+    volumes:
+      - ./ops:/ops:ro
+
+  backup:
+    image: postgres:17.11-alpine
+    profiles: [ops]
+    entrypoint: ["/bin/sh", "/ops/backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_SUPERUSER}
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+    volumes:
+      - forgejo-data:/forgejo-data:ro
+      - ./backups:/backups
+      - ./ops:/ops:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Proves the latest backup can be restored, using scratch databases.
+  # It does not touch the live data.
+  restore-test:
+    image: postgres:17.11-alpine
+    profiles: [ops]
+    entrypoint: ["/bin/sh", "/ops/restore-test.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_SUPERUSER}
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      BACKUP_NAME: ${BACKUP_NAME:-}
+    volumes:
+      - ./backups:/backups:ro
+      - ./ops:/ops:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Replaces the live data with a backup. Requires RESTORE_CONFIRM=yes.
+  restore:
+    image: postgres:17.11-alpine
+    profiles: [ops]
+    entrypoint: ["/bin/sh", "/ops/restore.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_SUPERUSER}
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      BACKUP_NAME: ${BACKUP_NAME:-}
+      RESTORE_CONFIRM: ${RESTORE_CONFIRM:-}
+    volumes:
+      - forgejo-data:/forgejo-data
+      - ./backups:/backups:ro
+      - ./ops:/ops:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  forgejo-data:
