@@ -13,6 +13,7 @@ import {
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { CookieOptions, Response } from 'express';
 import type { AppConfig } from '../../config/app-config.ts';
 import { Authenticated, Public } from '../../http/access.decorators.ts';
@@ -107,6 +108,7 @@ export class AuthController {
   }
 
   /** Returns where the browser should go to end the login provider's session too. */
+  @SkipThrottle({ auth: true })
   @Authenticated()
   @Post('logout')
   @HttpCode(200)
@@ -121,6 +123,8 @@ export class AuthController {
     };
   }
 
+  // The dashboard calls this often, so the strict login limit would lock people out.
+  @SkipThrottle({ auth: true })
   @Authenticated()
   @Get('me')
   me(@Req() request: ApiRequest): object {
@@ -129,6 +133,7 @@ export class AuthController {
   }
 
   /** Chooses which of the user's companies this session acts for. */
+  @SkipThrottle({ auth: true })
   @Authenticated()
   @Post('active-company')
   @HttpCode(204)

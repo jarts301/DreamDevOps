@@ -8,7 +8,7 @@ Runs the shared tools DreamDevOps needs on your own machine, using Docker Deskto
 | Keycloak | Login provider, with the `dreamdevops` realm and sample users | <http://localhost:8081> |
 | Forgejo | Git hosting | <http://localhost:3000>, SSH on `localhost:2222` |
 
-All ports bind to `127.0.0.1`, so other machines can't reach them. You can change the ports and passwords in `.env`.
+All ports bind to `127.0.0.1`, so other machines can't reach them. Every password in `.env.example` is a fake dummy value, starting with `fake-dummy-`, and must never be used on a server. The tools keep the passwords they started with, so changing one in `.env` after the first run means changing it inside the tool too, or resetting with `docker compose down -v`, which deletes all local data.
 
 ## First run
 

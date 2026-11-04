@@ -18,7 +18,7 @@ The API listens on <http://localhost:4000>, and only accepts connections from yo
 
 ## Sign in
 
-The API uses the `dreamdevops` realm in the local Keycloak. Open <http://localhost:4000/api/v1/auth/login> and sign in as a sample user, or use **Register** to create a user. You land on `/api/v1/auth/me`, which shows who you are.
+The API uses the `dreamdevops` realm in the local Keycloak. Open <http://localhost:4000/api/v1/auth/login> and sign in as a sample user, or use **Register** to create a user. You land on the [dashboard](../dashboard/README.md), so start it too. Without it, open `/api/v1/auth/me` to see who you are.
 
 | Sample user | Starts as |
 |---|---|
@@ -62,7 +62,7 @@ Each request runs in the signed-in user's company, which comes only from the ser
 - **Session limits:** sessions end after 30 minutes idle or 8 hours in total. Login replaces any previous session, and logout also ends the Keycloak session.
 - **Login:** the flow uses `state`, a nonce and PKCE, and redirects only to the configured dashboard address. In production, the API refuses to start without https for Keycloak, secure cookies and verified emails for invitations.
 - **Cross-site requests:** state-changing requests from an unknown `Origin` are refused, and no CORS access is granted.
-- **Rate limits:** 300 requests a minute per address, and 20 for `/auth` routes. Counts are held in memory, so each API instance counts separately.
+- **Rate limits:** 300 requests a minute per address, and 20 for login and invitation routes. Counts are held in memory, so each API instance counts separately.
 - **Errors:** every error uses the `application/problem+json` format and hides internal details.
 - **Headers and bodies:** Helmet sets the security headers, and request bodies are limited to 1 MB.
 

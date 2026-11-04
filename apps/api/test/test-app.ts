@@ -5,10 +5,10 @@ import { AppModule } from '../src/app.module.ts';
 import type { AppConfig } from '../src/config/app-config.ts';
 import { configureApp } from '../src/configure-app.ts';
 import { IDENTITY_PROVIDER, USER_DIRECTORY } from '../src/identity-access/application/ports.ts';
-import { InMemorySessionStore } from '../src/session/in-memory-session-store.ts';
 import { SESSION_STORE } from '../src/session/session-store.ts';
 import { DATABASE_POOL } from '../src/tokens.ts';
 import { FakeIdentityProvider, InMemoryUserDirectory } from './fakes.ts';
+import { InMemorySessionStore } from './in-memory-session-store.ts';
 
 export const PUBLIC_URL = 'http://api.test';
 export const DASHBOARD_URL = 'http://dashboard.test/';

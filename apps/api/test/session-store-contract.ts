@@ -8,12 +8,25 @@ const data: SessionData = {
 };
 
 const LONG = { absoluteMs: 60_000, idleMs: 60_000 };
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const newHash = () => hashSessionId(newSessionId());
 
-/** Every SessionStore must pass these, so the fake can't drift from PostgreSQL. */
-export function describeSessionStoreContract(name: string, getStore: () => SessionStore): void {
+export interface SessionStoreHarness {
+  readonly store: SessionStore;
+  /** Moves a limit into the past, instead of waiting for it. */
+  expire(idHash: string, limit: 'idle' | 'absolute'): Promise<void>;
+  /** The session's limits, in milliseconds since the epoch. */
+  expiryTimes(idHash: string): Promise<{ idle: number; absolute: number }>;
+}
+
+/**
+ * Every SessionStore must pass these, so the fake can't drift from PostgreSQL. None of
+ * them wait on a clock, because Docker Desktop's VM clock has been measured stepping
+ * backwards by seconds under load, which made waiting tests fail at random.
+ */
+export function describeSessionStoreContract(name: string, getHarness: () => SessionStoreHarness): void {
   describe(`SessionStore contract: ${name}`, () => {
+    const getStore = () => getHarness().store;
+
     it('returns the data of a live session', async () => {
       const hash = newHash();
       await getStore().create(hash, data, LONG);
@@ -50,32 +63,51 @@ export function describeSessionStoreContract(name: string, getStore: () => Sessi
 
     it('ends a session left idle', async () => {
       const hash = newHash();
-      await getStore().create(hash, data, { absoluteMs: 60_000, idleMs: 100 });
+      await getStore().create(hash, data, LONG);
 
-      await sleep(200);
-
-      await expect(getStore().touch(hash, 100)).resolves.toBeNull();
-    });
-
-    it('extends a session while it is used', async () => {
-      const hash = newHash();
-      await getStore().create(hash, data, { absoluteMs: 60_000, idleMs: 400 });
-
-      await sleep(250);
-      await expect(getStore().touch(hash, 400)).resolves.toEqual(data);
-      await sleep(250);
-
-      await expect(getStore().touch(hash, 400)).resolves.toEqual(data);
-    });
-
-    it('ends a session at its absolute limit, even while it is used', async () => {
-      const hash = newHash();
-      await getStore().create(hash, data, { absoluteMs: 300, idleMs: 60_000 });
-
-      await expect(getStore().touch(hash, 60_000)).resolves.toEqual(data);
-      await sleep(400);
+      await getHarness().expire(hash, 'idle');
 
       await expect(getStore().touch(hash, 60_000)).resolves.toBeNull();
+    });
+
+    it('ends a session at its absolute limit, even if it is not idle', async () => {
+      const hash = newHash();
+      await getStore().create(hash, data, LONG);
+
+      await getHarness().expire(hash, 'absolute');
+
+      await expect(getStore().touch(hash, 60_000)).resolves.toBeNull();
+    });
+
+    it('sets its limits from the requested lifetime', async () => {
+      const hash = newHash();
+      await getStore().create(hash, data, { absoluteMs: 3_600_000, idleMs: 60_000 });
+
+      const { idle, absolute } = await getHarness().expiryTimes(hash);
+
+      expect(absolute - idle).toBe(3_540_000);
+    });
+
+    it('extends the idle limit while the session is used', async () => {
+      const hash = newHash();
+      await getStore().create(hash, data, { absoluteMs: 86_400_000, idleMs: 1_000 });
+      const before = await getHarness().expiryTimes(hash);
+
+      await expect(getStore().touch(hash, 3_600_000)).resolves.toEqual(data);
+
+      const after = await getHarness().expiryTimes(hash);
+      expect(after.idle - before.idle).toBeGreaterThan(3_000_000);
+      expect(after.absolute).toBe(before.absolute);
+    });
+
+    it('never extends a session past its absolute limit', async () => {
+      const hash = newHash();
+      await getStore().create(hash, data, { absoluteMs: 60_000, idleMs: 1_000 });
+
+      await getStore().touch(hash, 86_400_000);
+
+      const { idle, absolute } = await getHarness().expiryTimes(hash);
+      expect(idle).toBe(absolute);
     });
   });
 }

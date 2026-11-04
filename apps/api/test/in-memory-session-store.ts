@@ -1,8 +1,8 @@
-import type { SessionData, SessionLifetime, SessionStore } from './session-store.ts';
+import type { SessionData, SessionLifetime, SessionStore } from '../src/session/session-store.ts';
 
 interface StoredSession {
   data: SessionData;
-  readonly expiresAt: number;
+  expiresAt: number;
   idleExpiresAt: number;
 }
 
@@ -38,5 +38,20 @@ export class InMemorySessionStore implements SessionStore {
 
   async delete(idHash: string): Promise<void> {
     this.#sessions.delete(idHash);
+  }
+
+  /** Test control: moves a limit into the past, so tests don't wait on a clock. */
+  expire(idHash: string, limit: 'idle' | 'absolute'): void {
+    const session = this.#sessions.get(idHash)!;
+    if (limit === 'idle') {
+      session.idleExpiresAt = 0;
+    } else {
+      session.expiresAt = 0;
+    }
+  }
+
+  expiryTimes(idHash: string): { idle: number; absolute: number } {
+    const session = this.#sessions.get(idHash)!;
+    return { idle: session.idleExpiresAt, absolute: session.expiresAt };
   }
 }

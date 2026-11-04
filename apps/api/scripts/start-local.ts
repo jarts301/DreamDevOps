@@ -13,7 +13,7 @@ process.env.KEYCLOAK_CLIENT_SECRET ??= process.env.DREAMDEVOPS_KEYCLOAK_CLIENT_S
 process.env.REQUIRE_VERIFIED_EMAIL ??= 'false';
 process.env.API_DATABASE_URL = `postgres://dreamdevops_app:${encodeURIComponent(password)}@localhost:${databasePort}/dreamdevops`;
 process.env.API_PUBLIC_URL ??= `http://localhost:${apiPort}`;
-process.env.DASHBOARD_URL ??= `http://localhost:${apiPort}/api/v1/auth/me`;
+process.env.DASHBOARD_URL ??= 'http://localhost:4200/';
 // Browsers won't send Secure cookies over plain HTTP, which is all the local stack has.
 process.env.SECURE_COOKIES ??= 'false';
 

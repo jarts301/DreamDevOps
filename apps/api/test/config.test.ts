@@ -7,7 +7,7 @@ const valid = {
   DASHBOARD_URL: 'http://localhost:4200',
   KEYCLOAK_ISSUER_URL: 'http://localhost:8081/realms/dreamdevops',
   KEYCLOAK_CLIENT_ID: 'dreamdevops-dashboard',
-  KEYCLOAK_CLIENT_SECRET: 'secret',
+  KEYCLOAK_CLIENT_SECRET: 'fake-dummy-client-secret',
 };
 
 const production = { ...valid, NODE_ENV: 'production', KEYCLOAK_ISSUER_URL: 'https://login.example.com/realms/dreamdevops' };

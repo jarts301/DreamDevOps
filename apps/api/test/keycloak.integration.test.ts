@@ -8,8 +8,8 @@ import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
 
 const REALM_FILE = fileURLToPath(new URL('../../../infra/local/keycloak/dreamdevops-realm.json', import.meta.url));
-const CLIENT_SECRET = 'test-client-secret';
-const USER_PASSWORD = 'test-user-password';
+const CLIENT_SECRET = 'fake-dummy-client-secret';
+const USER_PASSWORD = 'fake-dummy-user-password';
 // The realm only accepts this redirect address. The test never opens it: it reads the
 // redirect and passes the same path and query to the application directly.
 const PUBLIC_URL = 'http://localhost:4000';

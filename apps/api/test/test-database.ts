@@ -21,7 +21,7 @@ export async function startTestDatabase(): Promise<TestDatabase> {
     container.getUsername(),
     '-d',
     'postgres',
-    ...['owner', 'app', 'relay', 'jobs'].flatMap((role) => ['-v', `${role}_password=${role}`]),
+    ...['owner', 'app', 'relay', 'jobs'].flatMap((role) => ['-v', `${role}_password=fake-dummy-${role}-password`]),
     '-f',
     '/tmp/init-platform-database.sql',
   ]);
@@ -30,7 +30,7 @@ export async function startTestDatabase(): Promise<TestDatabase> {
   }
 
   const urlFor: TestDatabase['urlFor'] = (role) =>
-    `postgres://dreamdevops_${role}:${role}@${container.getHost()}:${container.getPort()}/dreamdevops`;
+    `postgres://dreamdevops_${role}:fake-dummy-${role}-password@${container.getHost()}:${container.getPort()}/dreamdevops`;
   await migrateSharedKernel(urlFor('owner'));
   await migrateApi(urlFor('owner'));
 

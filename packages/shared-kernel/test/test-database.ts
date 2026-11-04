@@ -23,13 +23,13 @@ export async function startTestDatabase(): Promise<TestDatabase> {
     '-d',
     'postgres',
     '-v',
-    'owner_password=owner',
+    'owner_password=fake-dummy-owner-password',
     '-v',
-    'app_password=app',
+    'app_password=fake-dummy-app-password',
     '-v',
-    'relay_password=relay',
+    'relay_password=fake-dummy-relay-password',
     '-v',
-    'jobs_password=jobs',
+    'jobs_password=fake-dummy-jobs-password',
     '-f',
     '/tmp/init-platform-database.sql',
   ]);
@@ -38,7 +38,7 @@ export async function startTestDatabase(): Promise<TestDatabase> {
   }
 
   const urlFor: TestDatabase['urlFor'] = (role) =>
-    `postgres://dreamdevops_${role}:${role}@${container.getHost()}:${container.getPort()}/dreamdevops`;
+    `postgres://dreamdevops_${role}:fake-dummy-${role}-password@${container.getHost()}:${container.getPort()}/dreamdevops`;
 
   await migrateSharedKernel(urlFor('owner'));
 

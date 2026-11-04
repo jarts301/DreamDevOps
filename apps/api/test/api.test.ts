@@ -415,6 +415,20 @@ describe('rate limits', () => {
     }
   });
 
+  it('applies only the general limit to routes the dashboard calls often', async () => {
+    const app = await createTestApp({
+      config: { rateLimitPerMinute: 100, authRateLimitPerMinute: 2, secureCookies: false },
+    });
+    try {
+      const agent = await signIn(app, 'developer-a');
+      for (let index = 0; index < 5; index += 1) {
+        await agent.get('/api/v1/auth/me').expect(200);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it('never limits health checks', async () => {
     const app = await createTestApp({ config: { rateLimitPerMinute: 1 } });
     try {

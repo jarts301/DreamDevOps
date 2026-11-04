@@ -126,7 +126,20 @@ afterAll(async () => {
   await database.stop();
 });
 
-describeSessionStoreContract('PostgreSQL', () => new PostgresSessionStore(appPool));
+describeSessionStoreContract('PostgreSQL', () => ({
+  store: new PostgresSessionStore(appPool),
+  expire: async (idHash, limit) => {
+    const column = limit === 'idle' ? 'idle_expires_at' : 'expires_at';
+    await ownerPool.query(`UPDATE api.sessions SET ${column} = now() - interval '1 day' WHERE id_hash = $1`, [idHash]);
+  },
+  expiryTimes: async (idHash) => {
+    const { rows } = await ownerPool.query<{ idle_expires_at: Date; expires_at: Date }>(
+      'SELECT idle_expires_at, expires_at FROM api.sessions WHERE id_hash = $1',
+      [idHash],
+    );
+    return { idle: rows[0]!.idle_expires_at.getTime(), absolute: rows[0]!.expires_at.getTime() };
+  },
+}));
 
 describe('migrations and storage', () => {
   it('applies migrations only once', async () => {
@@ -166,8 +179,8 @@ describe('migrations and storage', () => {
   it('removes expired sessions when a new one is created', async () => {
     const store = new PostgresSessionStore(appPool);
     const data = { userId: 'u', chosenCompanyId: null, idToken: null };
-    await store.create('short-lived', data, { absoluteMs: 1, idleMs: 1 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await store.create('short-lived', data, { absoluteMs: 60_000, idleMs: 60_000 });
+    await ownerPool.query("UPDATE api.sessions SET expires_at = now() - interval '1 day' WHERE id_hash = 'short-lived'");
 
     await store.create('fresh', data, { absoluteMs: 60_000, idleMs: 60_000 });
 
@@ -331,7 +344,7 @@ describe('invitations', () => {
     const { admin } = await startCompany();
     const name = newName('expired');
     const { body } = await admin.post('/api/v1/company/invitations').send({ email: emailOf(name), role: 'viewer' });
-    await ownerPool.query("UPDATE identity.invitations SET expires_at = now() - interval '1 second' WHERE id = $1", [
+    await ownerPool.query("UPDATE identity.invitations SET expires_at = now() - interval '1 day' WHERE id = $1", [
       body.id,
     ]);
     const member = await signIn(name);
