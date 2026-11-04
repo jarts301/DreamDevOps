@@ -3,14 +3,21 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import pg from 'pg';
-import { AuthController } from './auth/auth.controller.ts';
 import type { AppConfig } from './config/app-config.ts';
 import { HealthController } from './health/health.controller.ts';
 import { AuthorizationGuard, OriginGuard, SessionGuard } from './http/guards.ts';
 import { ProblemDetailsFilter } from './http/problem-details.filter.ts';
 import { TenantContextInterceptor } from './http/tenant-context.interceptor.ts';
-import { FakeIdentityProvider } from './identity/fake-identity-provider.ts';
-import { IDENTITY_PROVIDER } from './identity/identity-provider.ts';
+import { CompanyAccessService } from './identity-access/application/company-access.service.ts';
+import { IDENTITY_PROVIDER, USER_DIRECTORY } from './identity-access/application/ports.ts';
+import { AuthController } from './identity-access/http/auth.controller.ts';
+import {
+  CompanyAccessController,
+  InvitationsController,
+  PlatformCompaniesController,
+} from './identity-access/http/company-access.controller.ts';
+import { KeycloakIdentityProvider } from './identity-access/infrastructure/keycloak-identity-provider.ts';
+import { PostgresUserDirectory } from './identity-access/infrastructure/postgres-user-directory.ts';
 import { PostgresSessionStore } from './session/postgres-session-store.ts';
 import { SESSION_STORE } from './session/session-store.ts';
 import { APP_CONFIG, DATABASE_POOL } from './tokens.ts';
@@ -45,12 +52,22 @@ export class AppModule implements OnApplicationShutdown {
               name: 'auth',
               ttl: MINUTE_MS,
               limit: config.authRateLimitPerMinute,
-              skipIf: (context) => context.getClass() !== AuthController,
+              skipIf: (context) => {
+                const controller = context.getClass();
+                return controller !== AuthController && controller !== InvitationsController;
+              },
             },
           ],
         }),
       ],
-      controllers: [AuthController, HealthController, ...(options.controllers ?? [])],
+      controllers: [
+        AuthController,
+        CompanyAccessController,
+        InvitationsController,
+        PlatformCompaniesController,
+        HealthController,
+        ...(options.controllers ?? []),
+      ],
       providers: [
         { provide: APP_CONFIG, useValue: config },
         {
@@ -67,7 +84,26 @@ export class AppModule implements OnApplicationShutdown {
           useFactory: (pool: pg.Pool) => new PostgresSessionStore(pool),
           inject: [DATABASE_POOL],
         },
-        { provide: IDENTITY_PROVIDER, useFactory: () => new FakeIdentityProvider() },
+        {
+          provide: IDENTITY_PROVIDER,
+          useFactory: () =>
+            new KeycloakIdentityProvider({
+              issuerUrl: config.keycloakIssuerUrl,
+              clientId: config.keycloakClientId,
+              clientSecret: config.keycloakClientSecret,
+            }),
+        },
+        {
+          provide: USER_DIRECTORY,
+          useFactory: (pool: pg.Pool) => new PostgresUserDirectory(pool),
+          inject: [DATABASE_POOL],
+        },
+        {
+          provide: CompanyAccessService,
+          useFactory: (database: TenantDatabase, pool: pg.Pool) =>
+            new CompanyAccessService(database, pool, { requireVerifiedEmail: config.requireVerifiedEmail }),
+          inject: [TenantDatabase, DATABASE_POOL],
+        },
         // Guards run in this order, so rate limits apply before any database work.
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: OriginGuard },

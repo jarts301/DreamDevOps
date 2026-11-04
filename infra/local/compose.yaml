@@ -27,8 +27,10 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.1
     restart: unless-stopped
-    command: start-dev
+    command: ["start-dev", "--import-realm"]
     environment:
+      DREAMDEVOPS_KEYCLOAK_CLIENT_SECRET: ${DREAMDEVOPS_KEYCLOAK_CLIENT_SECRET:?copy the new values from .env.example to .env}
+      KEYCLOAK_DEV_USER_PASSWORD: ${KEYCLOAK_DEV_USER_PASSWORD:?copy the new values from .env.example to .env}
       KC_DB: postgres
       KC_DB_URL_HOST: postgres
       KC_DB_URL_DATABASE: keycloak
@@ -37,6 +39,8 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?copy .env.example to .env}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?copy .env.example to .env}
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,86 @@
+{
+  "realm": "dreamdevops",
+  "enabled": true,
+  "displayName": "DreamDevOps",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "verifyEmail": false,
+  "resetPasswordAllowed": false,
+  "bruteForceProtected": true,
+  "sslRequired": "external",
+  "roles": {
+    "realm": [
+      {
+        "name": "platform-admin",
+        "description": "Operates the DreamDevOps platform. Grants no access to company data."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "dreamdevops-dashboard",
+      "name": "DreamDevOps dashboard",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${DREAMDEVOPS_KEYCLOAK_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:4000/api/v1/auth/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:4000/*##http://localhost:4200/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles in the ID token",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "dev-platform-admin",
+      "email": "dev-platform-admin@example.com",
+      "firstName": "Dev",
+      "lastName": "Platform Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "realmRoles": ["platform-admin"],
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "dev-company-admin",
+      "email": "dev-company-admin@example.com",
+      "firstName": "Dev",
+      "lastName": "Company Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "dev-developer",
+      "email": "dev-developer@example.com",
+      "firstName": "Dev",
+      "lastName": "Developer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    }
+  ]
+}

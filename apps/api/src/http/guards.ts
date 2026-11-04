@@ -10,6 +10,8 @@ import {
 import { Reflector } from '@nestjs/core';
 import { APP_CONFIG } from '../tokens.ts';
 import type { AppConfig } from '../config/app-config.ts';
+import { hasPermissions, toPrincipal } from '../identity-access/domain/access.ts';
+import { USER_DIRECTORY, type UserDirectory } from '../identity-access/application/ports.ts';
 import { hashSessionId, SESSION_STORE, type SessionStore } from '../session/session-store.ts';
 import { ACCESS_METADATA, type AccessRule } from './access.decorators.ts';
 import { type ApiRequest, SESSION_COOKIE } from './request.ts';
@@ -20,21 +22,35 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 @Injectable()
 export class SessionGuard implements CanActivate {
   readonly #store: SessionStore;
+  readonly #directory: UserDirectory;
   readonly #config: AppConfig;
 
-  constructor(@Inject(SESSION_STORE) store: SessionStore, @Inject(APP_CONFIG) config: AppConfig) {
+  constructor(
+    @Inject(SESSION_STORE) store: SessionStore,
+    @Inject(USER_DIRECTORY) directory: UserDirectory,
+    @Inject(APP_CONFIG) config: AppConfig,
+  ) {
     this.#store = store;
+    this.#directory = directory;
     this.#config = config;
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<ApiRequest>();
     const sessionId = request.cookies[SESSION_COOKIE];
-    if (sessionId !== undefined) {
-      const principal = await this.#store.touch(hashSessionId(sessionId), this.#config.sessionIdleMs);
-      if (principal !== null) {
-        request.principal = principal;
-      }
+    if (sessionId === undefined) {
+      return true;
+    }
+    const idHash = hashSessionId(sessionId);
+    const session = await this.#store.touch(idHash, this.#config.sessionIdleMs);
+    if (session === null) {
+      return true;
+    }
+    const access = await this.#directory.loadAccess(session.userId);
+    if (access !== null) {
+      request.session = session;
+      request.sessionIdHash = idHash;
+      request.principal = toPrincipal(access, session.chosenCompanyId);
     }
     return true;
   }
@@ -90,7 +106,7 @@ export class AuthorizationGuard implements CanActivate {
       this.#logger.error(`${context.getClass().name}.${context.getHandler().name} has no access rule.`);
       throw new ForbiddenException('You do not have permission to do this.');
     }
-    if (rule.kind === 'permissions' && !rule.permissions.every((p) => principal.permissions.includes(p))) {
+    if (rule.kind === 'permissions' && !hasPermissions(principal, rule.permissions)) {
       throw new ForbiddenException('You do not have permission to do this.');
     }
     return true;

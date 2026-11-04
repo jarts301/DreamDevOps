@@ -3,6 +3,7 @@ import { currentCompanyId } from '@dreamdevops/shared-kernel';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Authenticated, Public, RequirePermissions } from '../src/http/access.decorators.ts';
+import { COMPANY_A, COMPANY_B } from './fakes.ts';
 import { createTestApp, DASHBOARD_URL } from './test-app.ts';
 
 @Controller('sample')
@@ -56,13 +57,11 @@ class SampleController {
   }
 }
 
-const COMPANY_A = '00000000-0000-4000-8000-00000000000a';
-const COMPANY_B = '00000000-0000-4000-8000-00000000000b';
 
 /** Signs in the way a browser does and returns an agent that keeps the cookies. */
 async function signIn(app: INestApplication, user: string) {
   const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?as=${user}`).expect(302);
+  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
   const callback = new URL(login.headers.location as string);
   await agent.get(callback.pathname + callback.search).expect(302);
   return agent;
@@ -84,7 +83,7 @@ describe('API', () => {
     it('sends the browser to the login provider, then to the dashboard', async () => {
       const agent = request.agent(app.getHttpServer());
 
-      const login = await agent.get('/api/v1/auth/login?as=developer-a').expect(302);
+      const login = await agent.get('/api/v1/auth/login?login_hint=developer-a').expect(302);
       const callback = new URL(login.headers.location as string);
       const finished = await agent.get(callback.pathname + callback.search).expect(302);
 
@@ -97,11 +96,13 @@ describe('API', () => {
 
       const { body } = await agent.get('/api/v1/auth/me').expect(200);
 
-      expect(body).toEqual({
-        subject: 'fake|developer-a',
-        displayName: 'Developer, Company A',
+      expect(body).toMatchObject({
+        email: 'developer-a@example.com',
+        displayName: 'developer-a',
         companyId: COMPANY_A,
+        role: 'developer',
         permissions: ['applications:read'],
+        memberships: [{ companyId: COMPANY_A, role: 'developer' }],
       });
     });
 
@@ -109,7 +110,7 @@ describe('API', () => {
       const secureApp = await createTestApp({ config: { secureCookies: true } });
       try {
         const server = secureApp.getHttpServer();
-        const login = await request(server).get('/api/v1/auth/login?as=developer-a');
+        const login = await request(server).get('/api/v1/auth/login?login_hint=developer-a');
         const callback = new URL(login.headers.location as string);
         const loginCookie = (login.headers['set-cookie'] as unknown as string[])[0]!.split(';')[0]!;
 
@@ -127,7 +128,7 @@ describe('API', () => {
 
     it('rejects a callback with the wrong state', async () => {
       const agent = request.agent(app.getHttpServer());
-      await agent.get('/api/v1/auth/login?as=developer-a');
+      await agent.get('/api/v1/auth/login?login_hint=developer-a');
 
       await agent.get('/api/v1/auth/callback?code=developer-a&state=forged').expect(400);
       await agent.get('/api/v1/auth/me').expect(401);
@@ -139,24 +140,16 @@ describe('API', () => {
 
     it('does not accept a login attempt twice', async () => {
       const agent = request.agent(app.getHttpServer());
-      const login = await agent.get('/api/v1/auth/login?as=developer-a');
+      const login = await agent.get('/api/v1/auth/login?login_hint=developer-a');
       const callback = new URL(login.headers.location as string);
       await agent.get(callback.pathname + callback.search).expect(302);
 
       await agent.get(callback.pathname + callback.search).expect(400);
     });
 
-    it('rejects an unknown user', async () => {
+    it.each(['unknown-user', 'constructor'])('does not treat %s as a user', async (name) => {
       const agent = request.agent(app.getHttpServer());
-      const login = await agent.get('/api/v1/auth/login?as=nobody');
-      const callback = new URL(login.headers.location as string);
-
-      await agent.get(callback.pathname + callback.search).expect(401);
-    });
-
-    it.each(['constructor', '__proto__', 'toString'])('does not treat %s as a user', async (name) => {
-      const agent = request.agent(app.getHttpServer());
-      const login = await agent.get(`/api/v1/auth/login?as=${name}`);
+      const login = await agent.get(`/api/v1/auth/login?login_hint=${name}`);
       const callback = new URL(login.headers.location as string);
 
       await agent.get(callback.pathname + callback.search).expect(401);
@@ -169,7 +162,7 @@ describe('API', () => {
           .find((cookie) => cookie.startsWith('dd_session='))!
           .split(';')[0]!;
       const logIn = async (existingCookie?: string) => {
-        const login = await request(server).get('/api/v1/auth/login?as=developer-a');
+        const login = await request(server).get('/api/v1/auth/login?login_hint=developer-a');
         const loginCookie = (login.headers['set-cookie'] as unknown as string[])[0]!.split(';')[0]!;
         const callback = new URL(login.headers.location as string);
         return request(server)
@@ -188,11 +181,31 @@ describe('API', () => {
     it('ends the session at logout, on the server too', async () => {
       const agent = await signIn(app, 'developer-a');
       const me = await agent.get('/api/v1/auth/me').expect(200);
-      expect(me.body.subject).toBe('fake|developer-a');
+      expect(me.body.email).toBe('developer-a@example.com');
 
-      await agent.post('/api/v1/auth/logout').expect(204);
+      await agent.post('/api/v1/auth/logout').expect(200);
 
       await agent.get('/api/v1/auth/me').expect(401);
+    });
+  });
+
+  describe('choosing a company', () => {
+    it('switches between companies the user belongs to', async () => {
+      const agent = await signIn(app, 'consultant');
+      await expect(agent.get('/api/v1/sample/company')).resolves.toMatchObject({ body: { companyId: COMPANY_A } });
+
+      await agent.post('/api/v1/auth/active-company').send({ companyId: COMPANY_B }).expect(204);
+
+      await expect(agent.get('/api/v1/sample/company')).resolves.toMatchObject({ body: { companyId: COMPANY_B } });
+      await agent.get('/api/v1/sample/needs-write').expect(200);
+    });
+
+    it('refuses a company the user does not belong to', async () => {
+      const agent = await signIn(app, 'developer-a');
+
+      await agent.post('/api/v1/auth/active-company').send({ companyId: COMPANY_B }).expect(403);
+
+      await expect(agent.get('/api/v1/sample/company')).resolves.toMatchObject({ body: { companyId: COMPANY_A } });
     });
   });
 

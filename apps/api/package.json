@@ -28,6 +28,7 @@
     "vitest": "^5.1.0"
   },
   "dependencies": {
+    "@casl/ability": "^7.1.1",
     "@dreamdevops/shared-kernel": "*",
     "@nestjs/common": "^12.3.3",
     "@nestjs/core": "^12.3.3",
@@ -36,6 +37,7 @@
     "cookie-parser": "^1.4.7",
     "helmet": "^8.3.0",
     "node-pg-migrate": "^9.0.0",
+    "openid-client": "^6.8.9",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"

@@ -5,7 +5,7 @@ Runs the shared tools DreamDevOps needs on your own machine, using Docker Deskto
 | Tool | Purpose | Address |
 |---|---|---|
 | PostgreSQL | Databases for DreamDevOps, Keycloak and Forgejo | `localhost:5433` |
-| Keycloak | Login provider | <http://localhost:8081> |
+| Keycloak | Login provider, with the `dreamdevops` realm and sample users | <http://localhost:8081> |
 | Forgejo | Git hosting | <http://localhost:3000>, SSH on `localhost:2222` |
 
 All ports bind to `127.0.0.1`, so other machines can't reach them. You can change the ports and passwords in `.env`.
@@ -46,6 +46,8 @@ If you already had a `.env` file, copy any new values from `.env.example` into i
 | See status | `docker compose ps -a` |
 | Read a tool's logs | `docker compose logs -f keycloak` |
 | Delete all data and start clean | `docker compose down -v` |
+
+Keycloak imports its realm from `keycloak/dreamdevops-realm.json` only when the realm doesn't exist yet, so later changes to that file need `docker compose down -v`.
 
 ## Backup and restore
 

@@ -7,7 +7,11 @@ export interface AppConfig {
   readonly publicUrl: string;
   /** Where the browser goes after login. Its origin may send state-changing requests. */
   readonly dashboardUrl: string;
-  readonly identityProvider: 'fake';
+  readonly keycloakIssuerUrl: string;
+  readonly keycloakClientId: string;
+  readonly keycloakClientSecret: string;
+  /** Whether a user's email must be verified before they can accept an invitation. */
+  readonly requireVerifiedEmail: boolean;
   readonly secureCookies: boolean;
   readonly sessionIdleMs: number;
   readonly sessionAbsoluteMs: number;
@@ -33,12 +37,16 @@ export function loadConfig(env: Environment): AppConfig {
   const environment = env.NODE_ENV ?? 'development';
   const isProduction = environment === 'production';
 
-  const identityProvider = env.IDENTITY_PROVIDER;
-  if (identityProvider !== 'fake') {
-    throw new InvalidConfigError('IDENTITY_PROVIDER must be set. Only "fake" exists until Identity and Access is built.');
-  }
+  const keycloakIssuerUrl = url(env, 'KEYCLOAK_ISSUER_URL');
+  const secureCookies = env.SECURE_COOKIES !== 'false';
+  const requireVerifiedEmail = env.REQUIRE_VERIFIED_EMAIL !== 'false';
   if (isProduction) {
-    throw new InvalidConfigError('The fake identity provider accepts anyone, so it can never run in production.');
+    if (!keycloakIssuerUrl.startsWith('https://')) {
+      throw new InvalidConfigError('KEYCLOAK_ISSUER_URL must use https in production.');
+    }
+    if (!secureCookies || !requireVerifiedEmail) {
+      throw new InvalidConfigError('SECURE_COOKIES and REQUIRE_VERIFIED_EMAIL cannot be turned off in production.');
+    }
   }
 
   return {
@@ -47,8 +55,11 @@ export function loadConfig(env: Environment): AppConfig {
     databaseUrl: required(env, 'API_DATABASE_URL'),
     publicUrl: url(env, 'API_PUBLIC_URL'),
     dashboardUrl: url(env, 'DASHBOARD_URL'),
-    identityProvider,
-    secureCookies: env.SECURE_COOKIES !== 'false',
+    keycloakIssuerUrl,
+    keycloakClientId: required(env, 'KEYCLOAK_CLIENT_ID'),
+    keycloakClientSecret: required(env, 'KEYCLOAK_CLIENT_SECRET'),
+    requireVerifiedEmail,
+    secureCookies,
     sessionIdleMs: integer(env, 'SESSION_IDLE_MINUTES', 30) * MINUTE_MS,
     sessionAbsoluteMs: integer(env, 'SESSION_ABSOLUTE_MINUTES', 480) * MINUTE_MS,
     rateLimitPerMinute: integer(env, 'RATE_LIMIT_PER_MINUTE', 300),

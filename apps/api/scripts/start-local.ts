@@ -6,7 +6,11 @@ if (password === undefined) {
 const databasePort = process.env.POSTGRES_PORT ?? '5433';
 const apiPort = process.env.API_PORT ?? '4000';
 
-process.env.IDENTITY_PROVIDER = 'fake';
+process.env.KEYCLOAK_ISSUER_URL ??= `http://localhost:${process.env.KEYCLOAK_PORT ?? '8081'}/realms/dreamdevops`;
+process.env.KEYCLOAK_CLIENT_ID ??= 'dreamdevops-dashboard';
+process.env.KEYCLOAK_CLIENT_SECRET ??= process.env.DREAMDEVOPS_KEYCLOAK_CLIENT_SECRET;
+// The local stack can't send email, so users who register themselves stay unverified.
+process.env.REQUIRE_VERIFIED_EMAIL ??= 'false';
 process.env.API_DATABASE_URL = `postgres://dreamdevops_app:${encodeURIComponent(password)}@localhost:${databasePort}/dreamdevops`;
 process.env.API_PUBLIC_URL ??= `http://localhost:${apiPort}`;
 process.env.DASHBOARD_URL ??= `http://localhost:${apiPort}/api/v1/auth/me`;
