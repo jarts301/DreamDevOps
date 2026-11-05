@@ -128,8 +128,8 @@ export class AuthController {
   @Authenticated()
   @Get('me')
   me(@Req() request: ApiRequest): object {
-    const { userId, email, displayName, companyId, role, permissions, memberships } = request.principal!;
-    return { userId, email, displayName, companyId, role, permissions, memberships };
+    const { userId, email, displayName, companyId, companyName, role, permissions, memberships } = request.principal!;
+    return { userId, email, displayName, companyId, companyName, role, permissions, memberships };
   }
 
   /** Chooses which of the user's companies this session acts for. */

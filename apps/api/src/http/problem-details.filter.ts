@@ -2,6 +2,9 @@ import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Logger 
 import { MissingTenantContextError } from '@dreamdevops/shared-kernel';
 import type { Response } from 'express';
 import { AccessError } from '../identity-access/domain/errors.ts';
+import { TenancyError } from '../tenancy/domain/errors.ts';
+
+const STATUS_OF_RULE = { invalid: 400, 'not-found': 404, conflict: 409 } as const;
 
 const GENERIC_MESSAGES: Readonly<Record<number, string>> = {
   400: 'The request is not valid.',
@@ -32,9 +35,8 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     if (error instanceof HttpException) {
       return { status: error.getStatus(), detail: error.message };
     }
-    if (error instanceof AccessError) {
-      const statuses = { invalid: 400, 'not-found': 404, conflict: 409 };
-      return { status: statuses[error.kind], detail: error.message };
+    if (error instanceof AccessError || error instanceof TenancyError) {
+      return { status: STATUS_OF_RULE[error.kind], detail: error.message };
     }
     // A route that needs a company was called by a user who doesn't act for one.
     if (error instanceof MissingTenantContextError) {

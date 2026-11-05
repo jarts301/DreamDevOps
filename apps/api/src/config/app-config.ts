@@ -3,6 +3,10 @@ export interface AppConfig {
   readonly port: number;
   /** Connection string for the dreamdevops_app role. */
   readonly databaseUrl: string;
+  /** Connection string for the dreamdevops_relay role, which delivers saved events. */
+  readonly relayDatabaseUrl: string;
+  /** Connection string for the dreamdevops_jobs role, which runs background jobs. */
+  readonly jobsDatabaseUrl: string;
   /** Where the browser reaches the API, such as http://localhost:4000. */
   readonly publicUrl: string;
   /** Where the browser goes after login. Its origin may send state-changing requests. */
@@ -10,6 +14,12 @@ export interface AppConfig {
   readonly keycloakIssuerUrl: string;
   readonly keycloakClientId: string;
   readonly keycloakClientSecret: string;
+  /** Where the API reaches Forgejo, which hosts each company's Git organization. */
+  readonly forgejoUrl: string;
+  /** A Forgejo administrator, because creating organizations for others needs one. */
+  readonly forgejoUsername: string;
+  /** That administrator's password, or preferably an access token. */
+  readonly forgejoPassword: string;
   /** Whether a user's email must be verified before they can accept an invitation. */
   readonly requireVerifiedEmail: boolean;
   readonly secureCookies: boolean;
@@ -38,11 +48,15 @@ export function loadConfig(env: Environment): AppConfig {
   const isProduction = environment === 'production';
 
   const keycloakIssuerUrl = url(env, 'KEYCLOAK_ISSUER_URL');
+  const forgejoUrl = url(env, 'FORGEJO_URL');
   const secureCookies = env.SECURE_COOKIES !== 'false';
   const requireVerifiedEmail = env.REQUIRE_VERIFIED_EMAIL !== 'false';
   if (isProduction) {
     if (!keycloakIssuerUrl.startsWith('https://')) {
       throw new InvalidConfigError('KEYCLOAK_ISSUER_URL must use https in production.');
+    }
+    if (!forgejoUrl.startsWith('https://')) {
+      throw new InvalidConfigError('FORGEJO_URL must use https in production.');
     }
     if (!secureCookies || !requireVerifiedEmail) {
       throw new InvalidConfigError('SECURE_COOKIES and REQUIRE_VERIFIED_EMAIL cannot be turned off in production.');
@@ -53,11 +67,16 @@ export function loadConfig(env: Environment): AppConfig {
     environment,
     port: integer(env, 'API_PORT', 4000),
     databaseUrl: required(env, 'API_DATABASE_URL'),
+    relayDatabaseUrl: required(env, 'RELAY_DATABASE_URL'),
+    jobsDatabaseUrl: required(env, 'JOBS_DATABASE_URL'),
     publicUrl: url(env, 'API_PUBLIC_URL'),
     dashboardUrl: url(env, 'DASHBOARD_URL'),
     keycloakIssuerUrl,
     keycloakClientId: required(env, 'KEYCLOAK_CLIENT_ID'),
     keycloakClientSecret: required(env, 'KEYCLOAK_CLIENT_SECRET'),
+    forgejoUrl,
+    forgejoUsername: required(env, 'FORGEJO_USERNAME'),
+    forgejoPassword: required(env, 'FORGEJO_PASSWORD'),
     requireVerifiedEmail,
     secureCookies,
     sessionIdleMs: integer(env, 'SESSION_IDLE_MINUTES', 30) * MINUTE_MS,

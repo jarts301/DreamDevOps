@@ -10,7 +10,15 @@ Each user has one role per company. Roles and their permissions are stored as da
 |---|---|---|---|---|---|---|
 | Manage company users and roles | `company-users:manage` | Yes | | | | |
 | Connect deployment targets | `targets:connect` | Yes | | | Yes | |
+| See applications | `applications:view` | Yes | Yes | Yes | Yes | Yes |
 | Create applications | `applications:create` | Yes | Yes | | | |
+| Change application names and descriptions | `applications:update` | Yes | Yes | | | |
+| Archive and restore applications | `applications:archive` | Yes | Yes | | | |
+| Change application settings and secrets | `applications:configure` | | Yes | | Yes | |
+| Run application database migrations | `applications:migrate` | | Yes | | Yes | |
+| Start, stop and restart applications | `applications:run` | | Yes | | Yes | |
+| Run application tests | `applications:test` | | Yes | Yes | | |
+| Monitor application health, metrics and logs | `applications:monitor` | Yes | Yes | Yes | Yes | Yes |
 | Push code and open PRs | `code:push` | | Yes | Yes | | |
 | Approve PRs into develop or main | `pull-requests:approve` | | Yes | | | |
 | Start releases and hotfixes | `releases:start` | | Yes | | | |
@@ -20,12 +28,14 @@ Each user has one role per company. Roles and their permissions are stored as da
 | View dashboards and logs | `dashboards:view` | Yes | Yes | Yes | Yes | Yes |
 | Read the audit log | `audit:read` | Yes | | | | |
 
+Company Admins manage the application catalog, but as with releases and deployments, they don't change how applications run. The routes that exist today check `applications:view`, `create`, `update` and `archive`. The others are assigned now, so each role already has them when the features that run, test, migrate, configure and monitor applications arrive.
+
 **Platform Admin** comes from the `platform-admin` realm role in Keycloak, not from a company. It grants `companies:manage` and `audit:read-own`, and no access to company data.
 
 ## How a company gets its people
 
-1. A Platform Admin invites the first admin with `POST /platform/companies/:companyId/first-admin-invitation`. This only works while the company has no members.
-2. The person signs in or registers through Keycloak, then calls `POST /invitations/accept` with the token. Accepting needs both the token and a matching signed-in email address.
+1. A Platform Admin creates the company, as the [Tenancy guide](../tenancy/README.md) describes, and once it's active invites the first admin with `POST /platform/companies/:companyId/first-admin-invitation`. This only works while the company has no members.
+2. The person signs in or registers through Keycloak, then calls `POST /invitations/accept` with the token. Accepting needs both the token and a matching signed-in email address, and the company must still be active.
 3. The Company Admin invites everyone else with `POST /company/invitations`.
 
 Invitations last 7 days and work once. The token is returned once, to the person who created the invitation, and only its hash is stored. It has to be passed on by hand until Audit and Notification can send email.
@@ -36,7 +46,7 @@ All routes start with `/api/v1`. The company routes act on the signed-in user's 
 
 | Route | Who | Purpose |
 |---|---|---|
-| `GET /auth/me` | Signed in | Who you are, your current company and permissions |
+| `GET /auth/me` | Signed in | Who you are, your current company, its name, and your permissions |
 | `POST /auth/active-company` | Signed in | Chooses which of your companies this session acts for |
 | `POST /auth/logout` | Signed in | Ends the session, and returns `logoutUrl` to send the browser to |
 | `POST /invitations/accept` | Signed in | Joins a company |
@@ -51,6 +61,7 @@ All routes start with `/api/v1`. The company routes act on the signed-in user's 
 ## Rules it enforces
 
 - **Changes apply at once:** permissions are read on every request, so a role change or removal takes effect on the member's next request.
+- **Only active companies count:** a membership in a company that is provisioning, suspended or closed grants nothing, and the membership is kept for when the company is active again.
 - **A company keeps an admin:** the last Company Admin can't be removed or demoted, even if two admins act at the same moment.
 - **Platform roles stay out of companies:** they can't be granted through an invitation or role change.
 - **Company data stays apart:** row-level security limits memberships and invitations to the current company. The application role reaches users only through database functions.

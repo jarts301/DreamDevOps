@@ -1,0 +1,16 @@
+<header class="header">
+  <a class="brand" routerLink="/">{{ name }}</a>
+  <nav aria-label="Main">
+    <a
+      routerLink="/"
+      routerLinkActive="active"
+      ariaCurrentWhenActive="page"
+      [routerLinkActiveOptions]="{ exact: true }"
+      >Home</a
+    >
+    <a routerLink="/about" routerLinkActive="active" ariaCurrentWhenActive="page">About</a>
+  </nav>
+</header>
+<main class="content">
+  <router-outlet />
+</main>

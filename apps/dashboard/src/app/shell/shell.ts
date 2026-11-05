@@ -14,8 +14,9 @@ interface NavigationItem {
 // Feature areas mirror the backend's contexts. Each new module adds its screens here.
 const NAVIGATION: readonly NavigationItem[] = [
   { path: '/', label: 'Overview' },
+  { path: '/applications', label: 'Applications', permission: 'applications:view' },
   { path: '/team', label: 'Team', permission: 'company-users:manage' },
-  { path: '/platform/start-company', label: 'Start a company', permission: 'companies:manage' },
+  { path: '/platform/companies', label: 'Companies', permission: 'companies:manage' },
 ];
 
 @Component({
@@ -54,13 +55,13 @@ const NAVIGATION: readonly NavigationItem[] = [
                 <select [value]="session.user()?.companyId" (change)="chooseCompany($event)">
                   @for (membership of memberships(); track membership.companyId) {
                     <option [value]="membership.companyId" [selected]="membership.companyId === session.user()?.companyId">
-                      {{ companyLabel(membership.companyId) }} ({{ roleName(membership.role) }})
+                      {{ companyLabel(membership) }} ({{ roleName(membership.role) }})
                     </option>
                   }
                 </select>
               </label>
-            } @else if (session.user()?.companyId; as companyId) {
-              <span>{{ companyLabel(companyId) }} · {{ roleName(session.user()?.role ?? null) }}</span>
+            } @else if (currentCompany(); as company) {
+              <span>{{ companyLabel(company) }} · {{ roleName(session.user()?.role ?? null) }}</span>
             } @else {
               <span class="muted">No company</span>
             }
@@ -91,6 +92,10 @@ export class Shell {
   protected readonly roleName = roleName;
 
   protected readonly memberships = computed(() => this.session.user()?.memberships ?? []);
+  protected readonly currentCompany = computed(() => {
+    const user = this.session.user();
+    return user?.companyId ? { companyId: user.companyId, companyName: user.companyName } : null;
+  });
   protected readonly navigation = computed(() => {
     // Reading the user here keeps the menu current after switching company.
     this.session.user();

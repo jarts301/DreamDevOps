@@ -22,17 +22,38 @@ export const routes: Routes = [
         loadComponent: () => import('./features/overview/overview').then((module) => module.Overview),
       },
       {
+        path: 'applications/types',
+        title: 'Application types · DreamDevOps',
+        canActivate: [permissionGuard('applications:view')],
+        loadComponent: () =>
+          import('./features/application-catalog/application-types').then((module) => module.ApplicationTypes),
+      },
+      {
+        path: 'applications',
+        title: 'Applications · DreamDevOps',
+        canActivate: [permissionGuard('applications:view')],
+        loadComponent: () => import('./features/tenancy/applications').then((module) => module.Applications),
+      },
+      {
         path: 'team',
         title: 'Team · DreamDevOps',
         canActivate: [permissionGuard('company-users:manage')],
         loadComponent: () => import('./features/identity-access/team').then((module) => module.Team),
       },
       {
-        path: 'platform/start-company',
-        title: 'Start a company · DreamDevOps',
+        path: 'platform/companies',
+        title: 'Companies · DreamDevOps',
         canActivate: [permissionGuard('companies:manage')],
-        loadComponent: () => import('./features/identity-access/start-company').then((module) => module.StartCompany),
+        loadComponent: () => import('./features/tenancy/companies').then((module) => module.Companies),
       },
+      {
+        path: 'platform/companies/:companyId',
+        title: 'Company · DreamDevOps',
+        canActivate: [permissionGuard('companies:manage')],
+        loadComponent: () => import('./features/tenancy/company-detail').then((module) => module.CompanyDetail),
+      },
+      // Companies used to start from this page, before they had names.
+      { path: 'platform/start-company', redirectTo: 'platform/companies' },
       {
         path: 'not-allowed',
         title: 'No access · DreamDevOps',

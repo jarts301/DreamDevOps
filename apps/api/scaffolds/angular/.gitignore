@@ -1,0 +1,17 @@
+# Built and generated files
+/dist
+/tmp
+/out-tsc
+/.angular/cache
+/coverage
+
+# Dependencies
+/node_modules
+npm-debug.log
+
+# Editors and systems
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db

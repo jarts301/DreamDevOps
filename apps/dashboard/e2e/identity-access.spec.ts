@@ -1,42 +1,14 @@
-import { randomBytes } from 'node:crypto';
-import { type Browser, expect, type Page, test } from '@playwright/test';
-
-process.loadEnvFile('../../infra/local/.env');
-const SAMPLE_PASSWORD = process.env['KEYCLOAK_DEV_USER_PASSWORD']!;
-
-/** New users each run, so sample users stay out of test companies. */
-const newUser = (prefix: string) => {
-  const username = `e2e-${prefix}-${randomBytes(4).toString('hex')}`;
-  return { username, email: `${username}@example.com`, password: 'fake-dummy-e2e-user-password' };
-};
-type NewUser = ReturnType<typeof newUser>;
-
-const signIn = async (page: Page, username: string, password: string) => {
-  await page.getByLabel('Username or email').fill(username);
-  await page.getByLabel('Password', { exact: true }).fill(password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
-};
-
-const register = async (page: Page, user: NewUser) => {
-  await page.getByRole('link', { name: 'Register' }).click();
-  await page.locator('#email').fill(user.email);
-  await page.locator('#username').fill(user.username);
-  await page.locator('#password').fill(user.password);
-  await page.locator('#password-confirm').fill(user.password);
-  await page.locator('#firstName').fill('E2E');
-  await page.locator('#lastName').fill(user.username);
-  await page.getByRole('button', { name: 'Register' }).click();
-};
-
-/** Opens a link in a fresh browser profile, as the invited person would. */
-const openAsNewPerson = async (browser: Browser, url: string) => {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.goto(url);
-  return page;
-};
-
-const invitationLink = (page: Page) => page.getByRole('textbox', { name: 'Invitation link' }).inputValue();
+import { expect, test } from '@playwright/test';
+import {
+  createCompanyAndInvite,
+  invitationLink,
+  newUser,
+  openAsNewPerson,
+  overflowOnPhone,
+  register,
+  SAMPLE_PASSWORD,
+  signIn,
+} from './support';
 
 test('from starting a company to managing its team', async ({ browser, page }) => {
   const admin = newUser('admin');
@@ -63,14 +35,11 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(page.evaluate(() => document.cookie)).resolves.not.toContain('dd_session');
   });
 
-  await test.step('the platform admin starts a company', async () => {
-    await page.getByRole('link', { name: 'Start a company' }).click();
-    await page.getByLabel('Email of the first admin').fill(admin.email);
-    await page.getByRole('button', { name: 'Create invitation' }).click();
-    await expect(page.getByRole('textbox', { name: 'Invitation link' })).toBeVisible();
+  let adminLink = '';
+  await test.step('the platform admin creates a company and invites its first admin', async () => {
+    adminLink = await createCompanyAndInvite(page, `E2E ${admin.username}`, admin.email);
   });
 
-  const adminLink = await invitationLink(page);
   const adminPage = await openAsNewPerson(browser, adminLink);
 
   await test.step('the first admin registers and must click to join', async () => {
@@ -92,13 +61,7 @@ test('from starting a company to managing its team', async ({ browser, page }) =
   });
 
   await test.step('the team page fits a phone without sideways scrolling', async () => {
-    const size = adminPage.viewportSize()!;
-    await adminPage.setViewportSize({ width: 375, height: 812 });
-    const overflow = await adminPage.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    );
-    expect(overflow).toBe(0);
-    await adminPage.setViewportSize(size);
+    expect(await overflowOnPhone(adminPage)).toBe(0);
   });
 
   await test.step('the invitation cannot be used by the wrong person', async () => {

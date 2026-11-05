@@ -1,8 +1,21 @@
-import { type DynamicModule, Inject, Module, type OnApplicationShutdown, type Provider, type Type } from '@nestjs/common';
+import {
+  type DynamicModule,
+  Inject,
+  Logger,
+  Module,
+  type OnApplicationShutdown,
+  type Provider,
+  type Type,
+} from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
+import { EventBus, type JobQueue } from '@dreamdevops/shared-kernel';
+import { OutboxRelay, PgBossJobQueue, TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import pg from 'pg';
+import { ApplicationTypeRegistry } from './application-catalog/application/application-type-registry.ts';
+import { APPLICATION_TYPE_CATALOG } from './application-catalog/catalog/index.ts';
+import { ApplicationTypesController } from './application-catalog/http/application-types.controller.ts';
+import { BackgroundWork, JOB_QUEUE, OUTBOX_RELAY, RELAY_POOL } from './background/background-work.ts';
 import type { AppConfig } from './config/app-config.ts';
 import { HealthController } from './health/health.controller.ts';
 import { AuthorizationGuard, OriginGuard, SessionGuard } from './http/guards.ts';
@@ -20,9 +33,26 @@ import { KeycloakIdentityProvider } from './identity-access/infrastructure/keycl
 import { PostgresUserDirectory } from './identity-access/infrastructure/postgres-user-directory.ts';
 import { PostgresSessionStore } from './session/postgres-session-store.ts';
 import { SESSION_STORE } from './session/session-store.ts';
+import { ApplicationsService } from './tenancy/application/applications.service.ts';
+import { CompanyRegistryService } from './tenancy/application/company-registry.service.ts';
+import {
+  APPLICATION_TYPES,
+  type ApplicationTypes,
+  GIT_HOSTING,
+  type GitHosting,
+  SCAFFOLD_RENDERER,
+  type ScaffoldRenderer,
+} from './tenancy/application/ports.ts';
+import { RepositoryService } from './tenancy/application/repositories.service.ts';
+import { FileScaffoldTemplates } from './application-catalog/infrastructure/file-scaffold-templates.ts';
+import { ProvisioningService } from './tenancy/application/provisioning.service.ts';
+import { CompanyController } from './tenancy/http/company.controller.ts';
+import { PlatformCompanyRegistryController } from './tenancy/http/platform-companies.controller.ts';
+import { ForgejoGitHosting } from './tenancy/infrastructure/forgejo-git-hosting.ts';
 import { APP_CONFIG, DATABASE_POOL } from './tokens.ts';
 
 const MINUTE_MS = 60_000;
+const backgroundLogger = new Logger('BackgroundWork');
 
 export interface AppModuleOptions {
   readonly config: AppConfig;
@@ -35,9 +65,11 @@ export interface AppModuleOptions {
 @Module({})
 export class AppModule implements OnApplicationShutdown {
   readonly #pool: pg.Pool;
+  readonly #relayPool: pg.Pool;
 
-  constructor(@Inject(DATABASE_POOL) pool: pg.Pool) {
+  constructor(@Inject(DATABASE_POOL) pool: pg.Pool, @Inject(RELAY_POOL) relayPool: pg.Pool) {
     this.#pool = pool;
+    this.#relayPool = relayPool;
   }
 
   static forRoot(options: AppModuleOptions): DynamicModule {
@@ -65,6 +97,9 @@ export class AppModule implements OnApplicationShutdown {
         CompanyAccessController,
         InvitationsController,
         PlatformCompaniesController,
+        PlatformCompanyRegistryController,
+        CompanyController,
+        ApplicationTypesController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -104,6 +139,72 @@ export class AppModule implements OnApplicationShutdown {
             new CompanyAccessService(database, pool, { requireVerifiedEmail: config.requireVerifiedEmail }),
           inject: [TenantDatabase, DATABASE_POOL],
         },
+        {
+          provide: GIT_HOSTING,
+          useFactory: () =>
+            new ForgejoGitHosting({
+              url: config.forgejoUrl,
+              username: config.forgejoUsername,
+              password: config.forgejoPassword,
+            }),
+        },
+        {
+          provide: CompanyRegistryService,
+          useFactory: (database: TenantDatabase, pool: pg.Pool) => new CompanyRegistryService(database, pool),
+          inject: [TenantDatabase, DATABASE_POOL],
+        },
+        // The catalog is checked here, so the API refuses to start with a type that breaks a rule.
+        { provide: ApplicationTypeRegistry, useFactory: () => new ApplicationTypeRegistry(APPLICATION_TYPE_CATALOG) },
+        { provide: APPLICATION_TYPES, useExisting: ApplicationTypeRegistry },
+        // Refuses to start if a scaffold in the catalog has no folder.
+        {
+          provide: SCAFFOLD_RENDERER,
+          useFactory: (registry: ApplicationTypeRegistry) => new FileScaffoldTemplates(registry.scaffoldKeys()),
+          inject: [ApplicationTypeRegistry],
+        },
+        {
+          provide: RepositoryService,
+          useFactory: (database: TenantDatabase, gitHosting: GitHosting, scaffolds: ScaffoldRenderer, types: ApplicationTypes) =>
+            new RepositoryService(database, gitHosting, scaffolds, types),
+          inject: [TenantDatabase, GIT_HOSTING, SCAFFOLD_RENDERER, APPLICATION_TYPES],
+        },
+        {
+          provide: ApplicationsService,
+          useFactory: (database: TenantDatabase, types: ApplicationTypes) => new ApplicationsService(database, types),
+          inject: [TenantDatabase, APPLICATION_TYPES],
+        },
+        {
+          provide: ProvisioningService,
+          useFactory: (database: TenantDatabase, gitHosting: GitHosting, repositories: RepositoryService) =>
+            new ProvisioningService(database, gitHosting, repositories),
+          inject: [TenantDatabase, GIT_HOSTING, RepositoryService],
+        },
+        // Background work: events leave the outbox through the relay, and the event bus
+        // hands each one to its subscribers as jobs.
+        {
+          provide: RELAY_POOL,
+          useFactory: () => new pg.Pool({ connectionString: config.relayDatabaseUrl }),
+        },
+        {
+          provide: JOB_QUEUE,
+          useFactory: () =>
+            PgBossJobQueue.start({
+              connectionString: config.jobsDatabaseUrl,
+              onError: (error) => backgroundLogger.error(error),
+            }),
+        },
+        {
+          provide: EventBus,
+          useFactory: (queue: JobQueue) => new EventBus(queue),
+          inject: [JOB_QUEUE],
+        },
+        {
+          provide: OUTBOX_RELAY,
+          useFactory: (pool: pg.Pool, bus: EventBus) =>
+            new OutboxRelay(pool, bus, { onError: (error) => backgroundLogger.error(error) }),
+          inject: [RELAY_POOL, EventBus],
+        },
+        BackgroundWork,
         // Guards run in this order, so rate limits apply before any database work.
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: OriginGuard },
@@ -116,7 +217,8 @@ export class AppModule implements OnApplicationShutdown {
     };
   }
 
+  /** Runs after the providers' own shutdown, so background work has stopped using the pools. */
   async onApplicationShutdown(): Promise<void> {
-    await this.#pool.end();
+    await Promise.all([this.#pool.end(), this.#relayPool.end()]);
   }
 }

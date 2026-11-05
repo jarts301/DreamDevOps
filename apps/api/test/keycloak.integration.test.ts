@@ -103,7 +103,7 @@ describe('login through a real Keycloak', () => {
     app = await buildApp({
       controllers: [SampleController],
       config: {
-        databaseUrl: database.urlFor('app'),
+        ...database.config(),
         publicUrl: PUBLIC_URL,
         dashboardUrl: 'http://localhost:4200/',
         secureCookies: false,

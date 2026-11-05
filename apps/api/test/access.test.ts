@@ -14,8 +14,8 @@ const access = (overrides: Partial<UserAccess> = {}): UserAccess => ({
   displayName: 'User',
   platformPermissions: [],
   memberships: [
-    { companyId: COMPANY_A, role: 'developer', permissions: ['code:push'] },
-    { companyId: COMPANY_B, role: 'tech-lead', permissions: ['releases:start', 'code:push'] },
+    { companyId: COMPANY_A, companyName: 'Company A', role: 'developer', permissions: ['code:push'] },
+    { companyId: COMPANY_B, companyName: 'Company B', role: 'tech-lead', permissions: ['releases:start', 'code:push'] },
   ],
   ...overrides,
 });
@@ -25,6 +25,7 @@ describe('toPrincipal', () => {
     const principal = toPrincipal(access(), COMPANY_B);
 
     expect(principal.companyId).toBe(COMPANY_B);
+    expect(principal.companyName).toBe('Company B');
     expect(principal.role).toBe('tech-lead');
     expect(principal.permissions).toEqual(['releases:start', 'code:push']);
   });
@@ -48,6 +49,7 @@ describe('toPrincipal', () => {
     const principal = toPrincipal(access({ memberships: [] }), null);
 
     expect(principal.companyId).toBeNull();
+    expect(principal.companyName).toBeNull();
     expect(principal.role).toBeNull();
     expect(principal.permissions).toEqual([]);
   });
@@ -59,10 +61,10 @@ describe('toPrincipal', () => {
     expect(principal.permissions).toEqual(['companies:manage']);
   });
 
-  it('lists memberships without their permissions', () => {
+  it('lists memberships with company names and without their permissions', () => {
     expect(toPrincipal(access(), null).memberships).toEqual([
-      { companyId: COMPANY_A, role: 'developer' },
-      { companyId: COMPANY_B, role: 'tech-lead' },
+      { companyId: COMPANY_A, companyName: 'Company A', role: 'developer' },
+      { companyId: COMPANY_B, companyName: 'Company B', role: 'tech-lead' },
     ]);
   });
 });

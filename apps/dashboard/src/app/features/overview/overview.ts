@@ -8,15 +8,21 @@ import { SessionService } from '../../core/session.service';
   template: `
     <h1>Welcome, {{ session.user()?.displayName }}</h1>
 
-    @if (session.user()?.companyId; as companyId) {
-      <p class="lead">You're working in {{ companyLabel(companyId) }}. Your role is {{ roleName(session.user()?.role ?? null) }}.</p>
-    } @else if (session.isPlatformUser()) {
-      <p class="lead">You're a Platform Admin. You can start companies, but you can't see their data.</p>
-    } @else {
-      <div class="empty-state">
-        <h2>You're not in a company yet</h2>
-        <p>Ask a Company Admin to send you an invitation, then open its link to join.</p>
-      </div>
+    @if (session.user(); as user) {
+      @if (user.companyId) {
+        <p class="lead">
+          You're working in {{ companyLabel({ companyId: user.companyId, companyName: user.companyName }) }}. Your role
+          is {{ roleName(user.role) }}.
+        </p>
+      } @else if (session.isPlatformUser()) {
+        <p class="lead">You're a Platform Admin. You can create and manage companies, but you can't see their data.</p>
+      } @else {
+        <div class="empty-state">
+          <h2>You're not in an active company</h2>
+          <p>Ask a Company Admin to send you an invitation, then open its link to join.</p>
+          <p class="muted">If your company was suspended, you get access back once it's reactivated.</p>
+        </div>
+      }
     }
 
     @if (abilities().length > 0) {

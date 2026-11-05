@@ -1,0 +1,27 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+.header {
+  padding: 12px 24px;
+  border-bottom: 1px solid #8884;
+}
+
+.brand {
+  font-weight: 700;
+}
+
+.content {
+  max-width: 960px;
+  padding: 24px;
+}
+
+.description {
+  white-space: pre-line;
+}

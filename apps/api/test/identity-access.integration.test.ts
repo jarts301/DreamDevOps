@@ -10,6 +10,7 @@ import { PostgresUserDirectory } from '../src/identity-access/infrastructure/pos
 import { Authenticated, RequirePermissions } from '../src/http/access.decorators.ts';
 import { PostgresSessionStore } from '../src/session/postgres-session-store.ts';
 import { hashSessionId } from '../src/session/session-store.ts';
+import { insertActiveCompany } from './companies.ts';
 import { FakeIdentityProvider } from './fakes.ts';
 import { describeSessionStoreContract } from './session-store-contract.ts';
 import { buildApp } from './test-app.ts';
@@ -82,8 +83,9 @@ const newName = (prefix: string) => {
 };
 const emailOf = (name: string) => `${name}@example.com`;
 
-/** Creates a company with a signed-in admin, the way a real company starts. */
+/** Creates an active company with a signed-in admin, the way a real company starts. */
 const startCompany = async (companyId = newCompany()) => {
+  await insertActiveCompany(ownerPool, companyId);
   const platformAdmin = await signIn('platform-admin');
   const name = newName('admin');
   const { body } = await platformAdmin
@@ -114,7 +116,7 @@ beforeAll(async () => {
   ownerPool = new pg.Pool({ connectionString: database.urlFor('owner') });
   app = await buildApp({
     controllers: [SampleController],
-    config: { databaseUrl: database.urlFor('app'), secureCookies: false },
+    config: { ...database.config(), secureCookies: false },
     overrides: [{ provide: IDENTITY_PROVIDER, useValue: new FakeIdentityProvider() }],
   });
 });
@@ -234,11 +236,47 @@ describe('user directory', () => {
 describe('the role matrix', () => {
   // The proposal's permission matrix, written out independently of the migration.
   const MATRIX: Record<string, string[]> = {
-    'company-admin': ['applications:create', 'audit:read', 'company-users:manage', 'dashboards:view', 'targets:connect'],
-    developer: ['code:push', 'dashboards:view', 'deployments-test:run', 'feature-images:build'],
-    operator: ['dashboards:view', 'deployments-production:run', 'deployments-test:run', 'targets:connect'],
-    'tech-lead': [
+    'company-admin': [
+      'applications:archive',
       'applications:create',
+      'applications:monitor',
+      'applications:update',
+      'applications:view',
+      'audit:read',
+      'company-users:manage',
+      'dashboards:view',
+      'targets:connect',
+    ],
+    developer: [
+      'applications:monitor',
+      'applications:test',
+      'applications:view',
+      'code:push',
+      'dashboards:view',
+      'deployments-test:run',
+      'feature-images:build',
+    ],
+    operator: [
+      'applications:configure',
+      'applications:migrate',
+      'applications:monitor',
+      'applications:run',
+      'applications:view',
+      'dashboards:view',
+      'deployments-production:run',
+      'deployments-test:run',
+      'targets:connect',
+    ],
+    'tech-lead': [
+      'applications:archive',
+      'applications:configure',
+      'applications:create',
+      'applications:migrate',
+      'applications:monitor',
+      'applications:run',
+      'applications:test',
+      'applications:update',
+      'applications:view',
       'code:push',
       'dashboards:view',
       'deployments-production:run',
@@ -247,7 +285,7 @@ describe('the role matrix', () => {
       'pull-requests:approve',
       'releases:start',
     ],
-    viewer: ['dashboards:view'],
+    viewer: ['applications:monitor', 'applications:view', 'dashboards:view'],
   };
 
   it('offers exactly the company roles and permissions in the proposal', async () => {
@@ -669,7 +707,7 @@ describe('verified email', () => {
 
   it('refuses an invitation until the email is verified', async () => {
     const strictApp = await buildApp({
-      config: { databaseUrl: database.urlFor('app'), secureCookies: false, requireVerifiedEmail: true },
+      config: { ...database.config(), secureCookies: false, requireVerifiedEmail: true },
       overrides: [{ provide: IDENTITY_PROVIDER, useValue: new UnverifiedIdentityProvider() }],
     });
     try {

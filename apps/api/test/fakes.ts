@@ -44,6 +44,7 @@ export class FakeIdentityProvider implements IdentityProvider {
 
 const membership = (companyId: string, role: string, ...permissions: string[]): CompanyMembership => ({
   companyId,
+  companyName: companyId === COMPANY_A ? 'Company A' : 'Company B',
   role,
   permissions,
 });

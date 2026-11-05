@@ -11,6 +11,8 @@
   --color-danger-text: #ffffff;
   --color-error-surface: #fbe9e7;
   --color-success-surface: #e6f4ea;
+  --color-info-surface: #e8f0fe;
+  --color-warning-surface: #fef3d6;
   --radius: 8px;
 }
 
@@ -27,6 +29,8 @@
     --color-danger-text: #410002;
     --color-error-surface: #3d1a17;
     --color-success-surface: #17321f;
+    --color-info-surface: #172a4a;
+    --color-warning-surface: #3a2f12;
   }
 }
 
@@ -202,6 +206,191 @@ a {
   background: var(--color-success-surface);
 }
 
+.alert-info {
+  background: var(--color-info-surface);
+}
+
+.alert-warning {
+  background: var(--color-warning-surface);
+}
+
+.hint {
+  margin: 8px 0 0;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.breadcrumb {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+code {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+/* Slugs read as one word, so they don't break at their hyphens. */
+td code {
+  white-space: nowrap;
+}
+
+/* Statuses of companies, applications and resources. The text carries the meaning, and color only helps. */
+.badge {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 1px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-background);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.badge[data-status='active'],
+.badge[data-status='ready'] {
+  background: var(--color-success-surface);
+}
+
+.badge[data-status='provisioning'],
+.badge[data-status='pending'] {
+  background: var(--color-info-surface);
+}
+
+.badge[data-status='suspended'] {
+  background: var(--color-warning-surface);
+}
+
+.badge[data-status='failed'] {
+  background: var(--color-error-surface);
+}
+
+.badge[data-status='closed'],
+.badge[data-status='erased'] {
+  border-style: dashed;
+}
+
+.button-small {
+  min-height: 28px;
+  margin-left: 6px;
+  padding: 2px 10px;
+  font-size: 0.85rem;
+}
+
+.hint-inline {
+  display: block;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.card-danger {
+  border-color: var(--color-danger);
+}
+
+.card-actions {
+  margin-top: 12px;
+}
+
+h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.type-layer-heading {
+  margin-top: 24px;
+}
+
+/* Application types: one choice per type, in a group per layer. */
+.type-picker {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.type-picker legend {
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.type-group + .type-group {
+  margin-top: 12px;
+}
+
+.type-group-name {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.type-group-name .muted {
+  font-weight: 400;
+}
+
+.type-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.type-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.type-option:has(input:checked) {
+  border-color: var(--color-primary);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+.type-option input {
+  min-height: auto;
+  margin: 3px 0 0;
+}
+
+.type-option-name {
+  font-weight: 600;
+}
+
+.type-option-detail {
+  grid-column: 2;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+h4 {
+  margin: 16px 0 6px;
+  font-size: 0.9rem;
+}
+
+.scaffold-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.scaffold-list li + li {
+  margin-top: 4px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 12px;
+}
+
+.facts dt {
+  color: var(--color-muted);
+}
+
+.facts dd {
+  margin: 0;
+}
+
 .topbar + .alert {
   margin: 12px 24px;
 }
@@ -221,6 +410,21 @@ a {
   font-size: 0.9rem;
 }
 
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-stack .hint {
+  margin: -4px 0 0;
+}
+
+/* Fields grow along a row. In a column that would make them tall, so they keep their height. */
+.form-stack > .field {
+  flex: none;
+}
+
 .field-inline {
   display: flex;
   align-items: center;
@@ -228,7 +432,8 @@ a {
 }
 
 input,
-select {
+select,
+textarea {
   min-height: 36px;
   max-width: 100%;
   padding: 6px 10px;
@@ -237,6 +442,10 @@ select {
   border-radius: 6px;
   color: inherit;
   font: inherit;
+}
+
+textarea {
+  resize: vertical;
 }
 
 .button {

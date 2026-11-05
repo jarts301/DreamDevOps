@@ -145,7 +145,7 @@ export class CompanyAccessService {
   }
 
   /**
-   * Lets a platform admin start a company by inviting its first admin. It only works
+   * Lets a platform admin invite the first admin of an active company. It only works
    * while the company has no members, so it can't become a way into company data.
    */
   inviteFirstAdmin(actor: Principal, companyIdValue: unknown, emailValue: unknown): Promise<CreatedInvitation> {
@@ -153,6 +153,13 @@ export class CompanyAccessService {
     const email = normalizeEmail(emailValue);
     return runWithCompany(companyId, () =>
       this.#database.transaction(async (tx) => {
+        const status = await companyStatus(tx);
+        if (status === null) {
+          throw new AccessError('not-found', 'This company does not exist.');
+        }
+        if (status !== 'active') {
+          throw new AccessError('conflict', 'Invite the first admin once the company is active.');
+        }
         const { rows } = await tx.query('SELECT 1 FROM identity.memberships LIMIT 1');
         if (rows.length > 0) {
           throw new AccessError('conflict', 'This company already has members.');
@@ -193,6 +200,10 @@ export class CompanyAccessService {
         if (invitation === undefined || invitation.email !== principal.email.toLowerCase()) {
           throw invalidInvitation();
         }
+        // Checked only for the invited person, so nobody else learns about the company.
+        if ((await companyStatus(tx)) !== 'active') {
+          throw new AccessError('conflict', "This company isn't active, so it can't take new members right now.");
+        }
 
         const { rowCount } = await tx.query(
           `INSERT INTO identity.memberships (company_id, user_id, role_key)
@@ -218,6 +229,12 @@ export class CompanyAccessService {
       }),
     );
   }
+}
+
+/** Tenancy owns companies, and only its active ones take members. */
+async function companyStatus(tx: TenantTransaction): Promise<string | null> {
+  const { rows } = await tx.query<{ status: string | null }>('SELECT tenancy.current_company_status() AS status');
+  return rows[0]?.status ?? null;
 }
 
 function hashToken(token: string): string {

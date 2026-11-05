@@ -23,10 +23,11 @@ The API uses the `dreamdevops` realm in the local Keycloak. Open <http://localho
 | Sample user | Starts as |
 |---|---|
 | `dev-platform-admin` | Platform Admin |
+| `demo-company-admin`, `demo-tech-lead`, `demo-developer`, `demo-operator`, `demo-viewer` | Members of the demo company, one in each role |
 | `dev-company-admin` | No company until invited |
 | `dev-developer` | No company until invited |
 
-Their password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`. To see how they join a company, read the [Identity and Access guide](src/identity-access/README.md).
+Their password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`. `npm run start:api` creates the demo company and its members first, with `scripts/seed-local.ts`, unless `SEED_DEMO_COMPANY=false`. It creates any of them Keycloak doesn't have, because Keycloak imports its realm only once. To see how they join a company, read the [Identity and Access guide](src/identity-access/README.md).
 
 The realm only accepts logins from port 4000, so changing `API_PORT` also needs a change in `infra/local/keycloak/dreamdevops-realm.json`.
 
@@ -40,7 +41,7 @@ All routes start with `/api/v1`.
 | `GET /auth/callback` | Public | Finishes login and creates the session |
 | `GET /auth/me` | Signed in | Shows the signed-in user |
 | `POST /auth/logout` | Signed in | Ends the session |
-| Others | | See the [Identity and Access guide](src/identity-access/README.md) |
+| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md) and [Application Catalog](src/application-catalog/README.md) guides |
 | `GET /health/live` | Public | The process is running |
 | `GET /health/ready` | Public | The process can reach its database |
 
@@ -55,6 +56,30 @@ Every route must declare who can call it, with one of these decorators. A route 
 ```
 
 Each request runs in the signed-in user's company, which comes only from the server-side session. Use `TenantDatabase` for company data, and row-level security limits it to that company. If a user with no company calls such a route, the answer is 403.
+
+## Background work
+
+Changes that other modules react to are saved as events in the outbox, in the same transaction as the change. The API delivers them while it runs:
+
+1. The outbox relay reads saved events, connecting as `dreamdevops_relay`, the only role that reads across companies.
+2. The event bus gives each subscriber its own job, through the pg-boss queue in the `pgboss` schema, which `dreamdevops_jobs` owns.
+3. Each job runs in its event's company context, and runs again if it fails.
+
+Tenancy uses this to provision each company's resources, such as its Git organization in Forgejo, and each application's repository, with its scaffold, all through Forgejo's REST API. Several API instances can run together: their relays never take the same events, and because a crash can still deliver an event twice, every handler is safe to run again.
+
+## Settings
+
+`npm run start:api` sets these from `infra/local/.env`. Elsewhere, set them yourself.
+
+| Setting | Purpose |
+|---|---|
+| `API_DATABASE_URL` | Connects as `dreamdevops_app`, for requests |
+| `RELAY_DATABASE_URL` | Connects as `dreamdevops_relay`, for the outbox relay |
+| `JOBS_DATABASE_URL` | Connects as `dreamdevops_jobs`, for the job queue |
+| `FORGEJO_URL` | Where the API reaches Forgejo. Production requires https. |
+| `FORGEJO_USERNAME`, `FORGEJO_PASSWORD` | A Forgejo administrator, which creating organizations needs. Outside your own machine, use an access token as the password. |
+| `KEYCLOAK_ISSUER_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET` | The login provider |
+| `API_PUBLIC_URL`, `DASHBOARD_URL` | Where the browser reaches the API and the dashboard |
 
 ## Security controls
 
@@ -73,5 +98,6 @@ Behind a reverse proxy, set `TRUSTED_PROXIES` to the number of proxies, or every
 | Command, from this folder | What it runs |
 |---|---|
 | `npm run test:unit` | The real application with in-memory fakes, with no Docker |
-| `npm run test:integration` | Access rules against a throwaway PostgreSQL and login through a throwaway Keycloak, using Docker Desktop |
+| `npm run scaffolds:verify` | Fills in every scaffold and runs its type's commands, as the [Application Catalog guide](src/application-catalog/README.md#keeping-scaffolds-working) describes |
+| `npm run test:integration` | Access rules, tenancy and background work against a throwaway PostgreSQL, login through a throwaway Keycloak, and Git organizations in a throwaway Forgejo, using Docker Desktop |
 | `npm test` | Both |

@@ -11,7 +11,11 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "scaffolds:verify": "node scripts/scaffolds.ts verify",
+    "scaffolds:lock": "node scripts/scaffolds.ts lock",
+    "scaffolds:check": "node scripts/scaffolds.ts check",
     "db:migrate": "node --env-file=../../infra/local/.env scripts/migrate.ts",
+    "db:seed": "node --env-file=../../infra/local/.env scripts/seed-local.ts",
     "start": "npm run build && node --env-file=../../infra/local/.env scripts/start-local.ts"
   },
   "devDependencies": {

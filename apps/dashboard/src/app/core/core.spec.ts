@@ -200,7 +200,10 @@ describe('core', () => {
       expect(roleName(null)).toBe('No role');
       expect(permissionDescription('releases:start')).toBe('Start releases and hotfixes');
       expect(permissionDescription('new:permission')).toBe('new:permission');
-      expect(companyLabel('4707316c-b477-41ae-b8eb-0ddd1ef86f79')).toBe('Company 4707316c');
+      expect(companyLabel({ companyId: '4707316c-b477-41ae-b8eb-0ddd1ef86f79', companyName: 'Acme' })).toBe('Acme');
+      expect(companyLabel({ companyId: '4707316c-b477-41ae-b8eb-0ddd1ef86f79', companyName: null })).toBe(
+        'Company 4707316c',
+      );
     });
   });
 });

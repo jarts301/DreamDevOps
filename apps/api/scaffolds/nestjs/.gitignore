@@ -1,0 +1,17 @@
+# Built files
+/dist
+/coverage
+*.tsbuildinfo
+
+# Dependencies
+/node_modules
+npm-debug.log*
+
+# Local settings
+.env
+
+# Editors and systems
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store

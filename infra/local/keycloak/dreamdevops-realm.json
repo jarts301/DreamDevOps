@@ -81,6 +81,51 @@
       "enabled": true,
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "demo-company-admin",
+      "email": "demo-company-admin@example.com",
+      "firstName": "Demo",
+      "lastName": "Company Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "demo-tech-lead",
+      "email": "demo-tech-lead@example.com",
+      "firstName": "Demo",
+      "lastName": "Tech Lead",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "demo-developer",
+      "email": "demo-developer@example.com",
+      "firstName": "Demo",
+      "lastName": "Developer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "demo-operator",
+      "email": "demo-operator@example.com",
+      "firstName": "Demo",
+      "lastName": "Operator",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "demo-viewer",
+      "email": "demo-viewer@example.com",
+      "firstName": "Demo",
+      "lastName": "Viewer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_DEV_USER_PASSWORD}", "temporary": false }]
     }
   ]
 }
