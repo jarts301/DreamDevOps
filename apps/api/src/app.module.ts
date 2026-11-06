@@ -11,14 +11,16 @@ import { TenantContextInterceptor } from './http/tenant-context.interceptor.ts';
 import { CompanyAccessService } from './identity-access/application/company-access.service.ts';
 import { IDENTITY_PROVIDER, USER_DIRECTORY } from './identity-access/application/ports.ts';
 import { AuthController } from './identity-access/http/auth.controller.ts';
-import {
-  CompanyAccessController,
-  InvitationsController,
-  PlatformCompaniesController,
-} from './identity-access/http/company-access.controller.ts';
+import { CompanyAccessController, InvitationsController } from './identity-access/http/company-access.controller.ts';
 import { KeycloakIdentityProvider } from './identity-access/infrastructure/keycloak-identity-provider.ts';
 import { PostgresUserDirectory } from './identity-access/infrastructure/postgres-user-directory.ts';
 import { PostgresSessionStore } from './session/postgres-session-store.ts';
+import { BACKGROUND_PROCESSING, BackgroundProcessing } from './background/background-processing.ts';
+import { CompaniesService } from './tenancy/application/companies.service.ts';
+import { GIT_PROVIDER, type GitProvider } from './tenancy/application/ports.ts';
+import { ProvisioningSaga } from './tenancy/application/provisioning.ts';
+import { CompaniesController } from './tenancy/http/companies.controller.ts';
+import { ForgejoGitProvider } from './tenancy/infrastructure/forgejo-git-provider.ts';
 import { SESSION_STORE } from './session/session-store.ts';
 import { APP_CONFIG, DATABASE_POOL } from './tokens.ts';
 
@@ -64,7 +66,7 @@ export class AppModule implements OnApplicationShutdown {
         AuthController,
         CompanyAccessController,
         InvitationsController,
-        PlatformCompaniesController,
+        CompaniesController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -104,6 +106,27 @@ export class AppModule implements OnApplicationShutdown {
             new CompanyAccessService(database, pool, { requireVerifiedEmail: config.requireVerifiedEmail }),
           inject: [TenantDatabase, DATABASE_POOL],
         },
+        {
+          provide: CompaniesService,
+          useFactory: (database: TenantDatabase, access: CompanyAccessService) => new CompaniesService(database, access),
+          inject: [TenantDatabase, CompanyAccessService],
+        },
+        {
+          provide: GIT_PROVIDER,
+          useFactory: () =>
+            new ForgejoGitProvider({
+              url: config.forgejoUrl,
+              username: config.forgejoUsername,
+              password: config.forgejoPassword,
+            }),
+        },
+        {
+          provide: ProvisioningSaga,
+          useFactory: (database: TenantDatabase, git: GitProvider) =>
+            new ProvisioningSaga(database, git, { maxAttempts: config.provisioningMaxAttempts }),
+          inject: [TenantDatabase, GIT_PROVIDER],
+        },
+        { provide: BACKGROUND_PROCESSING, useClass: BackgroundProcessing },
         // Guards run in this order, so rate limits apply before any database work.
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: OriginGuard },

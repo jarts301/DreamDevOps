@@ -75,22 +75,3 @@ export class InvitationsController {
     return this.#service.acceptInvitation(request.principal!, body?.token);
   }
 }
-
-@Controller('platform/companies')
-export class PlatformCompaniesController {
-  readonly #service: CompanyAccessService;
-
-  constructor(@Inject(CompanyAccessService) service: CompanyAccessService) {
-    this.#service = service;
-  }
-
-  @RequirePermissions('companies:manage')
-  @Post(':companyId/first-admin-invitation')
-  invite(
-    @Req() request: ApiRequest,
-    @Param('companyId') companyId: string,
-    @Body() body: { email?: unknown },
-  ): Promise<object> {
-    return this.#service.inviteFirstAdmin(request.principal!, companyId, body?.email);
-  }
-}

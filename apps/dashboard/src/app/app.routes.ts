@@ -28,10 +28,10 @@ export const routes: Routes = [
         loadComponent: () => import('./features/identity-access/team').then((module) => module.Team),
       },
       {
-        path: 'platform/start-company',
-        title: 'Start a company · DreamDevOps',
+        path: 'platform/companies',
+        title: 'Companies · DreamDevOps',
         canActivate: [permissionGuard('companies:manage')],
-        loadComponent: () => import('./features/identity-access/start-company').then((module) => module.StartCompany),
+        loadComponent: () => import('./features/tenancy/companies').then((module) => module.Companies),
       },
       {
         path: 'not-allowed',

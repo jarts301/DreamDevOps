@@ -83,16 +83,16 @@ const newName = (prefix: string) => {
 const emailOf = (name: string) => `${name}@example.com`;
 
 /** Creates a company with a signed-in admin, the way a real company starts. */
-const startCompany = async (companyId = newCompany()) => {
+const startCompany = async () => {
   const platformAdmin = await signIn('platform-admin');
   const name = newName('admin');
   const { body } = await platformAdmin
-    .post(`/api/v1/platform/companies/${companyId}/first-admin-invitation`)
-    .send({ email: emailOf(name) })
+    .post('/api/v1/platform/companies')
+    .send({ name: `Company of ${name}`, firstAdminEmail: emailOf(name) })
     .expect(201);
   const admin = await signIn(name);
-  await admin.post('/api/v1/invitations/accept').send({ token: body.token }).expect(200);
-  return { companyId, admin, name };
+  await admin.post('/api/v1/invitations/accept').send({ token: body.invitation.token }).expect(200);
+  return { companyId: body.company.id as string, admin, name };
 };
 
 /** Invites a new user into the admin's company with a role and signs them in. */
@@ -590,6 +590,10 @@ describe('platform admins', () => {
       .post(`/api/v1/platform/companies/${companyId}/first-admin-invitation`)
       .send({ email: 'intruder@example.com' })
       .expect(409);
+    await platformAdmin
+      .post(`/api/v1/platform/companies/${newCompany()}/first-admin-invitation`)
+      .send({ email: 'intruder@example.com' })
+      .expect(404);
   });
 
   it('get no access to company data', async () => {
@@ -605,10 +609,7 @@ describe('platform admins', () => {
   it('are the only ones who can start a company', async () => {
     const { admin } = await startCompany();
 
-    await admin
-      .post(`/api/v1/platform/companies/${newCompany()}/first-admin-invitation`)
-      .send({ email: 'x@example.com' })
-      .expect(403);
+    await admin.post('/api/v1/platform/companies').send({ name: 'Sneaky', firstAdminEmail: 'x@example.com' }).expect(403);
   });
 });
 
@@ -637,6 +638,7 @@ describe('events', () => {
     const events = await eventsOf(companyId);
 
     expect(events.map((event) => event.event_type)).toEqual([
+      'CompanyCreated',
       'UserInvited',
       'RoleGranted',
       'UserInvited',

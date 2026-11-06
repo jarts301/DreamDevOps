@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { errorMessage } from '../core/api-error';
 import { BrowserNavigation } from '../core/browser-navigation';
-import { companyLabel, roleName } from '../core/labels';
+import { roleName } from '../core/labels';
 import { SessionService } from '../core/session.service';
 
 interface NavigationItem {
@@ -15,7 +15,7 @@ interface NavigationItem {
 const NAVIGATION: readonly NavigationItem[] = [
   { path: '/', label: 'Overview' },
   { path: '/team', label: 'Team', permission: 'company-users:manage' },
-  { path: '/platform/start-company', label: 'Start a company', permission: 'companies:manage' },
+  { path: '/platform/companies', label: 'Companies', permission: 'companies:manage' },
 ];
 
 @Component({
@@ -54,13 +54,13 @@ const NAVIGATION: readonly NavigationItem[] = [
                 <select [value]="session.user()?.companyId" (change)="chooseCompany($event)">
                   @for (membership of memberships(); track membership.companyId) {
                     <option [value]="membership.companyId" [selected]="membership.companyId === session.user()?.companyId">
-                      {{ companyLabel(membership.companyId) }} ({{ roleName(membership.role) }})
+                      {{ membership.companyName }} ({{ roleName(membership.role) }})
                     </option>
                   }
                 </select>
               </label>
-            } @else if (session.user()?.companyId; as companyId) {
-              <span>{{ companyLabel(companyId) }} · {{ roleName(session.user()?.role ?? null) }}</span>
+            } @else if (session.user()?.companyName; as companyName) {
+              <span>{{ companyName }} · {{ roleName(session.user()?.role ?? null) }}</span>
             } @else {
               <span class="muted">No company</span>
             }
@@ -87,7 +87,6 @@ export class Shell {
   protected readonly session = inject(SessionService);
   protected readonly error = signal<string | null>(null);
   protected readonly signingOut = signal(false);
-  protected readonly companyLabel = companyLabel;
   protected readonly roleName = roleName;
 
   protected readonly memberships = computed(() => this.session.user()?.memberships ?? []);

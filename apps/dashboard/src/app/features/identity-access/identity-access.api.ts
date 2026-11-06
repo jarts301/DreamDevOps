@@ -68,13 +68,4 @@ export class IdentityAccessApi {
   acceptInvitation(token: string): Promise<{ companyId: string; role: string }> {
     return firstValueFrom(this.#http.post<{ companyId: string; role: string }>('/api/v1/invitations/accept', { token }));
   }
-
-  inviteFirstAdmin(companyId: string, email: string): Promise<CreatedInvitation> {
-    return firstValueFrom(
-      this.#http.post<CreatedInvitation>(
-        `/api/v1/platform/companies/${encodeURIComponent(companyId)}/first-admin-invitation`,
-        { email },
-      ),
-    );
-  }
 }

@@ -4,11 +4,9 @@ import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { BrowserNavigation } from '../../core/browser-navigation';
 import { PendingInvitation, SESSION_STORAGE } from '../../core/pending-invitation';
-import { SessionService } from '../../core/session.service';
 import { COMPANY_A, sampleUser, settle } from '../../testing';
 import { AcceptInvitation } from './accept-invitation';
 import { invitationLink } from './identity-access.api';
-import { StartCompany } from './start-company';
 import { Team } from './team';
 
 const ROLES = [
@@ -274,29 +272,6 @@ describe('identity and access screens', () => {
       await render(fixture);
 
       expect(TestBed.inject(PendingInvitation).get()).toBeNull();
-    });
-  });
-
-  describe('StartCompany', () => {
-    it('invites a first admin to a new company', async () => {
-      const fixture = TestBed.createComponent(StartCompany);
-      fixture.detectChanges();
-      await render(fixture);
-      const email = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('input[type="email"]')!;
-      email.value = 'founder@example.com';
-      email.dispatchEvent(new Event('input'));
-      await render(fixture);
-
-      button(fixture, 'Create invitation').click();
-      const request = http.expectOne((candidate) =>
-        /^\/api\/v1\/platform\/companies\/[0-9a-f-]{36}\/first-admin-invitation$/.test(candidate.url),
-      );
-      expect(request.request.body).toEqual({ email: 'founder@example.com' });
-      request.flush({ id: 'inv-1', token: 'secret-token', expiresAt: '2026-11-11T00:00:00Z' });
-      await render(fixture);
-
-      expect(text(fixture)).toContain('founder@example.com');
-      expect(TestBed.inject(SessionService).user()).toBeNull();
     });
   });
 });

@@ -8,6 +8,11 @@ const valid = {
   KEYCLOAK_ISSUER_URL: 'http://localhost:8081/realms/dreamdevops',
   KEYCLOAK_CLIENT_ID: 'dreamdevops-dashboard',
   KEYCLOAK_CLIENT_SECRET: 'fake-dummy-client-secret',
+  RELAY_DATABASE_URL: 'postgres://relay@localhost/dreamdevops',
+  JOBS_DATABASE_URL: 'postgres://jobs@localhost/dreamdevops',
+  FORGEJO_URL: 'http://localhost:3000',
+  FORGEJO_BOT_USERNAME: 'dreamdevops-bot',
+  FORGEJO_BOT_PASSWORD: 'fake-dummy-bot-password',
 };
 
 const production = { ...valid, NODE_ENV: 'production', KEYCLOAK_ISSUER_URL: 'https://login.example.com/realms/dreamdevops' };
@@ -41,6 +46,11 @@ describe('loadConfig', () => {
     'KEYCLOAK_ISSUER_URL',
     'KEYCLOAK_CLIENT_ID',
     'KEYCLOAK_CLIENT_SECRET',
+    'RELAY_DATABASE_URL',
+    'JOBS_DATABASE_URL',
+    'FORGEJO_URL',
+    'FORGEJO_BOT_USERNAME',
+    'FORGEJO_BOT_PASSWORD',
   ])('requires %s', (name) => {
     expect(() => loadConfig({ ...valid, [name]: undefined })).toThrow(InvalidConfigError);
   });

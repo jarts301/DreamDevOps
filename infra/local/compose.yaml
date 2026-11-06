@@ -71,6 +71,8 @@ services:
       FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_PORT:-2222}
       FORGEJO__security__INSTALL_LOCK: "true"
       FORGEJO__service__DISABLE_REGISTRATION: "true"
+      # Only the platform bot may create organizations, one for each company.
+      FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
     volumes:
       - forgejo-data:/data
     depends_on:
@@ -95,6 +97,9 @@ services:
       FORGEJO_ADMIN_USERNAME: ${FORGEJO_ADMIN_USERNAME:?copy .env.example to .env}
       FORGEJO_ADMIN_PASSWORD: ${FORGEJO_ADMIN_PASSWORD:?copy .env.example to .env}
       FORGEJO_ADMIN_EMAIL: ${FORGEJO_ADMIN_EMAIL:?copy .env.example to .env}
+      FORGEJO_BOT_USERNAME: dreamdevops-bot
+      FORGEJO_BOT_EMAIL: dreamdevops-bot@example.com
+      FORGEJO_BOT_PASSWORD: ${FORGEJO_BOT_PASSWORD:?copy the new values from .env.example to .env}
     volumes:
       - forgejo-data:/data
       - ./ops:/ops:ro

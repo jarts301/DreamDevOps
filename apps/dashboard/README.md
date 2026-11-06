@@ -18,17 +18,15 @@ Open <http://localhost:4200> and sign in as a sample user. Their password is `KE
 
 | Sample user | Starts as |
 |---|---|
-| `dev-platform-admin` | Platform Admin, who can start companies |
+| `dev-platform-admin` | Platform Admin, who manages companies |
 | `dev-company-admin` | No company until invited |
 | `dev-developer` | No company until invited |
 
 To see the whole flow:
 
-1. Sign in as `dev-platform-admin`, open **Start a company**, enter `dev-company-admin@example.com` and copy the link.
+1. Sign in as `dev-platform-admin`, open **Companies**, enter a company name and `dev-company-admin@example.com`, and copy the link. The company shows **Active** once its Git organization is set up.
 2. Sign out, open the link, sign in as `dev-company-admin` and accept.
 3. Open **Team** to invite others and manage roles.
-
-Companies appear by ID until the Tenancy module gives them names.
 
 ## Layout
 
@@ -45,6 +43,6 @@ Companies appear by ID until the Tenancy module gives them names.
 | `npm test` | Component and service tests, with no servers |
 | `npm run test:e2e` | A browser test of the whole flow, using your installed Chrome |
 
-`test:e2e` needs the local stack running, and starts the API and dashboard itself. It registers new users each run, so they build up in your local Keycloak until you run `docker compose down -v`.
+`test:e2e` needs the local stack running, and starts the API and dashboard itself. Each run registers new users in your local Keycloak and adds a company to your local database and Forgejo. They build up until you run `docker compose down -v`.
 
 The dashboard uses TypeScript 6.0, because Angular 22 doesn't support the TypeScript 7 used by the rest of the repository.

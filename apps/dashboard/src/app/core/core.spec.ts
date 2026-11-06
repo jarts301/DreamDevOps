@@ -8,7 +8,7 @@ import { COMPANY_B, sampleUser, settle } from '../testing';
 import { errorMessage } from './api-error';
 import { BrowserNavigation } from './browser-navigation';
 import { authGuard, permissionGuard } from './guards';
-import { companyLabel, permissionDescription, roleName } from './labels';
+import { permissionDescription, roleName } from './labels';
 import { PendingInvitation, SESSION_STORAGE } from './pending-invitation';
 import { sessionExpiredInterceptor } from './session-expired.interceptor';
 import { SessionService } from './session.service';
@@ -195,12 +195,11 @@ describe('core', () => {
   });
 
   describe('labels', () => {
-    it('names roles, permissions and companies', () => {
+    it('names roles and permissions', () => {
       expect(roleName('tech-lead')).toBe('Tech Lead');
       expect(roleName(null)).toBe('No role');
       expect(permissionDescription('releases:start')).toBe('Start releases and hotfixes');
       expect(permissionDescription('new:permission')).toBe('new:permission');
-      expect(companyLabel('4707316c-b477-41ae-b8eb-0ddd1ef86f79')).toBe('Company 4707316c');
     });
   });
 });

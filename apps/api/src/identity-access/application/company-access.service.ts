@@ -145,21 +145,17 @@ export class CompanyAccessService {
   }
 
   /**
-   * Lets a platform admin start a company by inviting its first admin. It only works
-   * while the company has no members, so it can't become a way into company data.
+   * Invites a company's first admin, inside the Tenancy module's transaction and in that
+   * company's context. It only works while the company has no members, so it can't
+   * become a way into company data.
    */
-  inviteFirstAdmin(actor: Principal, companyIdValue: unknown, emailValue: unknown): Promise<CreatedInvitation> {
-    const companyId = parseCompanyId(uuid(companyIdValue));
+  async inviteFirstAdminIn(tx: TenantTransaction, actor: Principal, emailValue: unknown): Promise<CreatedInvitation> {
     const email = normalizeEmail(emailValue);
-    return runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query('SELECT 1 FROM identity.memberships LIMIT 1');
-        if (rows.length > 0) {
-          throw new AccessError('conflict', 'This company already has members.');
-        }
-        return createInvitation(tx, email, COMPANY_ADMIN, actor.userId);
-      }),
-    );
+    const { rows } = await tx.query('SELECT 1 FROM identity.memberships LIMIT 1');
+    if (rows.length > 0) {
+      throw new AccessError('conflict', 'This company already has members.');
+    }
+    return createInvitation(tx, email, COMPANY_ADMIN, actor.userId);
   }
 
   /** Requires both the secret token and a matching signed-in email address. */

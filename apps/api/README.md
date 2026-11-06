@@ -40,7 +40,7 @@ All routes start with `/api/v1`.
 | `GET /auth/callback` | Public | Finishes login and creates the session |
 | `GET /auth/me` | Signed in | Shows the signed-in user |
 | `POST /auth/logout` | Signed in | Ends the session |
-| Others | | See the [Identity and Access guide](src/identity-access/README.md) |
+| Others | | See the [Identity and Access](src/identity-access/README.md) and [Tenancy](src/tenancy/README.md) guides |
 | `GET /health/live` | Public | The process is running |
 | `GET /health/ready` | Public | The process can reach its database |
 
@@ -68,10 +68,14 @@ Each request runs in the signed-in user's company, which comes only from the ser
 
 Behind a reverse proxy, set `TRUSTED_PROXIES` to the number of proxies, or every client appears to share one address for rate limits.
 
+## Background processing
+
+The API also runs the outbox relay and the job queue, which deliver saved events to the modules that react to them, such as company provisioning. Each uses its own database role. They start and stop with the API.
+
 ## Tests
 
 | Command, from this folder | What it runs |
 |---|---|
 | `npm run test:unit` | The real application with in-memory fakes, with no Docker |
-| `npm run test:integration` | Access rules against a throwaway PostgreSQL and login through a throwaway Keycloak, using Docker Desktop |
+| `npm run test:integration` | Access rules and company provisioning against a throwaway PostgreSQL, plus login through a throwaway Keycloak and organizations in a throwaway Forgejo, using Docker Desktop |
 | `npm test` | Both |

@@ -29,8 +29,3 @@ export function roleName(role: string | null): string {
 export function permissionDescription(permission: string): string {
   return PERMISSION_DESCRIPTIONS[permission] ?? permission;
 }
-
-/** Companies have no names until the Tenancy module exists, so this shortens their ID. */
-export function companyLabel(companyId: string): string {
-  return `Company ${companyId.slice(0, 8)}`;
-}

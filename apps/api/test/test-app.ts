@@ -2,6 +2,7 @@ import type { INestApplication, Provider, Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from '../src/app.module.ts';
+import { BACKGROUND_PROCESSING, NoBackgroundProcessing } from '../src/background/background-processing.ts';
 import type { AppConfig } from '../src/config/app-config.ts';
 import { configureApp } from '../src/configure-app.ts';
 import { IDENTITY_PROVIDER, USER_DIRECTORY } from '../src/identity-access/application/ports.ts';
@@ -29,6 +30,15 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   rateLimitPerMinute: 10_000,
   authRateLimitPerMinute: 10_000,
   trustedProxies: 0,
+  relayDatabaseUrl: 'postgres://unused',
+  jobsDatabaseUrl: 'postgres://unused',
+  relayPollMs: 50,
+  jobPollingSeconds: 1,
+  forgejoUrl: 'http://unused',
+  forgejoUsername: 'unused',
+  forgejoPassword: 'unused',
+  provisioningMaxAttempts: 3,
+  provisioningRetrySeconds: 1,
   ...overrides,
 });
 
@@ -36,6 +46,8 @@ export interface TestAppOptions {
   readonly config?: Partial<AppConfig>;
   readonly controllers?: readonly Type<unknown>[];
   readonly overrides?: readonly Provider[];
+  /** Runs the outbox relay and job queue, which need a real database. */
+  readonly background?: boolean;
 }
 
 /** Builds the real application from explicit providers. */
@@ -45,7 +57,10 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
     AppModule.forRoot({
       config,
       controllers: options.controllers ?? [],
-      overrides: options.overrides ?? [],
+      overrides: [
+        ...(options.background ? [] : [{ provide: BACKGROUND_PROCESSING, useClass: NoBackgroundProcessing }]),
+        ...(options.overrides ?? []),
+      ],
     }),
     { bodyParser: false, logger: false },
   );

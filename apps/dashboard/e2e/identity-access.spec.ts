@@ -41,6 +41,8 @@ const invitationLink = (page: Page) => page.getByRole('textbox', { name: 'Invita
 test('from starting a company to managing its team', async ({ browser, page }) => {
   const admin = newUser('admin');
   const developer = newUser('developer');
+  const companyName = `E2E Company ${admin.username.slice(-8)}`;
+  const companyRow = () => page.getByRole('row', { name: new RegExp(companyName) });
 
   await test.step('anonymous users go to the login page', async () => {
     await page.goto('/');
@@ -64,10 +66,15 @@ test('from starting a company to managing its team', async ({ browser, page }) =
   });
 
   await test.step('the platform admin starts a company', async () => {
-    await page.getByRole('link', { name: 'Start a company' }).click();
+    await page.getByRole('link', { name: 'Companies' }).click();
+    await page.getByLabel('Company name').fill(companyName);
     await page.getByLabel('Email of the first admin').fill(admin.email);
-    await page.getByRole('button', { name: 'Create invitation' }).click();
+    await page.getByRole('button', { name: 'Create company' }).click();
     await expect(page.getByRole('textbox', { name: 'Invitation link' })).toBeVisible();
+  });
+
+  await test.step('setting up the company finishes in the background', async () => {
+    await expect(companyRow()).toContainText('Active', { timeout: 30_000 });
   });
 
   const adminLink = await invitationLink(page);
@@ -80,6 +87,7 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage).toHaveURL(/\/invitations\/accept$/);
     await adminPage.getByRole('button', { name: 'Accept invitation' }).click();
     await expect(adminPage.getByText('Your role is Company Admin.')).toBeVisible();
+    await expect(adminPage.getByText(`You're working in ${companyName}.`)).toBeVisible();
   });
 
   await test.step('the admin invites a developer', async () => {
@@ -148,6 +156,21 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByRole('cell', { name: developer.email, exact: true })).toHaveCount(0);
     await developerPage.reload();
     await expect(developerPage.getByRole('heading', { name: "You don't have access to this page" })).toBeVisible();
+  });
+
+  await test.step('suspending the company blocks its members at once', async () => {
+    await page.getByRole('button', { name: `Suspend ${companyName}` }).click();
+    await page.getByRole('button', { name: 'Confirm suspension' }).click();
+    await expect(companyRow()).toContainText('Suspended');
+    await adminPage.goto('/');
+    await expect(adminPage.getByRole('heading', { name: "You're not in a company yet" })).toBeVisible();
+  });
+
+  await test.step('reactivating the company restores access', async () => {
+    await page.getByRole('button', { name: `Reactivate ${companyName}` }).click();
+    await expect(companyRow()).toContainText('Active', { timeout: 30_000 });
+    await adminPage.goto('/team');
+    await expect(adminPage.getByRole('heading', { name: 'Team' })).toBeVisible();
   });
 
   await test.step('signing out ends the login provider session too', async () => {

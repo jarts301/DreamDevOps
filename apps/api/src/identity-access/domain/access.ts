@@ -2,6 +2,7 @@ import { createMongoAbility } from '@casl/ability';
 
 export interface CompanyMembership {
   readonly companyId: string;
+  readonly companyName: string;
   readonly role: string;
   readonly permissions: readonly string[];
 }
@@ -24,9 +25,10 @@ export interface Principal {
   readonly emailVerified: boolean;
   readonly displayName: string;
   readonly companyId: string | null;
+  readonly companyName: string | null;
   readonly role: string | null;
   readonly permissions: readonly string[];
-  readonly memberships: readonly { readonly companyId: string; readonly role: string }[];
+  readonly memberships: readonly { readonly companyId: string; readonly companyName: string; readonly role: string }[];
 }
 
 /**
@@ -44,9 +46,10 @@ export function toPrincipal(access: UserAccess, chosenCompanyId: string | null):
     emailVerified: access.emailVerified,
     displayName: access.displayName,
     companyId: active?.companyId ?? null,
+    companyName: active?.companyName ?? null,
     role: active?.role ?? null,
     permissions: [...new Set([...access.platformPermissions, ...(active?.permissions ?? [])])],
-    memberships: access.memberships.map(({ companyId, role }) => ({ companyId, role })),
+    memberships: access.memberships.map(({ companyId, companyName, role }) => ({ companyId, companyName, role })),
   };
 }
 

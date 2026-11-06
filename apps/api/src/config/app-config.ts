@@ -19,6 +19,18 @@ export interface AppConfig {
   readonly authRateLimitPerMinute: number;
   /** Number of reverse proxies in front of the API, used to find the client's address. */
   readonly trustedProxies: number;
+  /** Connection string for the dreamdevops_relay role, used by the outbox relay. */
+  readonly relayDatabaseUrl: string;
+  /** Connection string for the dreamdevops_jobs role, used by the job queue. */
+  readonly jobsDatabaseUrl: string;
+  readonly relayPollMs: number;
+  readonly jobPollingSeconds: number;
+  readonly forgejoUrl: string;
+  readonly forgejoUsername: string;
+  readonly forgejoPassword: string;
+  /** Attempts before a company's provisioning is marked as failed. */
+  readonly provisioningMaxAttempts: number;
+  readonly provisioningRetrySeconds: number;
 }
 
 export class InvalidConfigError extends Error {
@@ -65,6 +77,15 @@ export function loadConfig(env: Environment): AppConfig {
     rateLimitPerMinute: integer(env, 'RATE_LIMIT_PER_MINUTE', 300),
     authRateLimitPerMinute: integer(env, 'AUTH_RATE_LIMIT_PER_MINUTE', 20),
     trustedProxies: integer(env, 'TRUSTED_PROXIES', 0),
+    relayDatabaseUrl: required(env, 'RELAY_DATABASE_URL'),
+    jobsDatabaseUrl: required(env, 'JOBS_DATABASE_URL'),
+    relayPollMs: integer(env, 'RELAY_POLL_MS', 1_000),
+    jobPollingSeconds: integer(env, 'JOB_POLLING_SECONDS', 2),
+    forgejoUrl: url(env, 'FORGEJO_URL'),
+    forgejoUsername: required(env, 'FORGEJO_BOT_USERNAME'),
+    forgejoPassword: required(env, 'FORGEJO_BOT_PASSWORD'),
+    provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),
+    provisioningRetrySeconds: integer(env, 'PROVISIONING_RETRY_SECONDS', 30),
   };
 }
 

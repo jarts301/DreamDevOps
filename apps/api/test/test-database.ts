@@ -6,7 +6,7 @@ import { migrateApi } from '../src/database/migrate.ts';
 const BOOTSTRAP_SQL = fileURLToPath(new URL('../../../infra/local/postgres/init-platform-database.sql', import.meta.url));
 
 export interface TestDatabase {
-  urlFor(role: 'owner' | 'app'): string;
+  urlFor(role: 'owner' | 'app' | 'relay' | 'jobs'): string;
   stop(): Promise<void>;
 }
 

@@ -26,12 +26,12 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Capability | What works today |
 |---|---|
 | Sign-in | Login, registration and logout through Keycloak |
-| Companies | Starting a company by inviting its first admin. Companies appear by ID, without names. |
+| Companies | Creating, renaming, suspending and reactivating companies. Each gets a private Git organization, set up in the background. |
 | Users and roles | Invitations, five company roles and a Platform Admin role, with changes applied on the user's next request |
 | Company data separation | Enforced in the database with row-level security |
 | Dashboard | Overview, team management, joining a company and starting a company, in light and dark themes |
 
-Creating applications and repositories, building images, deploying, and monitoring aren't available yet.
+Creating applications and repositories, building images, deploying, and monitoring aren't available yet. Companies can't be deleted.
 
 ## Prerequisites
 
@@ -158,7 +158,7 @@ The API reads further settings at startup and refuses to start if a required one
 | Integration | Docker | Real PostgreSQL and Keycloak in throwaway containers, including company data separation and login |
 | Browser | Local services running, and Chrome | The main flow from starting a company to managing its team. It starts the API and dashboard itself if needed. |
 
-Integration tests don't touch your local data. The browser test does: it registers new users in your local Keycloak on each run, and adds their companies to your local database.
+Integration tests don't touch your local data. The browser test does: each run registers new users in your local Keycloak, and adds a company to your local database and Forgejo.
 
 ## Backup and restore
 
@@ -205,6 +205,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Local services](infra/local/README.md) | Running, resetting and backing up the local services |
 | [API](apps/api/README.md) | Routes, security controls and rules for adding routes |
 | [Identity and access](apps/api/src/identity-access/README.md) | Roles, permissions, invitations and their rules |
+| [Tenancy](apps/api/src/tenancy/README.md) | The company lifecycle, and how each company's resources are set up |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |
 

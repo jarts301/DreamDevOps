@@ -5,6 +5,7 @@ import { BrowserNavigation } from './browser-navigation';
 
 export interface Membership {
   readonly companyId: string;
+  readonly companyName: string;
   readonly role: string;
 }
 
@@ -13,6 +14,7 @@ export interface CurrentUser {
   readonly email: string;
   readonly displayName: string;
   readonly companyId: string | null;
+  readonly companyName: string | null;
   readonly role: string | null;
   readonly permissions: readonly string[];
   readonly memberships: readonly Membership[];

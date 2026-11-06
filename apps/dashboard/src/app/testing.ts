@@ -8,9 +8,10 @@ export const sampleUser = (overrides: Partial<CurrentUser> = {}): CurrentUser =>
   email: 'person@example.com',
   displayName: 'Sample Person',
   companyId: COMPANY_A,
+  companyName: 'Acme',
   role: 'company-admin',
   permissions: ['company-users:manage', 'dashboards:view'],
-  memberships: [{ companyId: COMPANY_A, role: 'company-admin' }],
+  memberships: [{ companyId: COMPANY_A, companyName: 'Acme', role: 'company-admin' }],
   ...overrides,
 });
 

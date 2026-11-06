@@ -7,6 +7,11 @@ import type {
   UserDirectory,
 } from '../src/identity-access/application/ports.ts';
 import type { CompanyMembership, UserAccess } from '../src/identity-access/domain/access.ts';
+import {
+  type GitOrganization,
+  type GitProvider,
+  PermanentProvisioningError,
+} from '../src/tenancy/application/ports.ts';
 
 export const COMPANY_A = '00000000-0000-4000-8000-00000000000a';
 export const COMPANY_B = '00000000-0000-4000-8000-00000000000b';
@@ -44,6 +49,7 @@ export class FakeIdentityProvider implements IdentityProvider {
 
 const membership = (companyId: string, role: string, ...permissions: string[]): CompanyMembership => ({
   companyId,
+  companyName: companyId === COMPANY_A ? 'Company A' : 'Company B',
   role,
   permissions,
 });
@@ -82,5 +88,27 @@ export class InMemoryUserDirectory implements UserDirectory {
 
   async loadAccess(userId: string): Promise<UserAccess | null> {
     return this.#users.get(userId) ?? null;
+  }
+}
+
+/** Records organizations in memory, and can be told to fail. */
+export class FakeGitProvider implements GitProvider {
+  readonly organizations = new Map<string, GitOrganization>();
+  /** Errors to throw, one per call, before calls start succeeding. */
+  readonly failures: Error[] = [];
+  calls = 0;
+
+  async ensureOrganization(organization: GitOrganization): Promise<string> {
+    this.calls += 1;
+    const failure = this.failures.shift();
+    if (failure !== undefined) {
+      throw failure;
+    }
+    const existing = this.organizations.get(organization.name);
+    if (existing !== undefined && existing.companyId !== organization.companyId) {
+      throw new PermanentProvisioningError(`The Git organization name "${organization.name}" is already taken.`);
+    }
+    this.organizations.set(organization.name, organization);
+    return `org-${organization.name}`;
   }
 }

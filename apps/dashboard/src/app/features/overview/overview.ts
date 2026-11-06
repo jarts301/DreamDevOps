@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
-import { companyLabel, permissionDescription, roleName } from '../../core/labels';
+import { permissionDescription, roleName } from '../../core/labels';
 import { SessionService } from '../../core/session.service';
 
 @Component({
@@ -8,8 +8,8 @@ import { SessionService } from '../../core/session.service';
   template: `
     <h1>Welcome, {{ session.user()?.displayName }}</h1>
 
-    @if (session.user()?.companyId; as companyId) {
-      <p class="lead">You're working in {{ companyLabel(companyId) }}. Your role is {{ roleName(session.user()?.role ?? null) }}.</p>
+    @if (session.user()?.companyName; as companyName) {
+      <p class="lead">You're working in {{ companyName }}. Your role is {{ roleName(session.user()?.role ?? null) }}.</p>
     } @else if (session.isPlatformUser()) {
       <p class="lead">You're a Platform Admin. You can start companies, but you can't see their data.</p>
     } @else {
@@ -33,7 +33,6 @@ import { SessionService } from '../../core/session.service';
 })
 export class Overview {
   protected readonly session = inject(SessionService);
-  protected readonly companyLabel = companyLabel;
   protected readonly roleName = roleName;
   protected readonly abilities = computed(() =>
     (this.session.user()?.permissions ?? []).map(permissionDescription),
