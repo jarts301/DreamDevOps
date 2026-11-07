@@ -8,6 +8,8 @@ export interface SessionData {
   readonly chosenCompanyId: string | null;
   /** Kept only to end the login provider's session at logout. */
   readonly idToken: string | null;
+  /** Whether the login used a second factor. Sessions from before this was kept have none. */
+  readonly mfa?: boolean;
 }
 
 export interface SessionLifetime {

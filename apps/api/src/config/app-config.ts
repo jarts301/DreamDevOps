@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export interface AppConfig {
@@ -34,6 +36,20 @@ export interface AppConfig {
   readonly forgejoPublicUrl: string;
   /** The folder of versioned blueprints. Defaults to the repository's blueprints folder. */
   readonly blueprintsDir: string;
+  /** The folder of the platform's pipeline definitions. Defaults to the repository's pipelines folder. */
+  readonly pipelinesDir: string;
+  /** The API's address as Forgejo and CI jobs reach it. Defaults to API_PUBLIC_URL. */
+  readonly toolsApiUrl: string;
+  /** Derives each repository's webhook secret, so none are stored. */
+  readonly webhookSecretKey: string;
+  /** Encrypts each company's image signing keys in the database. */
+  readonly signingKeySecret: string;
+  /** Where image uploads wait while a build runs. */
+  readonly buildWorkDir: string;
+  /** Builds that haven't finished by then are marked as failed. */
+  readonly buildTimeoutMinutes: number;
+  /** The secret label of the runner that builds images, put in the platform's pipeline. */
+  readonly imageRunnerLabel: string;
   /** Attempts before a company's provisioning is marked as failed. */
   readonly provisioningMaxAttempts: number;
   readonly provisioningRetrySeconds: number;
@@ -63,6 +79,9 @@ type Environment = Readonly<Record<string, string | undefined>>;
 const MINUTE_MS = 60_000;
 // Three folders up from both src/config and dist/config is the repository root.
 const DEFAULT_BLUEPRINTS_DIR = fileURLToPath(new URL('../../../../blueprints', import.meta.url));
+const DEFAULT_PIPELINES_DIR = fileURLToPath(new URL('../../../../pipelines', import.meta.url));
+/** The local stack's sample secrets start with this, and must never reach a server. */
+const SAMPLE_SECRET_PREFIX = 'fake-dummy-';
 
 /** Reads settings once at startup and refuses to start if any are unsafe or missing. */
 export function loadConfig(env: Environment): AppConfig {
@@ -81,6 +100,20 @@ export function loadConfig(env: Environment): AppConfig {
   if (isProduction && (smtpSecurity === 'none' || webhookAllowInsecure || webhookAllowPrivateNetworks)) {
     throw new InvalidConfigError(
       'SMTP_SECURITY=none, WEBHOOK_ALLOW_INSECURE and WEBHOOK_ALLOW_PRIVATE_NETWORKS are for local testing only.',
+    );
+  }
+  const webhookSecretKey = secret(env, 'WEBHOOK_SECRET_KEY');
+  const signingKeySecret = secret(env, 'SIGNING_KEY_SECRET');
+  const imageRunnerLabel = required(env, 'IMAGE_RUNNER_LABEL');
+  if (!/^[a-z0-9][a-z0-9-]{7,62}$/.test(imageRunnerLabel)) {
+    throw new InvalidConfigError('IMAGE_RUNNER_LABEL must be 8 to 63 lowercase letters, digits and hyphens.');
+  }
+  if (
+    isProduction &&
+    [webhookSecretKey, signingKeySecret, imageRunnerLabel].some((value) => value.startsWith(SAMPLE_SECRET_PREFIX))
+  ) {
+    throw new InvalidConfigError(
+      'WEBHOOK_SECRET_KEY, SIGNING_KEY_SECRET and IMAGE_RUNNER_LABEL must not be the sample values in production.',
     );
   }
   if (isProduction) {
@@ -117,6 +150,13 @@ export function loadConfig(env: Environment): AppConfig {
     forgejoPassword: required(env, 'FORGEJO_BOT_PASSWORD'),
     forgejoPublicUrl: env.FORGEJO_PUBLIC_URL ? url(env, 'FORGEJO_PUBLIC_URL') : url(env, 'FORGEJO_URL'),
     blueprintsDir: env.BLUEPRINTS_DIR || DEFAULT_BLUEPRINTS_DIR,
+    pipelinesDir: env.PIPELINES_DIR || DEFAULT_PIPELINES_DIR,
+    toolsApiUrl: env.TOOLS_API_URL ? url(env, 'TOOLS_API_URL') : url(env, 'API_PUBLIC_URL'),
+    webhookSecretKey,
+    signingKeySecret,
+    buildWorkDir: env.BUILD_WORK_DIR || join(tmpdir(), 'dreamdevops-builds'),
+    buildTimeoutMinutes: integer(env, 'BUILD_TIMEOUT_MINUTES', 60),
+    imageRunnerLabel,
     provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),
     provisioningRetrySeconds: integer(env, 'PROVISIONING_RETRY_SECONDS', 30),
     smtpHost: required(env, 'SMTP_HOST'),
@@ -135,6 +175,15 @@ function required(env: Environment, name: string): string {
   const value = env[name];
   if (value === undefined || value === '') {
     throw new InvalidConfigError(`${name} must be set.`);
+  }
+  return value;
+}
+
+/** Keys and secrets must be long enough to resist guessing. */
+function secret(env: Environment, name: string): string {
+  const value = required(env, name);
+  if (value.length < 32) {
+    throw new InvalidConfigError(`${name} must be at least 32 characters.`);
   }
   return value;
 }

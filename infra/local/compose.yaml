@@ -85,10 +85,16 @@ services:
       # Never attach a Keycloak login to an existing local account, such as the bot's.
       FORGEJO__oauth2_client__ACCOUNT_LINKING: disabled
       FORGEJO__oauth2_client__UPDATE_AVATAR: "false"
+      FORGEJO__actions__ENABLED: "true"
+      # Each repository sends its events to the API on your machine.
+      FORGEJO__webhook__ALLOWED_HOST_LIST: host.docker.internal
       # Only the platform bot may create organizations, one for each company.
       FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
     volumes:
       - forgejo-data:/data
+    networks:
+      - default
+      - ci
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,14 +134,122 @@ services:
       FORGEJO_BOT_EMAIL: dreamdevops-bot@example.com
       FORGEJO_BOT_PASSWORD: ${FORGEJO_BOT_PASSWORD:?copy the new values from .env.example to .env}
       FORGEJO_KEYCLOAK_CLIENT_SECRET: ${FORGEJO_KEYCLOAK_CLIENT_SECRET:?copy the new values from .env.example to .env}
+      IMAGE_RUNNER_LABEL: ${IMAGE_RUNNER_LABEL:?copy the new values from .env.example to .env}
     volumes:
       - forgejo-data:/data
+      - runner-secret:/runner-secret
       - ./ops:/ops:ro
     depends_on:
       forgejo:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+      runner-secret-init:
+        condition: service_completed_successfully
+
+  # Makes the secret the CI runner uses to connect to Forgejo, then exits.
+  runner-secret-init:
+    image: postgres:17.11-alpine
+    entrypoint: ["/bin/sh", "/ops/runner-secret-init.sh"]
+    volumes:
+      - runner-secret:/runner-secret
+      - ./ops:/ops:ro
+
+  # The CI runner's own Docker engine. Jobs run here, isolated from your machine's Docker.
+  # Docker-in-Docker needs privileged mode; the job containers inside it don't get it.
+  runner-docker:
+    image: docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac
+    restart: unless-stopped
+    privileged: true
+    environment:
+      # Reachable only on the CI network, so no TLS between the engine and the runners.
+      DOCKER_TLS_CERTDIR: ""
+      CI_SUBNET: 10.213.89.0/24
+      API_PORT: ${API_PORT:-4000}
+    entrypoint: ["/bin/sh", "-c"]
+    # The firewall comes first, so no job ever runs without it.
+    command:
+      - sh /ops/runner-firewall.sh && exec dockerd-entrypoint.sh dockerd --host=tcp://0.0.0.0:2375 --tls=false
+    networks:
+      - ci
+    volumes:
+      - runner-docker-data:/var/lib/docker
+      - ./ops:/ops:ro
+    healthcheck:
+      test: ["CMD", "docker", "-H", "tcp://127.0.0.1:2375", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Forgejo calls itself http://localhost:3000, such as in its registry's sign-in
+  # address. This makes that address reach Forgejo inside the runner's network too, so
+  # jobs and people use the same image names.
+  runner-forgejo-proxy:
+    image: alpine/socat@sha256:e8a6e8868a8e6e01d9c2c321a8f8d4474d2d741d962462e5c5a124a8e66a0055
+    restart: unless-stopped
+    network_mode: service:runner-docker
+    command: ["TCP6-LISTEN:3000,fork,reuseaddr,ipv6only=0", "TCP:forgejo:3000"]
+    depends_on:
+      runner-docker:
+        condition: service_healthy
+
+  # Runs CI jobs from every company's repositories. On servers, each company gets its own.
+  forgejo-runner:
+    image: data.forgejo.org/forgejo/runner:12@sha256:eb6e7bc21973382d261e6eb883dbd27b8cb56939d33a3bfd79a1352b7f9a33a0
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      DOCKER_HOST: tcp://runner-docker:2375
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        forgejo-runner create-runner-file --instance http://forgejo:3000 --name local-runner
+        --secret "$$(cat /runner-secret/secret)" --config /config/config.yaml
+        && exec forgejo-runner daemon --config /config/config.yaml
+    working_dir: /data
+    networks:
+      - ci
+    volumes:
+      - runner-data:/data
+      - runner-secret:/runner-secret:ro
+      - ./runner/config.yaml:/config/config.yaml:ro
+    depends_on:
+      runner-docker:
+        condition: service_healthy
+      runner-forgejo-proxy:
+        condition: service_started
+      forgejo-init:
+        condition: service_completed_successfully
+
+  # Runs only the platform pipeline's image builds, which need seccomp relaxed.
+  forgejo-image-runner:
+    image: data.forgejo.org/forgejo/runner:12@sha256:eb6e7bc21973382d261e6eb883dbd27b8cb56939d33a3bfd79a1352b7f9a33a0
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      DOCKER_HOST: tcp://runner-docker:2375
+      IMAGE_RUNNER_LABEL: ${IMAGE_RUNNER_LABEL:?copy the new values from .env.example to .env}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        sed "s/__IMAGE_RUNNER_LABEL__/$$IMAGE_RUNNER_LABEL/" /config/image-config.yaml > /data/config.yaml
+        && forgejo-runner create-runner-file --instance http://forgejo:3000 --name local-image-runner
+        --secret "$$(cat /runner-secret/image-secret)" --config /data/config.yaml
+        && exec forgejo-runner daemon --config /data/config.yaml
+    working_dir: /data
+    networks:
+      - ci
+    volumes:
+      - image-runner-data:/data
+      - runner-secret:/runner-secret:ro
+      - ./runner/image-config.yaml:/config/image-config.yaml:ro
+    depends_on:
+      runner-docker:
+        condition: service_healthy
+      runner-forgejo-proxy:
+        condition: service_started
+      forgejo-init:
+        condition: service_completed_successfully
 
   # Adds the Forgejo login client to Keycloak, then exits. Safe to run repeatedly.
   keycloak-init:
@@ -197,6 +311,10 @@ services:
         condition: service_completed_successfully
       keycloak-init:
         condition: service_completed_successfully
+      forgejo-runner:
+        condition: service_started
+      forgejo-image-runner:
+        condition: service_started
       platform-db-init:
         condition: service_completed_successfully
       mailpit:
@@ -273,3 +391,15 @@ services:
 volumes:
   postgres-data:
   forgejo-data:
+  runner-secret:
+  runner-data:
+  image-runner-data:
+  runner-docker-data:
+
+networks:
+  default:
+  # CI jobs and the runners live here, apart from PostgreSQL, Keycloak and Mailpit.
+  ci:
+    ipam:
+      config:
+        - subnet: 10.213.89.0/24

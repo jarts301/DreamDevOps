@@ -35,6 +35,8 @@ export interface BranchRule {
   /** Approvals a pull request needs, from the approving team. */
   readonly requiredApprovals: number;
   readonly approvingTeam: TeamKey;
+  /** Commit statuses a pull request needs before it can merge. */
+  readonly requiredChecks: readonly string[];
 }
 
 export interface GitFlowPolicy {
@@ -45,20 +47,36 @@ export interface GitFlowPolicy {
 }
 
 /**
+ * The status the platform reports for a pull request's newest commit, from its own check
+ * pipeline. A repository's own workflows can't remove or rename it.
+ */
+export const TESTS_CHECK = 'dreamdevops/tests';
+/** The status Release Management reports once a release branch's newest commit has a published RC image. */
+export const RC_IMAGE_CHECK = 'dreamdevops/rc-image';
+
+/**
  * The branch rules that make Git Flow the only path to production. feature/* branches
- * have no rule, so developers push to them freely. Required test checks are added once
- * the build step can run them.
+ * have no rule, so developers push to them freely.
  */
 export const GIT_FLOW: GitFlowPolicy = {
   defaultBranch: 'develop',
   branches: [
-    { pattern: 'main', directPush: 'nobody', requiredApprovals: 1, approvingTeam: 'tech-leads' },
-    { pattern: 'develop', directPush: 'nobody', requiredApprovals: 1, approvingTeam: 'tech-leads' },
-    { pattern: 'release/*', directPush: 'platform', requiredApprovals: 1, approvingTeam: 'tech-leads' },
-    { pattern: 'hotfix/*', directPush: 'platform', requiredApprovals: 1, approvingTeam: 'tech-leads' },
+    {
+      pattern: 'main',
+      directPush: 'nobody',
+      requiredApprovals: 1,
+      approvingTeam: 'tech-leads',
+      requiredChecks: [TESTS_CHECK, RC_IMAGE_CHECK],
+    },
+    { pattern: 'develop', directPush: 'nobody', requiredApprovals: 1, approvingTeam: 'tech-leads', requiredChecks: [TESTS_CHECK] },
+    { pattern: 'release/*', directPush: 'platform', requiredApprovals: 1, approvingTeam: 'tech-leads', requiredChecks: [TESTS_CHECK] },
+    { pattern: 'hotfix/*', directPush: 'platform', requiredApprovals: 1, approvingTeam: 'tech-leads', requiredChecks: [TESTS_CHECK] },
   ],
   platformTags: ['v*'],
 };
+
+/** The events each repository sends to the webhook gateway. */
+export const WEBHOOK_EVENTS = ['push', 'create', 'delete', 'pull_request'] as const;
 
 export interface TeamChange {
   readonly team: TeamKey;

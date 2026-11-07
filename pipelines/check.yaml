@@ -1,0 +1,78 @@
+# The DreamDevOps pull request check. The platform runs it for the newest commit of every
+# pull request, and reports the result as the dreamdevops/tests status the branch rules
+# require. It lives in each company's dreamdevops-pipeline repository, which only the
+# platform can change, so renaming or deleting a repository's own workflow can't skip it.
+#
+# Jobs hold no credentials. Each run gets a one-time token that only reads this check's
+# source and reports its results.
+name: check
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Check ID
+        required: true
+      token:
+        description: One-time token
+        required: true
+      api:
+        description: Where jobs reach the platform
+        required: true
+
+env:
+  BUILD_URL: ${{ inputs.api }}/api/v1/pipeline/builds/${{ inputs.build }}
+  BUILD_TOKEN: ${{ inputs.token }}
+
+jobs:
+  secrets:
+    runs-on: docker
+    container:
+      image: zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    steps:
+      - name: Look for secrets in the code
+        run: |
+          set -u
+          mkdir -p /tmp/source && cd /tmp/source
+          wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
+          gitleaks dir . --no-banner --redact --exit-code 0 --report-format json --report-path /tmp/secrets.json
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/secrets.json "$BUILD_URL/reports/secrets"
+          [ "$(tr -d ' \n' < /tmp/secrets.json)" = "[]" ]
+
+  test:
+    runs-on: docker
+    container:
+      image: node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8
+    steps:
+      - name: Run the tests
+        run: |
+          set -u
+          mkdir -p /tmp/source && cd /tmp/source
+          wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
+          if [ -f package.json ]; then
+            (npm ci && npm test) > /tmp/tests.log 2>&1
+            code=$?
+          else
+            echo "This project has no package.json, so there were no tests to run." > /tmp/tests.log
+            code=0
+          fi
+          tail -c 60000 /tmp/tests.log > /tmp/tests-tail.log
+          passed=$([ "$code" -eq 0 ] && echo true || echo false)
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/tests-tail.log "$BUILD_URL/reports/tests?passed=$passed"
+          exit "$code"
+
+  # Tells the platform at once when a job failed, instead of leaving the check to time out.
+  failed:
+    needs: [secrets, test]
+    if: ${{ failure() }}
+    runs-on: docker
+    container:
+      image: node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8
+    steps:
+      - name: Report the failed jobs
+        run: |
+          printf 'secrets=%s test=%s' "${{ needs.secrets.result }}" "${{ needs.test.result }}" > /tmp/failed.txt
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/failed.txt "$BUILD_URL/reports/failure"

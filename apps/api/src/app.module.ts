@@ -30,6 +30,20 @@ import { ProvisioningSaga } from './tenancy/application/provisioning.ts';
 import { CompaniesController } from './tenancy/http/companies.controller.ts';
 import { ForgejoGitProvider } from './tenancy/infrastructure/forgejo-git-provider.ts';
 import { SESSION_STORE } from './session/session-store.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { Builds } from './builds/application/builds.ts';
+import { IMAGE_REGISTRY, type ImageRegistry, PIPELINE_HOST, type PipelineHost } from './builds/application/ports.ts';
+import { SigningKeys } from './builds/application/signing-keys.ts';
+import { BuildsController } from './builds/http/builds.controller.ts';
+import { PipelineController } from './builds/http/pipeline.controller.ts';
+import { ForgejoPipelineHost } from './builds/infrastructure/forgejo-pipeline-host.ts';
+import { OciRegistry } from './builds/infrastructure/oci-registry.ts';
+import { Releases } from './releases/application/releases.ts';
+import { ReleasesController } from './releases/http/releases.controller.ts';
+import { WebhookGateway } from './webhooks/application/webhook-gateway.ts';
+import { webhookSecret } from './webhooks/domain/signature.ts';
+import { WebhooksController } from './webhooks/http/webhooks.controller.ts';
 import { BlueprintsController } from './blueprints/http/blueprints.controller.ts';
 import { BlueprintLibrary } from './blueprints/infrastructure/blueprint-library.ts';
 import { SOURCE_HOST, type SourceHost } from './source-governance/application/ports.ts';
@@ -100,6 +114,10 @@ export class AppModule implements OnApplicationShutdown {
         ApplicationsController,
         BlueprintsController,
         SourceController,
+        WebhooksController,
+        BuildsController,
+        PipelineController,
+        ReleasesController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -225,8 +243,72 @@ export class AppModule implements OnApplicationShutdown {
             new Repositories(database, host, catalog, blueprints, {
               maxAttempts: config.provisioningMaxAttempts,
               publicUrl: config.forgejoPublicUrl,
+              webhookUrl: `${config.toolsApiUrl}/api/v1/webhooks/forgejo`,
+              webhookSecret: (applicationId) => webhookSecret(config.webhookSecretKey, applicationId),
             }),
           inject: [TenantDatabase, SOURCE_HOST, ApplicationCatalog, BlueprintLibrary],
+        },
+        {
+          provide: WebhookGateway,
+          useFactory: (database: TenantDatabase) => new WebhookGateway(database, config.webhookSecretKey),
+          inject: [TenantDatabase],
+        },
+        {
+          provide: IMAGE_REGISTRY,
+          useFactory: () =>
+            new OciRegistry({
+              url: config.forgejoUrl,
+              imageHost: new URL(config.forgejoPublicUrl).host,
+              username: config.forgejoUsername,
+              password: config.forgejoPassword,
+            }),
+        },
+        {
+          provide: PIPELINE_HOST,
+          useFactory: () =>
+            new ForgejoPipelineHost({
+              url: config.forgejoUrl,
+              username: config.forgejoUsername,
+              password: config.forgejoPassword,
+            }),
+        },
+        { provide: SigningKeys, useFactory: () => new SigningKeys(config.signingKeySecret) },
+        {
+          provide: Builds,
+          useFactory: (
+            database: TenantDatabase,
+            catalog: ApplicationCatalog,
+            repositories: Repositories,
+            host: SourceHost,
+            registry: ImageRegistry,
+            pipelines: PipelineHost,
+            keys: SigningKeys,
+          ) =>
+            new Builds(database, catalog, repositories, host, registry, pipelines, keys, {
+              toolsApiUrl: config.toolsApiUrl,
+              workDir: config.buildWorkDir,
+              timeoutMinutes: config.buildTimeoutMinutes,
+              // Read once at startup, so every build in a run uses the same pipeline.
+              pipelines: {
+                'build.yaml': readFileSync(join(config.pipelinesDir, 'build.yaml'), 'utf8').replaceAll(
+                  '__IMAGE_RUNNER_LABEL__',
+                  config.imageRunnerLabel,
+                ),
+                'check.yaml': readFileSync(join(config.pipelinesDir, 'check.yaml'), 'utf8'),
+              },
+            }),
+          inject: [TenantDatabase, ApplicationCatalog, Repositories, SOURCE_HOST, IMAGE_REGISTRY, PIPELINE_HOST, SigningKeys],
+        },
+        {
+          provide: Releases,
+          useFactory: (
+            database: TenantDatabase,
+            catalog: ApplicationCatalog,
+            repositories: Repositories,
+            host: SourceHost,
+            builds: Builds,
+          ) => new Releases(database, catalog, repositories, host, builds),
+          inject: [TenantDatabase, ApplicationCatalog, Repositories, SOURCE_HOST, Builds],
         },
         {
           provide: SourceAccess,

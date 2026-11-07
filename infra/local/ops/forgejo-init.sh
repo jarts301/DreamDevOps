@@ -59,3 +59,20 @@ else
     --skip-local-2fa
   echo "Forgejo now signs in through Keycloak."
 fi
+
+# The local CI runner connects with a shared secret, made by runner-secret-init.
+forgejo forgejo-cli actions register \
+  --config "$config" \
+  --secret-file /runner-secret/secret \
+  --name local-runner \
+  --labels docker
+echo "Forgejo knows the local CI runner."
+
+# The image runner only takes jobs with its secret label, which only the platform's
+# pipeline uses.
+forgejo forgejo-cli actions register \
+  --config "$config" \
+  --secret-file /runner-secret/image-secret \
+  --name local-image-runner \
+  --labels "$IMAGE_RUNNER_LABEL"
+echo "Forgejo knows the local image runner."

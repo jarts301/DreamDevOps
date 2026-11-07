@@ -1,5 +1,12 @@
 import type { BlueprintFile } from '../../blueprints/domain/blueprint.ts';
-import { PermanentSourceError, type RepositorySpec, type SourceHost } from '../application/ports.ts';
+import {
+  type CommitStatus,
+  PermanentSourceError,
+  type PullRequestSpec,
+  type RepositorySpec,
+  type SourceHost,
+  type WebhookSpec,
+} from '../application/ports.ts';
 import { type GitFlowPolicy, TEAMS, type TeamKey } from '../domain/git-flow.ts';
 
 export interface ForgejoSourceOptions {
@@ -44,7 +51,8 @@ export class ForgejoSourceHost implements SourceHost {
         name: team.key,
         description: team.description,
         permission: team.permission,
-        includes_all_repositories: true,
+        // Each repository is added on its own, so the platform's pipeline repository stays out.
+        includes_all_repositories: false,
         can_create_org_repo: false,
         // Releases and tags come only from the platform, so people can only read them.
         units_map: {
@@ -133,6 +141,8 @@ export class ForgejoSourceHost implements SourceHost {
         block_on_rejected_reviews: true,
         dismiss_stale_approvals: true,
         apply_to_admins: true,
+        enable_status_check: rule.requiredChecks.length > 0,
+        status_check_contexts: rule.requiredChecks,
       };
       const response = existingRules.has(rule.pattern)
         ? await this.#request('PATCH', `${repoPath(spec)}/branch_protections/${segment(rule.pattern)}`, body)
@@ -160,6 +170,140 @@ export class ForgejoSourceHost implements SourceHost {
       return;
     }
     await expectOk(response, archived ? 'archive the repository' : 'restore the repository');
+  }
+
+  async grantTeams(spec: RepositorySpec): Promise<void> {
+    const teams = await this.#teams(spec.organization);
+    for (const { key } of TEAMS) {
+      const team = teams.get(key);
+      if (team === undefined) {
+        throw new Error(`The ${key} team doesn't exist yet.`);
+      }
+      const response = await this.#request(
+        'PUT',
+        `/teams/${team.id}/repos/${segment(spec.organization)}/${segment(spec.name)}`,
+      );
+      await expectOk(response, `give the ${key} team access`);
+    }
+  }
+
+  async ensureWebhook(spec: RepositorySpec, hook: WebhookSpec): Promise<void> {
+    const listed = await this.#request('GET', `${repoPath(spec)}/hooks`);
+    await expectOk(listed, 'read the webhooks');
+    const existing = ((await listed.json()) as { id: number; config: { url: string } }[]).find(
+      (candidate) => candidate.config.url === hook.url,
+    );
+    const body = {
+      type: 'forgejo',
+      active: true,
+      branch_filter: '*',
+      events: hook.events,
+      config: { url: hook.url, content_type: 'json', secret: hook.secret },
+    };
+    const response =
+      existing === undefined
+        ? await this.#request('POST', `${repoPath(spec)}/hooks`, body)
+        : await this.#request('PATCH', `${repoPath(spec)}/hooks/${existing.id}`, body);
+    await expectOk(response, 'set up the webhook');
+  }
+
+  async branchHead(spec: RepositorySpec, branch: string): Promise<string | null> {
+    const response = await this.#request('GET', `${repoPath(spec)}/branches/${segment(branch)}`);
+    if (response.status === 404) {
+      return null;
+    }
+    await expectOk(response, 'read a branch');
+    return ((await response.json()) as { commit: { id: string } }).commit.id;
+  }
+
+  async listBranches(spec: RepositorySpec): Promise<string[]> {
+    const names: string[] = [];
+    for (let page = 1; ; page += 1) {
+      const response = await this.#request('GET', `${repoPath(spec)}/branches?limit=${PAGE_SIZE}&page=${page}`);
+      await expectOk(response, 'read the branches');
+      const batch = (await response.json()) as { name: string }[];
+      names.push(...batch.map((branch) => branch.name));
+      if (batch.length < PAGE_SIZE) {
+        return names.sort();
+      }
+    }
+  }
+
+  async createBranch(spec: RepositorySpec, name: string, from: string): Promise<string> {
+    const response = await this.#request('POST', `${repoPath(spec)}/branches`, {
+      new_branch_name: name,
+      old_branch_name: from,
+      old_ref_name: from,
+    });
+    if (response.status !== 409) {
+      await expectOk(response, `create the ${name} branch`);
+    }
+    const head = await this.branchHead(spec, name);
+    if (head === null) {
+      throw new Error(`The ${name} branch wasn't created.`);
+    }
+    return head;
+  }
+
+  async createTag(spec: RepositorySpec, name: string, commit: string): Promise<void> {
+    const response = await this.#request('POST', `${repoPath(spec)}/tags`, { tag_name: name, target: commit });
+    if (response.status === 409 || response.status === 422) {
+      const existing = await this.#request('GET', `${repoPath(spec)}/tags/${segment(name)}`);
+      await expectOk(existing, `read the ${name} tag`);
+      const tag = (await existing.json()) as { commit: { sha: string } };
+      if (tag.commit.sha !== commit) {
+        throw new PermanentSourceError(`The ${name} tag already points to another commit.`);
+      }
+      return;
+    }
+    await expectOk(response, `create the ${name} tag`);
+  }
+
+  async setCommitStatus(spec: RepositorySpec, commit: string, status: CommitStatus): Promise<void> {
+    const response = await this.#request('POST', `${repoPath(spec)}/statuses/${segment(commit)}`, {
+      context: status.context,
+      state: status.state,
+      description: status.description.slice(0, 140),
+      ...(status.targetUrl !== undefined && { target_url: status.targetUrl }),
+    });
+    await expectOk(response, 'report a commit status');
+  }
+
+  async openPullRequest(spec: RepositorySpec, request: PullRequestSpec): Promise<number | null> {
+    const open = await this.#request('GET', `${repoPath(spec)}/pulls?state=open&limit=${PAGE_SIZE}`);
+    await expectOk(open, 'read the pull requests');
+    const existing = ((await open.json()) as { number: number; head: { ref: string }; base: { ref: string } }[]).find(
+      (pull) => pull.head.ref === request.head && pull.base.ref === request.base,
+    );
+    if (existing !== undefined) {
+      return existing.number;
+    }
+    const compare = await this.#request(
+      'GET',
+      `${repoPath(spec)}/compare/${segment(request.base)}...${segment(request.head)}`,
+    );
+    if (compare.ok && ((await compare.json()) as { total_commits: number }).total_commits === 0) {
+      return null;
+    }
+    const response = await this.#request('POST', `${repoPath(spec)}/pulls`, {
+      head: request.head,
+      base: request.base,
+      title: request.title,
+      body: request.body,
+    });
+    await expectOk(response, 'open a pull request');
+    return ((await response.json()) as { number: number }).number;
+  }
+
+  async downloadArchive(spec: RepositorySpec, commit: string): Promise<ReadableStream<Uint8Array>> {
+    const response = await this.#request('GET', `${repoPath(spec)}/archive/${segment(commit)}.tar.gz`, undefined, {
+      timeoutMs: 300_000,
+    });
+    await expectOk(response, 'download the source');
+    if (response.body === null) {
+      throw new Error('The Git service sent an empty archive.');
+    }
+    return response.body;
   }
 
   async userExists(username: string): Promise<boolean> {
@@ -219,7 +363,12 @@ export class ForgejoSourceHost implements SourceHost {
     return id;
   }
 
-  async #request(method: string, path: string, body?: object): Promise<Response> {
+  async #request(
+    method: string,
+    path: string,
+    body?: object,
+    options: { readonly timeoutMs?: number } = {},
+  ): Promise<Response> {
     const credentials = Buffer.from(`${this.#options.username}:${this.#options.password}`).toString('base64');
     try {
       return await fetch(`${this.#options.url.replace(/\/$/, '')}/api/v1${path}`, {
@@ -230,7 +379,7 @@ export class ForgejoSourceHost implements SourceHost {
           ...(body !== undefined && { 'Content-Type': 'application/json' }),
         },
         ...(body !== undefined && { body: JSON.stringify(body) }),
-        signal: AbortSignal.timeout(this.#options.timeoutMs ?? 30_000),
+        signal: AbortSignal.timeout(options.timeoutMs ?? this.#options.timeoutMs ?? 30_000),
       });
     } catch {
       throw new Error('The Git service could not be reached.');

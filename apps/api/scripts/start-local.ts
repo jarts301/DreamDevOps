@@ -25,6 +25,8 @@ process.env.REQUIRE_VERIFIED_EMAIL ??= 'false';
 process.env.API_DATABASE_URL = `postgres://dreamdevops_app:${encodeURIComponent(password)}@localhost:${databasePort}/dreamdevops`;
 process.env.API_PUBLIC_URL ??= `http://localhost:${apiPort}`;
 process.env.DASHBOARD_URL ??= 'http://localhost:4200/';
+// Forgejo and CI jobs run in Docker, where the API on this machine is host.docker.internal.
+process.env.TOOLS_API_URL ??= `http://host.docker.internal:${apiPort}`;
 // Browsers won't send Secure cookies over plain HTTP, which is all the local stack has.
 process.env.SECURE_COOKIES ??= 'false';
 

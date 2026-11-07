@@ -28,6 +28,13 @@ export const routes: Routes = [
         loadComponent: () => import('./features/catalog/applications').then((module) => module.Applications),
       },
       {
+        path: 'applications/:id',
+        title: 'Application · DreamDevOps',
+        canActivate: [companyGuard],
+        loadComponent: () =>
+          import('./features/delivery/application-detail').then((module) => module.ApplicationDetail),
+      },
+      {
         path: 'blueprints',
         title: 'Blueprints · DreamDevOps',
         loadComponent: () => import('./features/catalog/blueprints').then((module) => module.Blueprints),

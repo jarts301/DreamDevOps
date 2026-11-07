@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Controller, Get, type INestApplication } from '@nestjs/common';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
@@ -8,6 +9,21 @@ import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
 
 const REALM_FILE = fileURLToPath(new URL('../../../infra/local/keycloak/dreamdevops-realm.json', import.meta.url));
+// The same setup script the local stack runs, so the test checks the real login flow.
+const INIT_SCRIPT = fileURLToPath(new URL('../../../infra/local/ops/keycloak-init.sh', import.meta.url));
+const ADMIN = { username: 'test-admin', password: 'fake-dummy-keycloak-admin-password' };
+
+/**
+ * A one-time code, as an authenticator app makes it (RFC 6238). Keycloak's setup form
+ * carries the raw secret; the base32 form it shows people is the same key, encoded.
+ */
+function totp(secret: string, time = Date.now()): string {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(time / 30_000)));
+  const hash = createHmac('sha1', Buffer.from(secret, 'utf8')).update(counter).digest();
+  const offset = hash[hash.length - 1]! & 0xf;
+  return String((hash.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+}
 const CLIENT_SECRET = 'fake-dummy-client-secret';
 const USER_PASSWORD = 'fake-dummy-user-password';
 // The realm only accepts this redirect address. The test never opens it: it reads the
@@ -31,6 +47,19 @@ class KeycloakBrowser {
     return this.#fetch(url, {});
   }
 
+  /** Opens a page and follows Keycloak's own redirects to the page they end on. */
+  async follow(url: string): Promise<Response> {
+    let response = await this.open(url);
+    for (let step = 0; step < 5 && response.status === 302; step += 1) {
+      const next = new URL(response.headers.get('location')!, url);
+      if (next.origin !== new URL(url).origin) {
+        break;
+      }
+      response = await this.open(next.toString());
+    }
+    return response;
+  }
+
   async #fetch(url: string, init: RequestInit): Promise<Response> {
     const response = await fetch(url, {
       ...init,
@@ -50,15 +79,26 @@ class KeycloakBrowser {
 
   /** Submits the login form on the page and returns the response. */
   async submitLogin(page: Response, username: string, password: string): Promise<Response> {
-    const html = await page.text();
+    return this.submitForm(await page.text(), { username, password, credentialId: '' });
+  }
+
+  /** Submits a page's form with its hidden fields, plus the given ones. */
+  async submitForm(html: string, fields: Record<string, string>): Promise<Response> {
     const action = /action="([^"]+)"/.exec(html)?.[1]?.replaceAll('&amp;', '&');
     if (action === undefined) {
-      throw new Error('The login page has no form.');
+      throw new Error('The page has no form.');
     }
+    const hidden = Object.fromEntries(
+      [...html.matchAll(/<input[^>]*type="hidden"[^>]*>/g)].flatMap(([input]) => {
+        const name = /name="([^"]+)"/.exec(input)?.[1];
+        const value = /value="([^"]*)"/.exec(input)?.[1] ?? '';
+        return name === undefined ? [] : [[name, value]];
+      }),
+    );
     return this.#fetch(action, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ username, password, credentialId: '' }).toString(),
+      body: new URLSearchParams({ ...hidden, ...fields }).toString(),
     });
   }
 }
@@ -90,16 +130,33 @@ describe('login through a real Keycloak', () => {
         .withCommand(['start-dev', '--import-realm'])
         .withEnvironment({
           KC_HEALTH_ENABLED: 'true',
+          KC_BOOTSTRAP_ADMIN_USERNAME: ADMIN.username,
+          KC_BOOTSTRAP_ADMIN_PASSWORD: ADMIN.password,
           DREAMDEVOPS_KEYCLOAK_CLIENT_SECRET: CLIENT_SECRET,
           KEYCLOAK_DEV_USER_PASSWORD: USER_PASSWORD,
         })
-        .withCopyFilesToContainer([{ source: REALM_FILE, target: '/opt/keycloak/data/import/dreamdevops-realm.json' }])
+        .withCopyFilesToContainer([
+          { source: REALM_FILE, target: '/opt/keycloak/data/import/dreamdevops-realm.json' },
+          { source: INIT_SCRIPT, target: '/tmp/keycloak-init.sh' },
+        ])
         .withExposedPorts(8080, 9000)
         .withWaitStrategy(Wait.forHttp('/health/ready', 9000))
         .withStartupTimeout(180_000)
         .start(),
       startTestDatabase(),
     ]);
+    const setup = await keycloak.exec(['bash', '/tmp/keycloak-init.sh'], {
+      env: {
+        KEYCLOAK_URL: 'http://localhost:8080',
+        KEYCLOAK_ADMIN_USERNAME: ADMIN.username,
+        KEYCLOAK_ADMIN_PASSWORD: ADMIN.password,
+        FORGEJO_KEYCLOAK_CLIENT_SECRET: 'fake-dummy-forgejo-client-secret',
+        FORGEJO_PUBLIC_URL: 'http://localhost:3000',
+      },
+    });
+    if (setup.exitCode !== 0) {
+      throw new Error(`The Keycloak setup script failed: ${setup.output}`);
+    }
     app = await buildApp({
       controllers: [SampleController],
       config: {
@@ -144,14 +201,41 @@ describe('login through a real Keycloak', () => {
     await agent.get('/api/v1/auth/me').expect(401);
   });
 
-  it('grants platform permissions from the Keycloak role', async () => {
-    const { agent, submitted } = await logIn('dev-platform-admin', USER_PASSWORD);
-    await finish(agent, submitted);
+  it('asks a platform admin for a second factor, and grants platform permissions after it', async () => {
+    const { agent, browser, submitted } = await logIn('dev-platform-admin', USER_PASSWORD);
 
+    // The password alone isn't enough: the platform starts the login again, asking for more.
+    const afterPassword = await finish(agent, submitted);
+    expect(afterPassword.status).toBe(302);
+    const stepUp = new URL(afterPassword.headers.location as string);
+    expect(stepUp.pathname).toBe('/api/v1/auth/login');
+    expect(stepUp.searchParams.get('mfa')).toBe('1');
+    await agent.get('/api/v1/auth/me').expect(401);
+
+    // Keycloak remembers the password, and asks only to set up an authenticator.
+    const restarted = await agent.get(stepUp.pathname + stepUp.search).expect(302);
+    expect(new URL(restarted.headers.location as string).searchParams.get('acr_values')).toBe('mfa');
+    const setupPage = await (await browser.follow(restarted.headers.location as string)).text();
+    expect(setupPage).not.toContain('name="password"');
+    const secret = /name="totpSecret" value="([^"]+)"/.exec(setupPage)?.[1];
+    expect(secret).toBeDefined();
+    const configured = await browser.submitForm(setupPage, { totp: totp(secret!), userLabel: 'Test phone' });
+    const finished = await finish(agent, configured);
+
+    expect(finished.headers.location).toBe('http://localhost:4200/');
     await agent.get('/api/v1/sample/platform-only').expect(200);
     const { body } = await agent.get('/api/v1/auth/me').expect(200);
     expect(body.permissions).toEqual(['audit:read-own', 'companies:manage', 'editions:manage']);
     expect(body.companyId).toBeNull();
+  });
+
+  it('asks a developer for nothing more than the password', async () => {
+    const { agent, submitted } = await logIn('dev-developer', USER_PASSWORD);
+
+    const finished = await finish(agent, submitted);
+
+    expect(finished.headers.location).toBe('http://localhost:4200/');
+    await agent.get('/api/v1/auth/me').expect(200);
   });
 
   it('refuses platform permissions without the Keycloak role', async () => {

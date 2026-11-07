@@ -18,6 +18,11 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   ApplicationRestored: 'An archived application is restored',
   RepositoryCreated: "An application's repository is ready",
   RepositoryCreationFailed: "Creating an application's repository fails",
+  BuildSucceeded: 'An image is built, scanned and signed',
+  BuildFailed: 'An image build fails',
+  ReleaseStarted: 'A release or hotfix starts',
+  ReleaseMerged: 'A release or hotfix merges into main',
+  ReleasePublished: "A release's final image is published",
 };
 
 const EDITION_NAMES: Readonly<Record<string, string>> = {
@@ -80,6 +85,16 @@ export function summarize(event: DomainEvent, companyName: string): string {
         return `The repository of "${String(payload.name)}" is ready: ${String(payload.repository)}.`;
       case 'RepositoryCreationFailed':
         return `Creating the repository of "${String(payload.name)}" failed.`;
+      case 'BuildSucceeded':
+        return `The ${String(payload.kind)} image ${String(payload.tag)} is ready and signed.`;
+      case 'BuildFailed':
+        return `The ${String(payload.kind)} image ${String(payload.tag)} failed: ${String(payload.reason ?? 'unknown reason')}`;
+      case 'ReleaseStarted':
+        return `The ${String(payload.kind)} ${String(payload.version)} started.`;
+      case 'ReleaseMerged':
+        return `The ${String(payload.kind)} ${String(payload.version)} merged into main.`;
+      case 'ReleasePublished':
+        return `Version ${String(payload.version)} is published.`;
       case 'CompanyEditionChanged':
         return `The company moved to the ${editionName(payload.edition)} Edition.`;
       default:

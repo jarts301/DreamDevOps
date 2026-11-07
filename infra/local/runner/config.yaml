@@ -1,0 +1,33 @@
+# The local CI runner for every job except image builds. Each job runs in a new
+# container on the runner's own Docker engine (runner-docker), never on your machine's
+# Docker. Jobs get no Docker socket, no privileged mode and no volumes, can't gain new
+# privileges, have resource limits, and hold no platform credentials. Workflows can't
+# loosen any of this: the runner ignores security options a workflow asks for.
+log:
+  level: info
+  job_level: info
+
+runner:
+  file: /data/.runner
+  capacity: 2
+  timeout: 1h
+  shutdown_timeout: 5m
+  insecure: false
+  fetch_timeout: 30s
+  fetch_interval: 2s
+  report_interval: 1s
+  labels:
+    - docker:docker://node:24-alpine
+
+cache:
+  enabled: false
+
+container:
+  # Jobs share the runner engine's network, whose firewall only lets them reach Forgejo,
+  # the API's address for tools, and the internet.
+  network: host
+  privileged: false
+  options: --security-opt no-new-privileges --pids-limit 2048 --memory 4g --cpus 2
+  valid_volumes: []
+  docker_host: "-"
+  force_pull: false

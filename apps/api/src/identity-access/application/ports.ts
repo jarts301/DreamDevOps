@@ -11,6 +11,8 @@ export interface ExternalIdentity {
   readonly displayName: string;
   readonly platformAdmin: boolean;
   readonly idToken: string | null;
+  /** Whether this login used a second factor, such as a one-time code. */
+  readonly mfa: boolean;
 }
 
 export interface AuthorizationRequest {
@@ -19,6 +21,8 @@ export interface AuthorizationRequest {
   readonly codeChallenge: string;
   readonly redirectUri: string;
   readonly loginHint?: string;
+  /** Asks the login provider for a second factor. */
+  readonly requireMfa?: boolean;
 }
 
 export interface CodeExchange {

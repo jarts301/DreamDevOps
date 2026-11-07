@@ -10,7 +10,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { APP_CONFIG } from '../tokens.ts';
 import type { AppConfig } from '../config/app-config.ts';
-import { hasPermissions, toPrincipal } from '../identity-access/domain/access.ts';
+import { hasPermissions, requiresMfa, toPrincipal } from '../identity-access/domain/access.ts';
 import { USER_DIRECTORY, type UserDirectory } from '../identity-access/application/ports.ts';
 import { hashSessionId, SESSION_STORE, type SessionStore } from '../session/session-store.ts';
 import { ACCESS_METADATA, type AccessRule } from './access.decorators.ts';
@@ -47,7 +47,9 @@ export class SessionGuard implements CanActivate {
       return true;
     }
     const access = await this.#directory.loadAccess(session.userId);
-    if (access !== null) {
+    // Someone who needs a second factor but signed in without one, such as a member just
+    // made a Tech Lead, counts as signed out, so they sign in again with one.
+    if (access !== null && !(requiresMfa(access) && session.mfa !== true)) {
       request.session = session;
       request.sessionIdHash = idHash;
       request.principal = toPrincipal(access, session.chosenCompanyId);

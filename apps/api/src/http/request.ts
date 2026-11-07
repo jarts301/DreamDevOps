@@ -10,4 +10,6 @@ export interface ApiRequest extends Request {
   session?: SessionData;
   sessionIdHash?: string;
   cookies: Record<string, string | undefined>;
+  /** The body exactly as received, kept for checking webhook signatures. */
+  rawBody?: Buffer;
 }

@@ -21,6 +21,7 @@ import { type ApiRequest, LOGIN_COOKIE, SESSION_COOKIE } from '../../http/reques
 import { hashSessionId, newSessionId, SESSION_STORE, type SessionStore } from '../../session/session-store.ts';
 import { APP_CONFIG } from '../../tokens.ts';
 import { IDENTITY_PROVIDER, type IdentityProvider, USER_DIRECTORY, type UserDirectory } from '../application/ports.ts';
+import { requiresMfa } from '../domain/access.ts';
 
 const LOGIN_COOKIE_LIFETIME_MS = 10 * 60_000;
 
@@ -49,7 +50,12 @@ export class AuthController {
 
   @Public()
   @Get('login')
-  async login(@Query('login_hint') loginHint: unknown, @Res() response: Response): Promise<void> {
+  async login(
+    @Query('login_hint') loginHint: unknown,
+    @Query('mfa') mfa: unknown,
+    @Res() response: Response,
+  ): Promise<void> {
+    const requireMfa = mfa === '1';
     const state = randomValue();
     const nonce = randomValue();
     const codeVerifier = randomValue();
@@ -60,9 +66,14 @@ export class AuthController {
       codeChallenge: createHash('sha256').update(codeVerifier).digest('base64url'),
       redirectUri: this.#callbackUrl(),
       ...(typeof loginHint === 'string' && { loginHint }),
+      requireMfa,
     });
 
-    response.cookie(LOGIN_COOKIE, `${state}.${nonce}.${codeVerifier}`, this.#cookieOptions(LOGIN_COOKIE_LIFETIME_MS));
+    response.cookie(
+      LOGIN_COOKIE,
+      `${state}.${nonce}.${codeVerifier}.${requireMfa ? '1' : '0'}`,
+      this.#cookieOptions(LOGIN_COOKIE_LIFETIME_MS),
+    );
     response.redirect(302, authorizationUrl);
   }
 
@@ -73,7 +84,7 @@ export class AuthController {
     @Req() request: ApiRequest,
     @Res() response: Response,
   ): Promise<void> {
-    const [expectedState, nonce, codeVerifier] = (request.cookies[LOGIN_COOKIE] ?? '').split('.');
+    const [expectedState, nonce, codeVerifier, mfaRequested] = (request.cookies[LOGIN_COOKIE] ?? '').split('.');
     response.clearCookie(LOGIN_COOKIE, this.#cookieOptions());
 
     if (typeof state !== 'string' || !expectedState || !nonce || !codeVerifier || !sameText(state, expectedState)) {
@@ -91,6 +102,21 @@ export class AuthController {
     }
     const userId = await this.#directory.recordLogin(identity);
 
+    // Admins and Tech Leads need a second factor. Without one, the login starts again and
+    // asks for it, and Keycloak only asks for the one-time code, not the password again.
+    const access = await this.#directory.loadAccess(userId);
+    if (access !== null && requiresMfa(access) && !identity.mfa) {
+      if (mfaRequested === '1') {
+        throw new ForbiddenException('Your login provider did not confirm a second factor.');
+      }
+      const stepUp = new URL(`${this.#config.publicUrl}/api/v1/auth/login`);
+      stepUp.searchParams.set('mfa', '1');
+      // Keycloak still has its own session, and the hint keeps it on the same person.
+      stepUp.searchParams.set('login_hint', identity.email);
+      response.redirect(302, stepUp.toString());
+      return;
+    }
+
     // A new session ID at every login stops an attacker from planting one in advance.
     const previousSession = request.cookies[SESSION_COOKIE];
     if (previousSession !== undefined) {
@@ -99,7 +125,7 @@ export class AuthController {
     const sessionId = newSessionId();
     await this.#sessions.create(
       hashSessionId(sessionId),
-      { userId, chosenCompanyId: null, idToken: identity.idToken },
+      { userId, chosenCompanyId: null, idToken: identity.idToken, mfa: identity.mfa },
       { absoluteMs: this.#config.sessionAbsoluteMs, idleMs: this.#config.sessionIdleMs },
     );
 

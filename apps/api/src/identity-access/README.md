@@ -49,6 +49,19 @@ All routes start with `/api/v1`. The company routes act on the signed-in user's 
 | `GET`, `POST /company/invitations` | `company-users:manage` | Lists or creates invitations |
 | `DELETE /company/invitations/:id` | `company-users:manage` | Revokes an invitation |
 
+## Second factor
+
+Platform Admins, Company Admins and Tech Leads must sign in with a second factor: a one-time code from an authenticator app.
+
+1. After the login provider signs someone in, the platform loads their access.
+2. If their role needs a second factor and the login didn't use one, the platform starts the login again and asks Keycloak for the `mfa` level. Keycloak asks for the code, or to set up an authenticator the first time.
+3. The session records that the login used a second factor, which Keycloak's `acr` claim confirms.
+4. If the provider still returns no second factor, the login is refused with `403`.
+
+A session without a second factor counts as signed out for anyone who needs one, so a member made a Tech Lead or Company Admin signs in again with a code on their next request.
+
+Right after registering, Keycloak hasn't recorded the password level, so a new Company Admin types their password once more before setting up the authenticator.
+
 ## Rules it enforces
 
 - **Changes apply at once:** permissions are read on every request, so a role change or removal takes effect on the member's next request.

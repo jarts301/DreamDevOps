@@ -1,0 +1,32 @@
+# The runner for the platform pipeline's image builds only. Rootless BuildKit needs
+# seccomp and AppArmor relaxed to make its own sandbox, so only this runner allows that.
+# Its label is a secret the platform puts in the pipeline, which lives in repositories no
+# company member can see, so other workflows can't send jobs here.
+# __IMAGE_RUNNER_LABEL__ is filled in from IMAGE_RUNNER_LABEL when the runner starts.
+log:
+  level: info
+  job_level: info
+
+runner:
+  file: /data/.runner
+  capacity: 1
+  timeout: 1h
+  shutdown_timeout: 5m
+  insecure: false
+  fetch_timeout: 30s
+  fetch_interval: 2s
+  report_interval: 1s
+  labels:
+    - __IMAGE_RUNNER_LABEL__:docker://moby/buildkit:rootless@sha256:c8252268760e1baba80780d63d738ef9f260fb7c7c0973c78494cb9ddd99eda1
+
+cache:
+  enabled: false
+
+container:
+  network: host
+  privileged: false
+  # no-new-privileges is left out on purpose: rootless BuildKit maps users with setuid helpers.
+  options: --security-opt seccomp=unconfined --security-opt apparmor=unconfined --pids-limit 4096 --memory 6g --cpus 2
+  valid_volumes: []
+  docker_host: "-"
+  force_pull: false

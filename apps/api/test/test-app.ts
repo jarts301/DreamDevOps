@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { INestApplication, Provider, Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -11,7 +13,15 @@ import { SESSION_STORE } from '../src/session/session-store.ts';
 import { DATABASE_POOL } from '../src/tokens.ts';
 import { MAILER } from '../src/notifications/application/ports.ts';
 import { SOURCE_HOST } from '../src/source-governance/application/ports.ts';
-import { FakeIdentityProvider, FakeMailer, FakeSourceHost, InMemoryUserDirectory } from './fakes.ts';
+import { IMAGE_REGISTRY, PIPELINE_HOST } from '../src/builds/application/ports.ts';
+import {
+  FakeIdentityProvider,
+  FakeImageRegistry,
+  FakeMailer,
+  FakePipelineHost,
+  FakeSourceHost,
+  InMemoryUserDirectory,
+} from './fakes.ts';
 import { InMemorySessionStore } from './in-memory-session-store.ts';
 
 export const PUBLIC_URL = 'http://api.test';
@@ -42,6 +52,13 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   forgejoPassword: 'unused',
   forgejoPublicUrl: 'http://git.test',
   blueprintsDir: fileURLToPath(new URL('../../../blueprints', import.meta.url)),
+  pipelinesDir: fileURLToPath(new URL('../../../pipelines', import.meta.url)),
+  toolsApiUrl: 'http://api.tools.test',
+  webhookSecretKey: 'test-webhook-secret-key-that-is-long-enough',
+  signingKeySecret: 'test-signing-key-secret-that-is-long-enough',
+  buildWorkDir: join(tmpdir(), 'dreamdevops-test-builds'),
+  buildTimeoutMinutes: 60,
+  imageRunnerLabel: 'test-image-runner',
   provisioningMaxAttempts: 3,
   provisioningRetrySeconds: 1,
   smtpHost: 'unused',
@@ -75,10 +92,12 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
         ...(options.background ? [] : [{ provide: BACKGROUND_PROCESSING, useClass: NoBackgroundProcessing }]),
         { provide: MAILER, useValue: new FakeMailer() },
         { provide: SOURCE_HOST, useValue: new FakeSourceHost() },
+        { provide: IMAGE_REGISTRY, useValue: new FakeImageRegistry() },
+        { provide: PIPELINE_HOST, useValue: new FakePipelineHost() },
         ...(options.overrides ?? []),
       ],
     }),
-    { bodyParser: false, logger: false },
+    { bodyParser: false, rawBody: true, logger: false },
   );
   configureApp(app, config);
   await app.init();

@@ -15,9 +15,19 @@ const valid = {
   FORGEJO_BOT_PASSWORD: 'fake-dummy-bot-password',
   SMTP_HOST: 'smtp.example.com',
   SMTP_FROM: 'DreamDevOps <no-reply@example.com>',
+  WEBHOOK_SECRET_KEY: 'fake-dummy-webhook-secret-key-for-tests-only',
+  SIGNING_KEY_SECRET: 'fake-dummy-signing-key-secret-for-tests-only',
+  IMAGE_RUNNER_LABEL: 'fake-dummy-image-runner',
 };
 
-const production = { ...valid, NODE_ENV: 'production', KEYCLOAK_ISSUER_URL: 'https://login.example.com/realms/dreamdevops' };
+const production = {
+  ...valid,
+  NODE_ENV: 'production',
+  KEYCLOAK_ISSUER_URL: 'https://login.example.com/realms/dreamdevops',
+  WEBHOOK_SECRET_KEY: 'a-real-webhook-secret-key-that-is-long-enough',
+  SIGNING_KEY_SECRET: 'a-real-signing-key-secret-that-is-long-enough',
+  IMAGE_RUNNER_LABEL: 'image-runner-3f9a2c7d41e6',
+};
 
 describe('loadConfig', () => {
   it('reads valid settings and applies safe defaults', () => {
@@ -27,6 +37,28 @@ describe('loadConfig', () => {
     expect(config.secureCookies).toBe(true);
     expect(config.requireVerifiedEmail).toBe(true);
     expect(config.trustedProxies).toBe(0);
+    expect(config.toolsApiUrl).toBe('http://localhost:4000');
+    expect(config.buildTimeoutMinutes).toBe(60);
+  });
+
+  it('lets tools reach the API at another address', () => {
+    expect(loadConfig({ ...valid, TOOLS_API_URL: 'http://host.docker.internal:4000/' }).toolsApiUrl).toBe(
+      'http://host.docker.internal:4000',
+    );
+  });
+
+  it.each(['WEBHOOK_SECRET_KEY', 'SIGNING_KEY_SECRET'])('refuses a short %s', (name) => {
+    expect(() => loadConfig({ ...valid, [name]: 'too-short' })).toThrow('must be at least 32 characters');
+  });
+
+  it('refuses an image runner label that is not valid', () => {
+    expect(() => loadConfig({ ...valid, IMAGE_RUNNER_LABEL: 'Bad Label' })).toThrow('IMAGE_RUNNER_LABEL must be');
+  });
+
+  it.each(['WEBHOOK_SECRET_KEY', 'SIGNING_KEY_SECRET', 'IMAGE_RUNNER_LABEL'])('refuses the sample %s in production', (name) => {
+    expect(() => loadConfig({ ...production, [name]: valid[name as keyof typeof valid] })).toThrow(
+      'must not be the sample values in production',
+    );
   });
 
   it('accepts a safe production setup', () => {
@@ -71,6 +103,9 @@ describe('loadConfig', () => {
     'FORGEJO_BOT_PASSWORD',
     'SMTP_HOST',
     'SMTP_FROM',
+    'WEBHOOK_SECRET_KEY',
+    'SIGNING_KEY_SECRET',
+    'IMAGE_RUNNER_LABEL',
   ])('requires %s', (name) => {
     expect(() => loadConfig({ ...valid, [name]: undefined })).toThrow(InvalidConfigError);
   });

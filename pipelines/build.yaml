@@ -1,0 +1,154 @@
+# The DreamDevOps image pipeline. The platform keeps this file in each company's
+# dreamdevops-pipeline repository, which only the platform can change, and starts it
+# for every build. So no pull request can remove a step.
+#
+# Jobs hold no registry or platform credentials. Each gets a one-time token that only
+# reads this build's source and reports this build's results. The platform pushes and
+# signs the image itself, and the scan and SBOM jobs check the exact image it stored,
+# in fresh containers where no application code has run.
+name: image
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Build ID
+        required: true
+      token:
+        description: One-time build token
+        required: true
+      api:
+        description: Where jobs reach the platform
+        required: true
+
+env:
+  BUILD_URL: ${{ inputs.api }}/api/v1/pipeline/builds/${{ inputs.build }}
+  BUILD_TOKEN: ${{ inputs.token }}
+
+jobs:
+  secrets:
+    runs-on: docker
+    container:
+      image: zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    steps:
+      - name: Look for secrets in the code
+        run: |
+          set -u
+          mkdir -p /tmp/source && cd /tmp/source
+          wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
+          gitleaks dir . --no-banner --redact --exit-code 0 --report-format json --report-path /tmp/secrets.json
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/secrets.json "$BUILD_URL/reports/secrets"
+          # Later jobs only run when no secrets were found.
+          [ "$(tr -d ' \n' < /tmp/secrets.json)" = "[]" ]
+
+  test:
+    runs-on: docker
+    container:
+      image: node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8
+    steps:
+      - name: Run the tests
+        run: |
+          set -u
+          mkdir -p /tmp/source && cd /tmp/source
+          wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
+          if [ -f package.json ]; then
+            (npm ci && npm test) > /tmp/tests.log 2>&1
+            code=$?
+          else
+            echo "This project has no package.json, so there were no tests to run." > /tmp/tests.log
+            code=0
+          fi
+          tail -c 60000 /tmp/tests.log > /tmp/tests-tail.log
+          passed=$([ "$code" -eq 0 ] && echo true || echo false)
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/tests-tail.log "$BUILD_URL/reports/tests?passed=$passed"
+          exit "$code"
+
+  image:
+    needs: [secrets, test]
+    # Only this job runs on the image runner, which allows rootless BuildKit's sandbox.
+    # The platform fills in the runner's secret label.
+    runs-on: __IMAGE_RUNNER_LABEL__
+    container:
+      image: moby/buildkit:rootless@sha256:c8252268760e1baba80780d63d738ef9f260fb7c7c0973c78494cb9ddd99eda1
+    steps:
+      - name: Build the image without root
+        run: |
+          set -eu
+          mkdir -p /tmp/source && cd /tmp/source
+          wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
+          # Base images are downloaded during the build, so a short network problem is retried.
+          for attempt in 1 2 3; do
+            BUILDKITD_FLAGS=--oci-worker-no-process-sandbox buildctl-daemonless.sh build \
+              --frontend dockerfile.v0 --local context=. --local dockerfile=. \
+              --output type=oci,dest=/tmp/image.tar && break
+            [ "$attempt" -eq 3 ] && exit 1
+            sleep 15
+          done
+          # BusyBox wget only uploads text, so the image goes up in base64 parts, then the
+          # platform checks the whole file against this hash.
+          cd /tmp
+          hash=$(sha256sum image.tar | cut -d ' ' -f 1)
+          split -b 16m -a 4 image.tar part.
+          count=0
+          for part in part.*; do
+            base64 "$part" > upload.txt
+            wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+              --header "Content-Type: text/plain" --post-file upload.txt "$BUILD_URL/image/parts/$count"
+            count=$((count + 1))
+          done
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --post-data "" "$BUILD_URL/image/complete?parts=$count&sha256=$hash"
+
+  scan:
+    needs: [image]
+    runs-on: docker
+    container:
+      image: aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+    steps:
+      - name: Scan the image for vulnerabilities
+        run: |
+          set -eu
+          wget -qO /tmp/image.tar --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/image"
+          # Trivy reads an OCI image layout only as a folder.
+          mkdir -p /tmp/image && tar -xf /tmp/image.tar -C /tmp/image
+          # The vulnerability database is downloaded first, so a short network problem is retried.
+          for attempt in 1 2 3; do
+            trivy image --input /tmp/image --scanners vuln --format json --output /tmp/scan.json --no-progress --quiet && break
+            [ "$attempt" -eq 3 ] && exit 1
+            sleep 15
+          done
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/scan.json "$BUILD_URL/reports/scan"
+
+  sbom:
+    needs: [image]
+    runs-on: docker
+    container:
+      image: anchore/syft@sha256:b4bb1b42287176252af950fe601bda412ec66dd1ad56762735508eddb0e79dfa
+    steps:
+      - name: List the image's contents
+        run: |
+          set -eu
+          wget -qO /tmp/image.tar --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/image"
+          /syft oci-archive:/tmp/image.tar --output cyclonedx-json=/tmp/sbom.json --quiet
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/sbom.json "$BUILD_URL/reports/sbom"
+
+  # Tells the platform at once when a job failed, such as when a tool couldn't be
+  # downloaded, instead of leaving the build to time out. It can only fail a build.
+  failed:
+    needs: [secrets, test, image, scan, sbom]
+    if: ${{ failure() }}
+    runs-on: docker
+    container:
+      image: node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8
+    steps:
+      - name: Report the failed jobs
+        run: |
+          printf 'secrets=%s test=%s image=%s scan=%s sbom=%s' \
+            "${{ needs.secrets.result }}" "${{ needs.test.result }}" "${{ needs.image.result }}" \
+            "${{ needs.scan.result }}" "${{ needs.sbom.result }}" > /tmp/failed.txt
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+            --header "Content-Type: application/octet-stream" --post-file /tmp/failed.txt "$BUILD_URL/reports/failure"

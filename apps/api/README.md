@@ -40,7 +40,7 @@ All routes start with `/api/v1`.
 | `GET /auth/callback` | Public | Finishes login and creates the session |
 | `GET /auth/me` | Signed in | Shows the signed-in user |
 | `POST /auth/logout` | Signed in | Ends the session |
-| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md), [Application Catalog](src/catalog/README.md) and [Source Governance](src/source-governance/README.md) guides |
+| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md), [Application Catalog](src/catalog/README.md), [Source Governance](src/source-governance/README.md), [Webhook gateway](src/webhooks/README.md), [Build and Artifacts](src/builds/README.md) and [Release Management](src/releases/README.md) guides |
 | `GET /health/live` | Public | The process is running |
 | `GET /health/ready` | Public | The process can reach its database |
 

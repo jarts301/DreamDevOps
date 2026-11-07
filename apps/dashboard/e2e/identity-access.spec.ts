@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { type Browser, expect, type Page, test } from '@playwright/test';
 
 process.loadEnvFile('../../infra/local/.env');
@@ -36,6 +36,59 @@ const openAsNewPerson = async (browser: Browser, url: string) => {
   return page;
 };
 
+/** A one-time code from Keycloak's raw secret, as an authenticator app makes it (RFC 6238). */
+const totp = (secret: string) => {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+  const hash = createHmac('sha1', Buffer.from(secret, 'utf8')).update(counter).digest();
+  const offset = hash[hash.length - 1]! & 0xf;
+  return String((hash.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+};
+
+/**
+ * Admins and Tech Leads set up an authenticator when Keycloak first asks for a second factor.
+ * Just after registering, Keycloak asks for the password once more first.
+ */
+const setUpSecondFactor = async (page: Page, password?: string) => {
+  const secret = page.locator('#totpSecret');
+  const passwordField = page.getByLabel('Password', { exact: true });
+  await expect(secret.or(passwordField)).toBeAttached({ timeout: 30_000 });
+  if (password !== undefined && (await passwordField.count()) > 0) {
+    await passwordField.fill(password);
+    await page.getByRole('button', { name: 'Sign In' }).click();
+  }
+  await expect(secret).toBeAttached();
+  await page.locator('#totp').fill(totp((await secret.getAttribute('value'))!));
+  await page.locator('#userLabel').fill('E2E phone');
+  await page.getByRole('button', { name: 'Submit' }).click();
+};
+
+const KEYCLOAK = `http://localhost:${process.env['KEYCLOAK_PORT'] ?? '8081'}`;
+
+/** Removes a sample user's authenticator, so every run sets one up as a new admin would. */
+const removeAuthenticator = async (username: string) => {
+  const token = await fetch(`${KEYCLOAK}/realms/master/protocol/openid-connect/token`, {
+    method: 'POST',
+    body: new URLSearchParams({
+      grant_type: 'password',
+      client_id: 'admin-cli',
+      username: process.env['KEYCLOAK_ADMIN_USERNAME']!,
+      password: process.env['KEYCLOAK_ADMIN_PASSWORD']!,
+    }),
+  });
+  const { access_token: accessToken } = (await token.json()) as { access_token: string };
+  const admin = (path: string, init: RequestInit = {}) =>
+    fetch(`${KEYCLOAK}/admin/realms/dreamdevops${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  const [user] = (await (await admin(`/users?exact=true&username=${username}`)).json()) as { id: string }[];
+  const credentials = (await (await admin(`/users/${user!.id}/credentials`)).json()) as { id: string; type: string }[];
+  for (const credential of credentials.filter(({ type }) => type === 'otp')) {
+    await admin(`/users/${user!.id}/credentials/${credential.id}`, { method: 'DELETE' });
+  }
+};
+
 const invitationLink = (page: Page) => page.getByRole('textbox', { name: 'Invitation link' }).inputValue();
 
 const MAILPIT = `http://localhost:${process.env['MAILPIT_WEB_PORT'] ?? '8025'}`;
@@ -66,6 +119,7 @@ test('from starting a company to managing its team', async ({ browser, page }) =
   const developer = newUser('developer');
   const companyName = `E2E Company ${admin.username.slice(-8)}`;
   const companyRow = () => page.getByRole('row', { name: new RegExp(companyName) });
+  await removeAuthenticator('dev-platform-admin');
 
   await test.step('anonymous users go to the login page', async () => {
     await page.goto('/');
@@ -77,8 +131,9 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(page.getByText('Invalid username or password')).toBeVisible();
   });
 
-  await test.step('a platform admin signs in and sees no company data', async () => {
+  await test.step('a platform admin signs in with a second factor and sees no company data', async () => {
     await signIn(page, 'dev-platform-admin', SAMPLE_PASSWORD);
+    await setUpSecondFactor(page);
     await expect(page.getByRole('heading', { name: /Welcome/ })).toBeVisible();
     await expect(page.getByText("You can't see their data", { exact: false })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Team' })).toHaveCount(0);
@@ -114,6 +169,8 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByRole('button', { name: 'Accept invitation' })).toBeVisible();
     await expect(adminPage).toHaveURL(/\/invitations\/accept$/);
     await adminPage.getByRole('button', { name: 'Accept invitation' }).click();
+    // Company Admins need a second factor, so Keycloak asks for one before they go on.
+    await setUpSecondFactor(adminPage, admin.password);
     await expect(adminPage.getByText('Your role is Company Admin.')).toBeVisible();
     await expect(adminPage.getByText(`You're working in ${companyName}.`)).toBeVisible();
   });
@@ -174,6 +231,9 @@ test('from starting a company to managing its team', async ({ browser, page }) =
       .getByRole('combobox', { name: `Role of E2E ${developer.username}` })
       .selectOption('company-admin');
     await expect(adminPage.getByRole('alert')).toHaveCount(0);
+    await developerPage.goto('/team');
+    // Now a Company Admin, they set up a second factor before seeing the page.
+    await setUpSecondFactor(developerPage, developer.password);
     await developerPage.goto('/team');
     await expect(developerPage.getByRole('heading', { name: 'Team' })).toBeVisible();
   });
@@ -241,6 +301,20 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(forgejo.getByText('package.json', { exact: true })).toBeVisible();
     await expect(forgejo.getByText('develop', { exact: true }).first()).toBeVisible();
     await forgejo.close();
+  });
+
+  await test.step("the application's page shows its repository, releases and versions", async () => {
+    await adminPage.getByRole('link', { name: 'Billing API', exact: true }).click();
+    await expect(adminPage).toHaveURL(/\/applications\/[0-9a-f-]{36}$/);
+    await expect(adminPage.getByRole('heading', { name: 'Billing API', level: 1 })).toBeVisible();
+    await expect(adminPage.getByRole('link', { name: repository })).toBeVisible();
+    await expect(adminPage.getByText('No releases yet.')).toBeVisible();
+    await expect(adminPage.getByText('No versions yet.')).toBeVisible();
+    // Company Admins don't build images or start releases; Developers and Tech Leads do.
+    await expect(adminPage.getByRole('heading', { name: 'Build a feature image' })).toHaveCount(0);
+    await expect(adminPage.getByRole('button', { name: 'Start' })).toHaveCount(0);
+    await adminPage.getByRole('link', { name: '← Applications' }).click();
+    await expect(adminPage).toHaveURL(/\/applications$/);
   });
 
   await test.step('the platform admin sees each company’s edition, and only Community is installed', async () => {

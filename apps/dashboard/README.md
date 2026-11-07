@@ -28,6 +28,7 @@ To see the whole flow:
 2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, sign in as `dev-company-admin` and accept.
 3. Open **Applications** to register the company's applications and follow their repositories into Forgejo, **Team** to invite others and manage roles, **Audit log** to see every change, **Notifications** to post events to a chat tool, and **Edition** to see what the company's edition includes. Platform admins set each company's edition under **Editions**. **Blueprints** shows what each application type starts with.
 4. To use Git, choose **Sign in to Forgejo** on the **Applications** page, then **Check again** to join your team.
+5. Open an application to see its versions and builds, build a feature image from a `feature/*` branch, and start releases and hotfixes. Feature images need the Developer or Tech Lead role, and releases need Tech Lead.
 
 ## Layout
 

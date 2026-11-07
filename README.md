@@ -34,10 +34,13 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Applications | A register of each company's applications, with their type, that can be edited, archived and restored |
 | Repositories | Each application gets a private Forgejo repository from its type's blueprint, with Git Flow branches, branch and tag protection, and teams that follow company roles |
 | Blueprints | Versioned starting points: a Node.js service and an Angular frontend, each with tests, a Dockerfile and a pipeline |
+| Webhooks | Signed Forgejo events, checked per repository and handled once |
+| Builds | Feature, release candidate and final images, built in a platform-owned pipeline with tests, secret and vulnerability scans and an SBOM, then signed with Cosign. Each application has a version list. |
+| Releases | Git Flow releases and hotfixes: the branch, RC tags and images, the checks on the pull request into main, the version tag, the final image and the merge back |
 | Editions | Every company on the free Community Edition, with a per-company setting and an extension point for the Commercial Edition |
 | Dashboard | Screens for all of the above, in light and dark themes |
 
-Running pipelines, building images, deploying, and monitoring aren't available yet. Companies can't be deleted.
+Deploying and monitoring aren't available yet. Companies can't be deleted.
 
 ## Prerequisites
 
@@ -220,6 +223,9 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Application catalog](apps/api/src/catalog/README.md) | Application types, registering and archiving applications |
 | [Blueprints](blueprints/README.md) | What each blueprint sets up, and how to publish a new version |
 | [Source governance](apps/api/src/source-governance/README.md) | Repositories, Git Flow rules, teams and Git accounts |
+| [Webhook gateway](apps/api/src/webhooks/README.md) | How Forgejo's events are checked and turned into domain events |
+| [Build and artifacts](apps/api/src/builds/README.md) | The image pipeline, its checks, signing and the version list |
+| [Release management](apps/api/src/releases/README.md) | Releases and hotfixes, step by step |
 | [Editions and entitlements](apps/api/src/editions/README.md) | Editions, the feature catalog, and how commercial features plug in |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |

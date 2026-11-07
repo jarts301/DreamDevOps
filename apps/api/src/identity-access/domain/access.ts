@@ -53,6 +53,14 @@ export function toPrincipal(access: UserAccess, chosenCompanyId: string | null):
   };
 }
 
+/** The company roles that must sign in with a second factor, as the proposal requires. */
+const MFA_ROLES = new Set(['company-admin', 'tech-lead']);
+
+/** Platform admins, Company Admins and Tech Leads must use a second factor. */
+export function requiresMfa(access: UserAccess): boolean {
+  return access.platformPermissions.length > 0 || access.memberships.some((membership) => MFA_ROLES.has(membership.role));
+}
+
 /** Permissions are written as "subject:action", such as "releases:start". */
 export function hasPermissions(principal: Principal, required: readonly string[]): boolean {
   const ability = createMongoAbility(

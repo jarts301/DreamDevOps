@@ -7,9 +7,19 @@ import type {
   UserDirectory,
 } from '../src/identity-access/application/ports.ts';
 import type { CompanyMembership, UserAccess } from '../src/identity-access/domain/access.ts';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import type { BlueprintFile } from '../src/blueprints/domain/blueprint.ts';
+import type { ImageRegistry, PipelineHost } from '../src/builds/application/ports.ts';
 import type { EmailMessage, Mailer } from '../src/notifications/application/ports.ts';
-import { PermanentSourceError, type RepositorySpec, type SourceHost } from '../src/source-governance/application/ports.ts';
+import {
+  type CommitStatus,
+  PermanentSourceError,
+  type PullRequestSpec,
+  type RepositorySpec,
+  type SourceHost,
+  type WebhookSpec,
+} from '../src/source-governance/application/ports.ts';
 import { TEAMS, type TeamKey } from '../src/source-governance/domain/git-flow.ts';
 import {
   type GitOrganization,
@@ -20,21 +30,30 @@ import {
 export const COMPANY_A = '00000000-0000-4000-8000-00000000000a';
 export const COMPANY_B = '00000000-0000-4000-8000-00000000000b';
 
-const identity = (name: string, platformAdmin = false): ExternalIdentity => ({
+/**
+ * People named nomfa-... sign in without a second factor unless the platform asks for one,
+ * and nomfa-refuse-... never use one. Everyone else always does.
+ */
+const identity = (name: string, platformAdmin = false, mfaRequested = false): ExternalIdentity => ({
   subject: `fake|${name}`,
   email: `${name}@example.com`,
   emailVerified: true,
   displayName: name,
   platformAdmin,
   idToken: `id-token-of-${name}`,
+  mfa: !name.startsWith('nomfa-') || (mfaRequested && !name.startsWith('nomfa-refuse-')),
 });
 
 /** Lets a test sign in as anyone by name. It never ships, because it lives in the tests. */
 export class FakeIdentityProvider implements IdentityProvider {
   async authorizationUrl(request: AuthorizationRequest): Promise<string> {
     const url = new URL(request.redirectUri);
-    url.searchParams.set('code', request.loginHint ?? '');
+    // The hint is a name, or the email of one, as the step-up login sends.
+    url.searchParams.set('code', (request.loginHint ?? '').replace(/@example\.com$/, ''));
     url.searchParams.set('state', request.state);
+    if (request.requireMfa === true) {
+      url.searchParams.set('mfa', '1');
+    }
     return url.toString();
   }
 
@@ -43,7 +62,7 @@ export class FakeIdentityProvider implements IdentityProvider {
     if (!/^[a-z][a-z-]*$/.test(name) || name === 'constructor' || name.startsWith('unknown')) {
       return null;
     }
-    return identity(name, name === 'platform-admin');
+    return identity(name, name === 'platform-admin', exchange.callbackUrl.searchParams.get('mfa') === '1');
   }
 
   async logoutUrl(request: LogoutRequest): Promise<string | null> {
@@ -62,6 +81,9 @@ const SAMPLE_MEMBERSHIPS: Readonly<Record<string, readonly CompanyMembership[]>>
   'tech-lead-a': [membership(COMPANY_A, 'tech-lead', 'applications:read', 'applications:write')],
   'developer-a': [membership(COMPANY_A, 'developer', 'applications:read')],
   'tech-lead-b': [membership(COMPANY_B, 'tech-lead', 'applications:read', 'applications:write')],
+  'nomfa-tech-lead': [membership(COMPANY_A, 'tech-lead', 'applications:read', 'applications:write')],
+  'nomfa-refuse-tech-lead': [membership(COMPANY_A, 'tech-lead', 'applications:read')],
+  'nomfa-developer': [membership(COMPANY_A, 'developer', 'applications:read')],
   consultant: [
     membership(COMPANY_A, 'developer', 'applications:read'),
     membership(COMPANY_B, 'tech-lead', 'applications:read', 'applications:write'),
@@ -136,6 +158,12 @@ interface FakeRepository {
   files: BlueprintFile[];
   gitFlow: boolean;
   archived: boolean;
+  teamsGranted: boolean;
+  webhook: WebhookSpec | null;
+  readonly branches: Map<string, string>;
+  readonly tags: Map<string, string>;
+  readonly statuses: { commit: string; status: CommitStatus }[];
+  readonly pullRequests: { number: number; head: string; base: string; title: string }[];
 }
 
 /** Keeps repositories and teams in memory, and can be told to fail. */
@@ -169,17 +197,100 @@ export class FakeSourceHost implements SourceHost {
       files: [],
       gitFlow: false,
       archived: false,
+      teamsGranted: false,
+      webhook: null,
+      branches: new Map<string, string>(),
+      tags: new Map<string, string>(),
+      statuses: [],
+      pullRequests: [],
     };
     this.repositories.set(key, repository);
     return { id: repository.id, empty: repository.files.length === 0 };
   }
 
+  #commits = 0;
+
   async commitInitialFiles(spec: RepositorySpec, files: readonly BlueprintFile[]): Promise<void> {
-    this.#repository(spec).files = [...files];
+    const repository = this.#repository(spec);
+    repository.files = [...files];
+    repository.branches.set('main', this.#nextCommit());
   }
 
   async applyGitFlow(spec: RepositorySpec): Promise<void> {
-    this.#repository(spec).gitFlow = true;
+    const repository = this.#repository(spec);
+    repository.gitFlow = true;
+    if (!repository.branches.has('develop')) {
+      repository.branches.set('develop', repository.branches.get('main')!);
+    }
+  }
+
+  async grantTeams(spec: RepositorySpec): Promise<void> {
+    this.#repository(spec).teamsGranted = true;
+  }
+
+  async ensureWebhook(spec: RepositorySpec, hook: WebhookSpec): Promise<void> {
+    this.#repository(spec).webhook = hook;
+  }
+
+  async branchHead(spec: RepositorySpec, branch: string): Promise<string | null> {
+    return this.#repository(spec).branches.get(branch) ?? null;
+  }
+
+  async listBranches(spec: RepositorySpec): Promise<string[]> {
+    return [...this.#repository(spec).branches.keys()].sort();
+  }
+
+  async createBranch(spec: RepositorySpec, name: string, from: string): Promise<string> {
+    const repository = this.#repository(spec);
+    if (!repository.branches.has(name)) {
+      repository.branches.set(name, repository.branches.get(from)!);
+    }
+    return repository.branches.get(name)!;
+  }
+
+  async createTag(spec: RepositorySpec, name: string, commit: string): Promise<void> {
+    const tags = this.#repository(spec).tags;
+    if (tags.has(name) && tags.get(name) !== commit) {
+      throw new PermanentSourceError(`The ${name} tag already points to another commit.`);
+    }
+    tags.set(name, commit);
+  }
+
+  async setCommitStatus(spec: RepositorySpec, commit: string, status: CommitStatus): Promise<void> {
+    this.#repository(spec).statuses.push({ commit, status });
+  }
+
+  async openPullRequest(spec: RepositorySpec, request: PullRequestSpec): Promise<number | null> {
+    const repository = this.#repository(spec);
+    const existing = repository.pullRequests.find((pull) => pull.head === request.head && pull.base === request.base);
+    if (existing !== undefined) {
+      return existing.number;
+    }
+    const number = repository.pullRequests.length + 1;
+    repository.pullRequests.push({ number, head: request.head, base: request.base, title: request.title });
+    return number;
+  }
+
+  async downloadArchive(spec: RepositorySpec, commit: string): Promise<ReadableStream<Uint8Array>> {
+    const content = new TextEncoder().encode(`archive of ${spec.organization}/${spec.name} at ${commit}`);
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(content);
+        controller.close();
+      },
+    });
+  }
+
+  /** Adds a commit to a branch, as a push would, and returns it. */
+  push(organization: string, name: string, branch: string): string {
+    const commit = this.#nextCommit();
+    this.repositories.get(`${organization}/${name}`)!.branches.set(branch, commit);
+    return commit;
+  }
+
+  #nextCommit(): string {
+    this.#commits += 1;
+    return this.#commits.toString(16).padStart(40, '0');
   }
 
   async setArchived(spec: RepositorySpec, archived: boolean): Promise<void> {
@@ -218,5 +329,52 @@ export class FakeSourceHost implements SourceHost {
 
   #repository(spec: RepositorySpec): FakeRepository {
     return this.repositories.get(`${spec.organization}/${spec.name}`)!;
+  }
+}
+
+/** Keeps pushed images and signatures in memory. */
+export class FakeImageRegistry implements ImageRegistry {
+  readonly imageHost = 'registry.test';
+  readonly images = new Map<string, string>();
+  readonly signatures = new Map<string, { payload: Buffer; signature: string }>();
+  readonly deleted: string[] = [];
+  failing = false;
+
+  async pushArchive(file: string, repository: string, tag: string): Promise<string> {
+    if (this.failing) {
+      throw new Error('The registry is unavailable.');
+    }
+    const digest = `sha256:${createHash('sha256').update(await readFile(file)).digest('hex')}`;
+    this.images.set(`${repository}:${tag}`, digest);
+    return digest;
+  }
+
+  async pushSignature(repository: string, digest: string, payload: Buffer, signature: string): Promise<void> {
+    this.signatures.set(`${repository}@${digest}`, { payload, signature });
+  }
+
+  async deleteTag(repository: string, tag: string): Promise<void> {
+    this.images.delete(`${repository}:${tag}`);
+    this.deleted.push(`${repository}:${tag}`);
+  }
+}
+
+/** Records pipeline runs instead of starting them, so tests can play the jobs' part. */
+export class FakePipelineHost implements PipelineHost {
+  /** Each organization's workflows, by file name. */
+  readonly pipelines = new Map<string, Readonly<Record<string, string>>>();
+  readonly runs: { organization: string; workflow: string; inputs: Readonly<Record<string, string>> }[] = [];
+
+  async ensurePipeline(organization: string, workflows: Readonly<Record<string, string>>): Promise<void> {
+    this.pipelines.set(organization, workflows);
+  }
+
+  async run(organization: string, workflow: string, inputs: Readonly<Record<string, string>>): Promise<void> {
+    this.runs.push({ organization, workflow, inputs });
+  }
+
+  /** The one-time token the platform gave a build's run. */
+  tokenOf(buildId: string): string | undefined {
+    return this.runs.find((run) => run.inputs.build === buildId)?.inputs.token;
   }
 }

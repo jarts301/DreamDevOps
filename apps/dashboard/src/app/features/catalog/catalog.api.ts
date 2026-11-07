@@ -93,6 +93,10 @@ export class CatalogApi {
     return firstValueFrom(this.#http.post(`/api/v1/company/applications/${encodeURIComponent(id)}/archive`, {}));
   }
 
+  get(id: string): Promise<Application> {
+    return firstValueFrom(this.#http.get<Application>(`/api/v1/company/applications/${encodeURIComponent(id)}`));
+  }
+
   repositories(): Promise<Repository[]> {
     return firstValueFrom(this.#http.get<Repository[]>('/api/v1/company/repositories'));
   }

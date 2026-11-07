@@ -197,6 +197,7 @@ describe('user directory', () => {
     displayName: 'One',
     platformAdmin: false,
     idToken: null,
+    mfa: true,
   };
 
   it('creates a user once and updates them on later logins', async () => {
@@ -694,5 +695,38 @@ describe('verified email', () => {
     } finally {
       await strictApp.close();
     }
+  });
+});
+
+describe('a second factor', () => {
+  /** Signs in following every redirect, including a step-up for a second factor. */
+  const signInFully = async (user: string) => {
+    const agent = request.agent(app.getHttpServer());
+    let next = `/api/v1/auth/login?login_hint=${user}`;
+    for (let step = 0; step < 6; step += 1) {
+      const response = await agent.get(next).expect(302);
+      const location = new URL(response.headers.location as string, 'http://api.test');
+      if (!location.pathname.startsWith('/api/v1/auth/')) {
+        return agent;
+      }
+      next = location.pathname + location.search;
+    }
+    throw new Error('Too many redirects.');
+  };
+
+  it('is needed at once when a member becomes a Tech Lead, and signing in again with one works', async () => {
+    const { admin } = await startCompany();
+    const name = newName('nomfa-member');
+    const { body } = await admin.post('/api/v1/company/invitations').send({ email: emailOf(name), role: 'developer' }).expect(201);
+    const member = await signIn(name);
+    await member.post('/api/v1/invitations/accept').send({ token: body.token }).expect(200);
+    const me = await member.get('/api/v1/auth/me').expect(200);
+
+    await admin.patch(`/api/v1/company/members/${me.body.userId}`).send({ role: 'tech-lead' }).expect(204);
+
+    // The session has no second factor, so it no longer counts as signed in.
+    await member.get('/api/v1/auth/me').expect(401);
+    const again = await signInFully(name);
+    await expect(again.get('/api/v1/auth/me').expect(200)).resolves.toMatchObject({ body: { role: 'tech-lead' } });
   });
 });

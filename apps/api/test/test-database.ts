@@ -7,6 +7,8 @@ const BOOTSTRAP_SQL = fileURLToPath(new URL('../../../infra/local/postgres/init-
 
 export interface TestDatabase {
   urlFor(role: 'owner' | 'app' | 'relay' | 'jobs'): string;
+  /** For test setup the platform's own roles can't do, such as making a row look old. */
+  superuserUrl(): string;
   stop(): Promise<void>;
 }
 
@@ -36,6 +38,8 @@ export async function startTestDatabase(): Promise<TestDatabase> {
 
   return {
     urlFor,
+    superuserUrl: () =>
+      `postgres://${container.getUsername()}:${container.getPassword()}@${container.getHost()}:${container.getPort()}/dreamdevops`,
     stop: async () => {
       await container.stop();
     },

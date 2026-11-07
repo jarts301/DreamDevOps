@@ -13,6 +13,8 @@ export interface KeycloakOptions {
   readonly clientSecret: string;
 }
 
+/** The authentication level that includes a second factor, as the realm maps it. */
+export const MFA_ACR = 'mfa';
 const PLATFORM_ADMIN_ROLE = 'platform-admin';
 
 /** The Keycloak adapter. Keycloak's concepts stay inside this file. */
@@ -35,6 +37,8 @@ export class KeycloakIdentityProvider implements IdentityProvider {
         code_challenge: request.codeChallenge,
         code_challenge_method: 'S256',
         ...(request.loginHint !== undefined && { login_hint: request.loginHint }),
+        // Keycloak maps this to the level that asks for a one-time code.
+        ...(request.requireMfa === true && { acr_values: MFA_ACR }),
       })
       .toString();
   }
@@ -72,6 +76,7 @@ export class KeycloakIdentityProvider implements IdentityProvider {
       displayName: typeof claims.name === 'string' && claims.name !== '' ? claims.name : claims.email,
       platformAdmin: roles.includes(PLATFORM_ADMIN_ROLE),
       idToken: tokens.id_token ?? null,
+      mfa: claims.acr === MFA_ACR,
     };
   }
 

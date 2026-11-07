@@ -3,7 +3,8 @@ import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainer
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BlueprintLibrary } from '../src/blueprints/infrastructure/blueprint-library.ts';
 import { PermanentSourceError, type RepositorySpec } from '../src/source-governance/application/ports.ts';
-import { GIT_FLOW } from '../src/source-governance/domain/git-flow.ts';
+import { gunzipSync } from 'node:zlib';
+import { GIT_FLOW, TESTS_CHECK, WEBHOOK_EVENTS } from '../src/source-governance/domain/git-flow.ts';
 import { ForgejoSourceHost, ownershipMarker } from '../src/source-governance/infrastructure/forgejo-source-host.ts';
 import { ForgejoGitProvider } from '../src/tenancy/infrastructure/forgejo-git-provider.ts';
 
@@ -126,7 +127,8 @@ describe('the Forgejo source adapter against a real Forgejo', () => {
       ['readers', 'read', 'read'],
       ['tech-leads', 'write', 'read'],
     ]);
-    expect(managed.every((team) => team.includes_all_repositories)).toBe(true);
+    // Teams get each repository on its own, so the platform's pipeline repository stays out.
+    expect(managed.every((team) => !team.includes_all_repositories)).toBe(true);
   });
 
   it('creates a private, empty repository marked as ours', async () => {
@@ -164,6 +166,8 @@ describe('the Forgejo source adapter against a real Forgejo', () => {
   });
 
   it('sets up Git Flow branches and rules, and repeating changes nothing', async () => {
+    // Teams need access first: Forgejo drops approving teams that can't see the repository.
+    await host.grantTeams(spec);
     await host.applyGitFlow(spec, GIT_FLOW);
     await host.applyGitFlow(spec, GIT_FLOW);
 
@@ -173,12 +177,69 @@ describe('the Forgejo source adapter against a real Forgejo', () => {
       rule_name: string;
       required_approvals: number;
       approvals_whitelist_teams: string[];
+      enable_status_check: boolean;
+      status_check_contexts: string[];
     }[];
+    const checks = Object.fromEntries(rules.map((rule) => [rule.rule_name, rule.status_check_contexts]));
+    expect(checks).toEqual({
+      main: [TESTS_CHECK, 'dreamdevops/rc-image'],
+      develop: [TESTS_CHECK],
+      'release/*': [TESTS_CHECK],
+      'hotfix/*': [TESTS_CHECK],
+    });
     expect(rules.map((rule) => rule.rule_name).sort()).toEqual(['develop', 'hotfix/*', 'main', 'release/*']);
     expect(rules.every((rule) => rule.required_approvals === 1)).toBe(true);
     expect(rules.every((rule) => rule.approvals_whitelist_teams.includes('tech-leads'))).toBe(true);
     const tags = (await (await api('/repos/acme/billing-api/tag_protections')).json()) as { name_pattern: string }[];
     expect(tags.map((tag) => tag.name_pattern)).toEqual(['v*']);
+  });
+
+  it('gives the teams access to the repository', async () => {
+    await host.grantTeams(spec);
+    await host.grantTeams(spec);
+
+    const teams = (await (await api('/orgs/acme/teams')).json()) as { id: number; name: string }[];
+    for (const team of teams.filter((candidate) => candidate.name !== 'Owners')) {
+      const repositories = (await (await api(`/teams/${team.id}/repos`)).json()) as { name: string }[];
+      expect(repositories.map((repository) => repository.name)).toEqual(['billing-api']);
+    }
+  });
+
+  it('sends events to one webhook, and repeating changes nothing', async () => {
+    const hook = { url: 'http://host.docker.internal:4000/api/v1/webhooks/forgejo', secret: 'a'.repeat(64), events: WEBHOOK_EVENTS };
+    await host.ensureWebhook(spec, hook);
+    await host.ensureWebhook(spec, { ...hook, secret: 'b'.repeat(64) });
+
+    const hooks = (await (await api('/repos/acme/billing-api/hooks')).json()) as {
+      config: { url: string; content_type: string };
+      events: string[];
+      active: boolean;
+    }[];
+    expect(hooks).toHaveLength(1);
+    expect(hooks[0]).toMatchObject({ active: true, config: { url: hook.url, content_type: 'json' } });
+    // Forgejo lists each event with its finer parts, such as pull_request_review.
+    expect(hooks[0]!.events).toEqual(expect.arrayContaining([...WEBHOOK_EVENTS]));
+  });
+
+  it('reads and creates branches and tags, and opens pull requests once', async () => {
+    const develop = await host.branchHead(spec, 'develop');
+    expect(develop).toMatch(/^[0-9a-f]{40}$/);
+    await expect(host.branchHead(spec, 'missing')).resolves.toBeNull();
+    await expect(host.createBranch(spec, 'release/0.0.9', 'develop')).resolves.toBe(develop);
+    await expect(host.createBranch(spec, 'release/0.0.9', 'develop')).resolves.toBe(develop);
+    expect(await host.listBranches(spec)).toEqual(expect.arrayContaining(['develop', 'main', 'release/0.0.9']));
+
+    await host.createTag(spec, 'v0.0.9-rc.1', develop!);
+    await host.createTag(spec, 'v0.0.9-rc.1', develop!);
+    const main = await host.branchHead(spec, 'main');
+    if (main !== develop) {
+      await expect(host.createTag(spec, 'v0.0.9-rc.1', main!)).rejects.toBeInstanceOf(PermanentSourceError);
+    }
+    // develop and main hold the same commits, so there's nothing to merge.
+    await expect(host.openPullRequest(spec, { head: 'develop', base: 'main', title: 'Nothing', body: '' })).resolves.toBeNull();
+
+    const archive = gunzipSync(Buffer.from(await new Response(await host.downloadArchive(spec, develop!)).arrayBuffer()));
+    expect(archive.toString('latin1')).toContain('billing-api/package.json');
   });
 
   it('puts people in teams, and reports who has an account', async () => {
@@ -233,6 +294,11 @@ describe('the Forgejo source adapter against a real Forgejo', () => {
       LEAD,
     );
     expect(review.status).toBe(200);
+    // Approved, but the tests haven't passed yet.
+    expect((await merge()).status).toBeGreaterThanOrEqual(400);
+
+    const pull = (await (await api(`/repos/acme/billing-api/pulls/${number}`)).json()) as { head: { sha: string } };
+    await host.setCommitStatus(spec, pull.head.sha, { context: TESTS_CHECK, state: 'success', description: 'Passed' });
     expect((await merge()).status).toBe(200);
   });
 

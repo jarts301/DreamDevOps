@@ -4,8 +4,14 @@ import type { BlueprintLibrary } from '../../blueprints/infrastructure/blueprint
 import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
 import { CatalogError } from '../../catalog/domain/errors.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
-import { GIT_FLOW } from '../domain/git-flow.ts';
+import { GIT_FLOW, WEBHOOK_EVENTS } from '../domain/git-flow.ts';
 import { PermanentSourceError, type RepositorySpec, type SourceHost } from './ports.ts';
+
+/**
+ * The version of the rules a repository gets. Raise it when the rules change, and
+ * repositories made before are brought up to date when the API starts.
+ */
+export const POLICY_VERSION = 3;
 
 /** The events that make an application's repository need creating. */
 export const REPOSITORY_TRIGGERS = ['ApplicationRegistered', 'RepositoryRequested'] as const;
@@ -37,6 +43,10 @@ export interface RepositoriesOptions {
   readonly maxAttempts: number;
   /** Forgejo's address in the browser, for links. */
   readonly publicUrl: string;
+  /** Where Forgejo sends each repository's events. */
+  readonly webhookUrl: string;
+  /** Each repository's webhook secret. */
+  readonly webhookSecret: (applicationId: string) => string;
 }
 
 /**
@@ -144,16 +154,17 @@ export class Repositories {
           });
           await this.#host.commitInitialFiles(spec, files, `Start from the ${blueprintKey} ${blueprintVersion} blueprint`);
         }
-        await this.#host.applyGitFlow(spec, GIT_FLOW);
+        await this.#applyPolicy(spec);
         if (application.status === 'archived') {
           await this.#host.setArchived(spec, true);
         }
 
         await tx.query(
           `UPDATE source.repositories
-           SET status = 'ready', external_id = $2, attempts = 0, last_error = NULL, updated_at = now()
+           SET status = 'ready', external_id = $2, attempts = 0, last_error = NULL,
+               policy_version = $3, updated_at = now()
            WHERE application_id = $1`,
-          [applicationId, repository.id],
+          [applicationId, repository.id, POLICY_VERSION],
         );
         await appendToOutbox(tx, [
           createDomainEvent({
@@ -196,6 +207,63 @@ export class Repositories {
     if (failure !== null) {
       throw failure;
     }
+  }
+
+  /**
+   * Brings the current company's repositories made under older rules up to date. Each
+   * step is safe to repeat, so a failure leaves the repository to try again later.
+   */
+  async upgradePolicies(): Promise<void> {
+    const rows = await this.#database.transaction(async (tx) => {
+      const { rows: outdated } = await tx.query<RepositoryRow>(
+        "SELECT * FROM source.repositories WHERE status = 'ready' AND policy_version < $1",
+        [POLICY_VERSION],
+      );
+      return outdated;
+    });
+    for (const row of rows) {
+      const spec = { organization: row.organization, name: row.name, applicationId: row.application_id };
+      await this.#host.ensureTeams(spec.organization);
+      await this.#applyPolicy(spec);
+      await this.#database.transaction((tx) =>
+        tx.query('UPDATE source.repositories SET policy_version = $2, updated_at = now() WHERE application_id = $1', [
+          row.application_id,
+          POLICY_VERSION,
+        ]),
+      );
+    }
+  }
+
+  /** The repository's branches, for choosing which to build. */
+  async branches(applicationId: unknown): Promise<string[]> {
+    const application = await this.#catalog.get(applicationId);
+    const row = await this.#database.transaction((tx) => lockRow(tx, application.id));
+    if (row?.status !== 'ready') {
+      return [];
+    }
+    return this.#host.listBranches({ organization: row.organization, name: row.name, applicationId: application.id });
+  }
+
+  /** Where an application's repository is, for other modules. Null until it's ready. */
+  async locate(applicationId: string): Promise<RepositorySpec | null> {
+    const row = await this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query<RepositoryRow>('SELECT * FROM source.repositories WHERE application_id = $1', [
+        applicationId,
+      ]);
+      return rows[0];
+    });
+    return row?.status === 'ready' ? { organization: row.organization, name: row.name, applicationId } : null;
+  }
+
+  async #applyPolicy(spec: RepositorySpec): Promise<void> {
+    // Teams need access first: Forgejo drops approving teams that can't see the repository.
+    await this.#host.grantTeams(spec);
+    await this.#host.applyGitFlow(spec, GIT_FLOW);
+    await this.#host.ensureWebhook(spec, {
+      url: this.#options.webhookUrl,
+      secret: this.#options.webhookSecret(spec.applicationId),
+      events: WEBHOOK_EVENTS,
+    });
   }
 
   /** Makes the repository read-only while its application is archived. */

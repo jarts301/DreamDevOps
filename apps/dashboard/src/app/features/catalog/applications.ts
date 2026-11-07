@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { SessionService } from '../../core/session.service';
 import {
@@ -29,7 +30,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
 /** The company's applications. Every member can see them, and Tech Leads and Company Admins manage them. */
 @Component({
   selector: 'app-applications',
-  imports: [DatePipe, ReactiveFormsModule],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Applications</h1>
@@ -134,7 +135,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
                 @let repository = repositories().get(application.id);
                 <tr>
                   <td>
-                    {{ application.name }}
+                    <a [routerLink]="['/applications', application.id]">{{ application.name }}</a>
                     @if (application.description) {
                       <p class="cell-note">{{ application.description }}</p>
                     }

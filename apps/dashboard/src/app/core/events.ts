@@ -40,6 +40,32 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return `Created the repository ${String(payload['repository'])} for "${String(payload['name'])}"`;
     case 'RepositoryCreationFailed':
       return `Creating the repository of "${String(payload['name'])}" failed: ${String(payload['reason'] ?? 'unknown reason')}`;
+    case 'CodePushed':
+      return `Pushed ${String(payload['commits'] ?? 0)} commits to ${String(payload['branch'])}`;
+    case 'BranchCreated':
+      return `Created the branch ${String(payload['branch'])}`;
+    case 'BranchDeleted':
+      return `Deleted the branch ${String(payload['branch'])}`;
+    case 'PullRequestUpdated':
+      return `Updated pull request #${String(payload['number'])} from ${String(payload['head'])} into ${String(payload['base'])}`;
+    case 'PullRequestMerged':
+      return `Merged pull request #${String(payload['number'])} from ${String(payload['head'])} into ${String(payload['base'])}`;
+    case 'BuildRequested':
+      return `Asked for the image ${String(payload['tag'])}`;
+    case 'BuildSucceeded':
+      return `Built, scanned and signed the image ${String(payload['tag'])}`;
+    case 'BuildFailed':
+      return `The image ${String(payload['tag'])} failed: ${String(payload['reason'] ?? 'unknown reason')}`;
+    case 'FeatureImageDeleted':
+      return `Deleted the feature image ${String(payload['tag'])}`;
+    case 'ReleaseStarted':
+      return `Started the ${String(payload['kind'])} ${String(payload['version'])}`;
+    case 'ReleaseCandidateCreated':
+      return `Tagged release candidate ${String(payload['tag'])}`;
+    case 'ReleaseMerged':
+      return `Merged the ${String(payload['kind'])} ${String(payload['version'])} into main`;
+    case 'ReleasePublished':
+      return `Published version ${String(payload['version'])}`;
     case 'CompanyEditionChanged':
       return `Moved the company from the ${editionName(payload['previousEdition'])} to the ${editionName(payload['edition'])} Edition`;
     case 'UserInvited':
