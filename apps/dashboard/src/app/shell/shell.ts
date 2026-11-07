@@ -16,6 +16,7 @@ interface NavigationItem {
 // Feature areas mirror the backend's contexts. Each new module adds its screens here.
 const NAVIGATION: readonly NavigationItem[] = [
   { path: '/', label: 'Overview' },
+  { path: '/applications', label: 'Applications', needsCompany: true },
   { path: '/team', label: 'Team', permission: 'company-users:manage' },
   { path: '/audit', label: 'Audit log', permission: 'audit:read' },
   { path: '/notifications', label: 'Notifications', permission: 'notifications:manage' },

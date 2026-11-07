@@ -10,7 +10,7 @@ Each user has one role per company. Roles and their permissions are stored as da
 |---|---|---|---|---|---|---|
 | Manage company users and roles | `company-users:manage` | Yes | | | | |
 | Connect deployment targets | `targets:connect` | Yes | | | Yes | |
-| Create applications | `applications:create` | Yes | Yes | | | |
+| Register and manage applications | `applications:create` | Yes | Yes | | | |
 | Push code and open PRs | `code:push` | | Yes | Yes | | |
 | Approve PRs into develop or main | `pull-requests:approve` | | Yes | | | |
 | Start releases and hotfixes | `releases:start` | | Yes | | | |

@@ -22,6 +22,12 @@ export const routes: Routes = [
         loadComponent: () => import('./features/overview/overview').then((module) => module.Overview),
       },
       {
+        path: 'applications',
+        title: 'Applications · DreamDevOps',
+        canActivate: [companyGuard],
+        loadComponent: () => import('./features/catalog/applications').then((module) => module.Applications),
+      },
+      {
         path: 'team',
         title: 'Team · DreamDevOps',
         canActivate: [permissionGuard('company-users:manage')],

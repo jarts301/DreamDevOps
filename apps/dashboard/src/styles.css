@@ -221,6 +221,14 @@ a {
   font-size: 0.9rem;
 }
 
+.field-wide {
+  flex-basis: 100%;
+}
+
+textarea {
+  resize: vertical;
+}
+
 .field-inline {
   display: flex;
   align-items: center;
@@ -228,7 +236,8 @@ a {
 }
 
 input,
-select {
+select,
+textarea {
   min-height: 36px;
   max-width: 100%;
   padding: 6px 10px;

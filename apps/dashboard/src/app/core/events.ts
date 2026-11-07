@@ -24,6 +24,16 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return 'Finished setting up the company';
     case 'CompanyProvisioningFailed':
       return `Setting up the company failed: ${String(payload['reason'] ?? 'unknown reason')}`;
+    case 'ApplicationRegistered':
+      return `Registered the application "${String(payload['name'])}"`;
+    case 'ApplicationUpdated':
+      return payload['name'] === undefined
+        ? "Changed an application's description"
+        : `Renamed the application "${String(payload['previousName'])}" to "${String(payload['name'])}"`;
+    case 'ApplicationArchived':
+      return `Archived the application "${String(payload['name'])}"`;
+    case 'ApplicationRestored':
+      return `Restored the application "${String(payload['name'])}"`;
     case 'CompanyEditionChanged':
       return `Moved the company from the ${editionName(payload['previousEdition'])} to the ${editionName(payload['edition'])} Edition`;
     case 'UserInvited':

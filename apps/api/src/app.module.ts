@@ -30,6 +30,8 @@ import { ProvisioningSaga } from './tenancy/application/provisioning.ts';
 import { CompaniesController } from './tenancy/http/companies.controller.ts';
 import { ForgejoGitProvider } from './tenancy/infrastructure/forgejo-git-provider.ts';
 import { SESSION_STORE } from './session/session-store.ts';
+import { ApplicationCatalog } from './catalog/application/application-catalog.ts';
+import { ApplicationsController } from './catalog/http/applications.controller.ts';
 import { Entitlements } from './editions/application/entitlements.ts';
 import { ENTITLEMENT_PROVIDER, type EntitlementProvider } from './editions/application/ports.ts';
 import { EditionsController } from './editions/http/editions.controller.ts';
@@ -88,6 +90,7 @@ export class AppModule implements OnApplicationShutdown {
         AuditController,
         NotificationRulesController,
         EditionsController,
+        ApplicationsController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -184,6 +187,11 @@ export class AppModule implements OnApplicationShutdown {
           provide: Entitlements,
           useFactory: (database: TenantDatabase, provider: EntitlementProvider) => new Entitlements(database, provider),
           inject: [TenantDatabase, ENTITLEMENT_PROVIDER],
+        },
+        {
+          provide: ApplicationCatalog,
+          useFactory: (database: TenantDatabase) => new ApplicationCatalog(database),
+          inject: [TenantDatabase],
         },
         { provide: BACKGROUND_PROCESSING, useClass: BackgroundProcessing },
         // Guards run in this order, so rate limits apply before any database work.

@@ -12,7 +12,7 @@ const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'editions:manage': "Set each company's edition",
   'company-users:manage': 'Manage company users and roles',
   'targets:connect': 'Connect deployment targets',
-  'applications:create': 'Create applications',
+  'applications:create': 'Register and manage applications',
   'code:push': 'Push code and open pull requests',
   'pull-requests:approve': 'Approve pull requests',
   'releases:start': 'Start releases and hotfixes',

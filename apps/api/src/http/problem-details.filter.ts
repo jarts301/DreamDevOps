@@ -1,6 +1,7 @@
 import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Logger } from '@nestjs/common';
 import { MissingTenantContextError } from '@dreamdevops/shared-kernel';
 import type { Response } from 'express';
+import { CatalogError } from '../catalog/domain/errors.ts';
 import { EditionError } from '../editions/domain/errors.ts';
 import { AccessError } from '../identity-access/domain/errors.ts';
 import { NotificationError } from '../notifications/domain/errors.ts';
@@ -35,7 +36,12 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     if (error instanceof HttpException) {
       return { status: error.getStatus(), detail: error.message };
     }
-    if (error instanceof AccessError || error instanceof TenancyError || error instanceof NotificationError) {
+    if (
+      error instanceof AccessError ||
+      error instanceof TenancyError ||
+      error instanceof NotificationError ||
+      error instanceof CatalogError
+    ) {
       const statuses = { invalid: 400, 'not-found': 404, conflict: 409 };
       return { status: statuses[error.kind], detail: error.message };
     }

@@ -208,6 +208,17 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByText('These need the Commercial Edition.', { exact: false })).toBeVisible();
   });
 
+  await test.step('the company admin registers an application', async () => {
+    await adminPage.getByRole('link', { name: 'Applications' }).click();
+    await adminPage.getByLabel('Name', { exact: true }).fill('Billing API');
+    await adminPage.getByLabel('Type').selectOption({ label: 'RESTful Service' });
+    await adminPage.getByLabel('Description (optional)').fill('Charges customers');
+    await adminPage.getByRole('button', { name: 'Register application' }).click();
+    await expect(adminPage.getByText('Billing API is registered.')).toBeVisible();
+    await expect(adminPage.getByRole('cell', { name: 'billing-api' })).toBeVisible();
+    await expect(adminPage.getByRole('cell', { name: 'Not created yet' })).toBeVisible();
+  });
+
   await test.step('the platform admin sees each company’s edition, and only Community is installed', async () => {
     await expect(page.getByRole('link', { name: 'Edition', exact: true })).toHaveCount(0);
     await page.getByRole('link', { name: 'Editions' }).click();

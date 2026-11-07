@@ -12,6 +12,10 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   CompanyProvisioned: 'The company finishes setting up',
   CompanyProvisioningFailed: 'Setting up the company fails',
   CompanyEditionChanged: "The company's edition changes",
+  ApplicationRegistered: 'An application is registered',
+  ApplicationUpdated: 'An application is renamed or its description changes',
+  ApplicationArchived: 'An application is archived',
+  ApplicationRestored: 'An archived application is restored',
 };
 
 const EDITION_NAMES: Readonly<Record<string, string>> = {
@@ -60,6 +64,16 @@ export function summarize(event: DomainEvent, companyName: string): string {
         return 'The company finished setting up.';
       case 'CompanyProvisioningFailed':
         return 'Setting up the company failed.';
+      case 'ApplicationRegistered':
+        return `The application "${String(payload.name)}" was registered.`;
+      case 'ApplicationUpdated':
+        return payload.name === undefined
+          ? "An application's description changed."
+          : `The application "${String(payload.previousName)}" was renamed to "${String(payload.name)}".`;
+      case 'ApplicationArchived':
+        return `The application "${String(payload.name)}" was archived.`;
+      case 'ApplicationRestored':
+        return `The application "${String(payload.name)}" was restored.`;
       case 'CompanyEditionChanged':
         return `The company moved to the ${editionName(payload.edition)} Edition.`;
       default:
