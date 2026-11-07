@@ -16,6 +16,14 @@ import { KeycloakIdentityProvider } from './identity-access/infrastructure/keycl
 import { PostgresUserDirectory } from './identity-access/infrastructure/postgres-user-directory.ts';
 import { PostgresSessionStore } from './session/postgres-session-store.ts';
 import { BACKGROUND_PROCESSING, BackgroundProcessing } from './background/background-processing.ts';
+import { AuditLog } from './audit/application/audit-log.ts';
+import { AuditController } from './audit/http/audit.controller.ts';
+import { InvitationEmails } from './notifications/application/invitation-emails.ts';
+import { NotificationRules } from './notifications/application/notification-rules.ts';
+import { MAILER, type Mailer, WEBHOOK_SENDER, type WebhookSender } from './notifications/application/ports.ts';
+import { NotificationRulesController } from './notifications/http/notification-rules.controller.ts';
+import { SafeWebhookSender } from './notifications/infrastructure/safe-webhook-sender.ts';
+import { SmtpMailer } from './notifications/infrastructure/smtp-mailer.ts';
 import { CompaniesService } from './tenancy/application/companies.service.ts';
 import { GIT_PROVIDER, type GitProvider } from './tenancy/application/ports.ts';
 import { ProvisioningSaga } from './tenancy/application/provisioning.ts';
@@ -67,6 +75,8 @@ export class AppModule implements OnApplicationShutdown {
         CompanyAccessController,
         InvitationsController,
         CompaniesController,
+        AuditController,
+        NotificationRulesController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -125,6 +135,38 @@ export class AppModule implements OnApplicationShutdown {
           useFactory: (database: TenantDatabase, git: GitProvider) =>
             new ProvisioningSaga(database, git, { maxAttempts: config.provisioningMaxAttempts }),
           inject: [TenantDatabase, GIT_PROVIDER],
+        },
+        {
+          provide: AuditLog,
+          useFactory: (database: TenantDatabase, pool: pg.Pool) => new AuditLog(database, pool),
+          inject: [TenantDatabase, DATABASE_POOL],
+        },
+        {
+          provide: MAILER,
+          useFactory: () =>
+            new SmtpMailer({
+              host: config.smtpHost,
+              port: config.smtpPort,
+              from: config.smtpFrom,
+              security: config.smtpSecurity,
+              username: config.smtpUsername,
+              password: config.smtpPassword,
+            }),
+        },
+        {
+          provide: InvitationEmails,
+          useFactory: (mailer: Mailer) => new InvitationEmails(mailer, config.dashboardUrl),
+          inject: [MAILER],
+        },
+        {
+          provide: WEBHOOK_SENDER,
+          useFactory: () => new SafeWebhookSender({ allowPrivateNetworks: config.webhookAllowPrivateNetworks }),
+        },
+        {
+          provide: NotificationRules,
+          useFactory: (database: TenantDatabase, sender: WebhookSender) =>
+            new NotificationRules(database, sender, { allowInsecureWebhooks: config.webhookAllowInsecure }),
+          inject: [TenantDatabase, WEBHOOK_SENDER],
         },
         { provide: BACKGROUND_PROCESSING, useClass: BackgroundProcessing },
         // Guards run in this order, so rate limits apply before any database work.

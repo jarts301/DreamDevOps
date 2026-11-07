@@ -73,6 +73,30 @@ describe('EventBus', () => {
     expect(healthy).toHaveBeenCalledTimes(1);
   });
 
+  it('delivers every event type to a consumer of all events', async () => {
+    const seen: string[] = [];
+    await bus.subscribeToAll('audit', async (received) => void seen.push(received.eventType));
+    await bus.subscribe('ApplicationCreated', 'other', async () => {});
+
+    await bus.publish(event);
+    await bus.publish(createDomainEvent({ eventType: 'SomethingNew', companyId, payload: {} }));
+    await queue.drain();
+
+    expect(seen).toEqual(['ApplicationCreated', 'SomethingNew']);
+  });
+
+  it("runs a consumer of all events in each event's company context", async () => {
+    let seen: string | undefined;
+    await bus.subscribeToAll('audit', async () => {
+      seen = currentCompanyId();
+    });
+
+    await bus.publish(event);
+    await queue.drain();
+
+    expect(seen).toBe(companyId);
+  });
+
   it('rejects a duplicate subscription', async () => {
     await bus.subscribe('ApplicationCreated', 'audit', async () => {});
 

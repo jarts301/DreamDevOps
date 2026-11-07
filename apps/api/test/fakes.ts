@@ -7,6 +7,7 @@ import type {
   UserDirectory,
 } from '../src/identity-access/application/ports.ts';
 import type { CompanyMembership, UserAccess } from '../src/identity-access/domain/access.ts';
+import type { EmailMessage, Mailer } from '../src/notifications/application/ports.ts';
 import {
   type GitOrganization,
   type GitProvider,
@@ -110,5 +111,18 @@ export class FakeGitProvider implements GitProvider {
     }
     this.organizations.set(organization.name, organization);
     return `org-${organization.name}`;
+  }
+}
+
+/** Keeps sent emails in memory instead of sending them. */
+export class FakeMailer implements Mailer {
+  readonly sent: EmailMessage[] = [];
+  failing = false;
+
+  async send(message: EmailMessage): Promise<void> {
+    if (this.failing) {
+      throw new Error('Mail server unavailable');
+    }
+    this.sent.push(message);
   }
 }

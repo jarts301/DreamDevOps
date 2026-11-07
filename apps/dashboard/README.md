@@ -24,9 +24,9 @@ Open <http://localhost:4200> and sign in as a sample user. Their password is `KE
 
 To see the whole flow:
 
-1. Sign in as `dev-platform-admin`, open **Companies**, enter a company name and `dev-company-admin@example.com`, and copy the link. The company shows **Active** once its Git organization is set up.
-2. Sign out, open the link, sign in as `dev-company-admin` and accept.
-3. Open **Team** to invite others and manage roles.
+1. Sign in as `dev-platform-admin`, open **Companies**, and enter a company name and `dev-company-admin@example.com`. The company shows **Active** once its Git organization is set up.
+2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, sign in as `dev-company-admin` and accept.
+3. Open **Team** to invite others and manage roles, **Audit log** to see every change, and **Notifications** to post events to a chat tool.
 
 ## Layout
 
@@ -43,6 +43,6 @@ To see the whole flow:
 | `npm test` | Component and service tests, with no servers |
 | `npm run test:e2e` | A browser test of the whole flow, using your installed Chrome |
 
-`test:e2e` needs the local stack running, and starts the API and dashboard itself. Each run registers new users in your local Keycloak and adds a company to your local database and Forgejo. They build up until you run `docker compose down -v`.
+`test:e2e` needs the local stack running, and starts the API and dashboard itself. Each run registers new users in your local Keycloak, adds a company to your local database and Forgejo, and sends emails to Mailpit. It reads the invitation links from those emails. They build up until you run `docker compose down -v`.
 
 The dashboard uses TypeScript 6.0, because Angular 22 doesn't support the TypeScript 7 used by the rest of the repository.

@@ -234,7 +234,14 @@ describe('user directory', () => {
 describe('the role matrix', () => {
   // The proposal's permission matrix, written out independently of the migration.
   const MATRIX: Record<string, string[]> = {
-    'company-admin': ['applications:create', 'audit:read', 'company-users:manage', 'dashboards:view', 'targets:connect'],
+    'company-admin': [
+      'applications:create',
+      'audit:read',
+      'company-users:manage',
+      'dashboards:view',
+      'notifications:manage',
+      'targets:connect',
+    ],
     developer: ['code:push', 'dashboards:view', 'deployments-test:run', 'feature-images:build'],
     operator: ['dashboards:view', 'deployments-production:run', 'deployments-test:run', 'targets:connect'],
     'tech-lead': [

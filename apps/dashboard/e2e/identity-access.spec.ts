@@ -38,6 +38,29 @@ const openAsNewPerson = async (browser: Browser, url: string) => {
 
 const invitationLink = (page: Page) => page.getByRole('textbox', { name: 'Invitation link' }).inputValue();
 
+const MAILPIT = `http://localhost:${process.env['MAILPIT_WEB_PORT'] ?? '8025'}`;
+
+/** Reads the invitation link from the email Mailpit caught, as the invited person would. */
+const linkFromEmail = async (address: string): Promise<string> => {
+  let text = '';
+  await expect
+    .poll(
+      async () => {
+        const search = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:${address}`)}`);
+        const { messages } = (await search.json()) as { messages: { ID: string }[] };
+        if (messages.length === 0) {
+          return false;
+        }
+        const message = await fetch(`${MAILPIT}/api/v1/message/${messages[0]!.ID}`);
+        text = ((await message.json()) as { Text: string }).Text;
+        return true;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  return /(http\S+invitations\/accept#token=\S+)/.exec(text)![1]!;
+};
+
 test('from starting a company to managing its team', async ({ browser, page }) => {
   const admin = newUser('admin');
   const developer = newUser('developer');
@@ -77,7 +100,12 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(companyRow()).toContainText('Active', { timeout: 30_000 });
   });
 
-  const adminLink = await invitationLink(page);
+  await test.step('the invitation is emailed', async () => {
+    await expect(page.getByText('We emailed them the link.')).toBeVisible();
+  });
+
+  const adminLink = await linkFromEmail(admin.email);
+  expect(adminLink).toBe(await invitationLink(page));
   const adminPage = await openAsNewPerson(browser, adminLink);
 
   await test.step('the first admin registers and must click to join', async () => {
@@ -118,7 +146,7 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await stranger.context().close();
   });
 
-  const developerPage = await openAsNewPerson(browser, await invitationLink(adminPage));
+  const developerPage = await openAsNewPerson(browser, await linkFromEmail(developer.email));
 
   await test.step('the developer joins with limited access', async () => {
     await register(developerPage, developer);
@@ -156,6 +184,21 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByRole('cell', { name: developer.email, exact: true })).toHaveCount(0);
     await developerPage.reload();
     await expect(developerPage.getByRole('heading', { name: "You don't have access to this page" })).toBeVisible();
+  });
+
+  await test.step('the audit log shows every change, and is intact', async () => {
+    await adminPage.getByRole('link', { name: 'Audit log' }).click();
+    await expect(adminPage).toHaveURL(/\/audit$/);
+    // Entries are recorded in the background, so the newest may need a moment to appear.
+    await expect(async () => {
+      await adminPage.reload();
+      await expect(adminPage.getByRole('cell', { name: 'Removed a member who was Company Admin' })).toBeVisible({
+        timeout: 5_000,
+      });
+    }).toPass({ timeout: 30_000 });
+    await expect(adminPage.getByRole('cell', { name: `Created the company "${companyName}"` })).toBeVisible();
+    await adminPage.getByRole('button', { name: 'Check integrity' }).click();
+    await expect(adminPage.getByText(/The log is intact\. \d+ entries checked\./)).toBeVisible();
   });
 
   await test.step('suspending the company blocks its members at once', async () => {

@@ -16,7 +16,7 @@ export type JobHandler = (job: Job) => Promise<void>;
 /** Background work. Jobs can run more than once, so handlers must be idempotent. */
 export interface JobQueue {
   createQueue(queue: string, options?: QueueOptions): Promise<void>;
-  /** Returns the job ID, or null if a job with this ID was already sent. */
+  /** Returns the job ID, or null if a job with this ID was already sent. A given ID must be a UUID. */
   send(queue: string, data: object, options?: { readonly id?: string }): Promise<string | null>;
   work(queue: string, handler: JobHandler): Promise<void>;
 }

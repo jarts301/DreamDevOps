@@ -29,7 +29,9 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Companies | Creating, renaming, suspending and reactivating companies. Each gets a private Git organization, set up in the background. |
 | Users and roles | Invitations, five company roles and a Platform Admin role, with changes applied on the user's next request |
 | Company data separation | Enforced in the database with row-level security |
-| Dashboard | Overview, team management, joining a company and starting a company, in light and dark themes |
+| Audit | A history of every change per company that shows any tampering, and platform admins' own activity |
+| Notifications | Emailed invitation links, and company rules that post chosen events to Slack or any webhook |
+| Dashboard | Screens for all of the above, in light and dark themes |
 
 Creating applications and repositories, building images, deploying, and monitoring aren't available yet. Companies can't be deleted.
 
@@ -100,7 +102,7 @@ Run these commands from the repository root. They work in Bash and PowerShell.
    | `dev-company-admin` | A user with no company, until invited |
    | `dev-developer` | A user with no company, until invited |
 
-To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally).
+To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally). Invitation emails don't leave your machine: open them in Mailpit at <http://localhost:8025>.
 
 ## Local services
 
@@ -112,6 +114,7 @@ All of these accept connections only from your own machine.
 | API | <http://localhost:4000/api/v1> |
 | Keycloak (login) | <http://localhost:8081> |
 | Forgejo (Git) | <http://localhost:3000>, with SSH on port 2222 |
+| Mailpit (caught emails) | <http://localhost:8025> |
 | PostgreSQL | `localhost:5433` |
 
 The services keep running, and restart with Docker, until you stop them:
@@ -206,6 +209,8 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [API](apps/api/README.md) | Routes, security controls and rules for adding routes |
 | [Identity and access](apps/api/src/identity-access/README.md) | Roles, permissions, invitations and their rules |
 | [Tenancy](apps/api/src/tenancy/README.md) | The company lifecycle, and how each company's resources are set up |
+| [Audit](apps/api/src/audit/README.md) | The tamper-evident history of changes |
+| [Notifications](apps/api/src/notifications/README.md) | Invitation emails, chat rules and webhook safety |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |
 

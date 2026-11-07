@@ -19,6 +19,7 @@ Each user has one role per company. Roles and their permissions are stored as da
 | Deploy to production and roll back | `deployments-production:run` | | Yes | | Yes | |
 | View dashboards and logs | `dashboards:view` | Yes | Yes | Yes | Yes | Yes |
 | Read the audit log | `audit:read` | Yes | | | | |
+| Manage chat notifications | `notifications:manage` | Yes | | | | |
 
 **Platform Admin** comes from the `platform-admin` realm role in Keycloak, not from a company. It grants `companies:manage` and `audit:read-own`, and no access to company data.
 

@@ -14,7 +14,12 @@ const companyA = parseCompanyId('a1b2c3d4-0000-4000-8000-00000000000a');
 const companyB = parseCompanyId('a1b2c3d4-0000-4000-8000-00000000000b');
 
 const eventFor = (companyId: typeof companyA, name = 'api') =>
-  createDomainEvent({ eventType: 'ApplicationCreated', companyId, payload: { name } });
+  createDomainEvent({
+    eventType: 'ApplicationCreated',
+    companyId,
+    actorId: 'a1b2c3d4-0000-4000-8000-0000000000ff',
+    payload: { name },
+  });
 
 describe('tenant isolation and the outbox', () => {
   let database: TestDatabase;

@@ -10,8 +10,13 @@ import { type CreatedInvitation, invitationLink } from './identity-access.api';
   template: `
     <div class="alert alert-success" role="status">
       <p><strong>Invitation created for {{ email() }}.</strong></p>
+      @if (invitation().emailSent) {
+        <p>We emailed them the link. You can also send it yourself.</p>
+      } @else if (invitation().emailSent === false) {
+        <p>We couldn't email them, so send them this link yourself.</p>
+      }
       <p>
-        Send them this link. It's shown only once, can be used once, and expires on
+        The link is shown only once, can be used once, and expires on
         {{ invitation().expiresAt | date: 'mediumDate' }}.
       </p>
       <div class="copy-row">

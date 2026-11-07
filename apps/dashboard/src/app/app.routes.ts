@@ -28,6 +28,24 @@ export const routes: Routes = [
         loadComponent: () => import('./features/identity-access/team').then((module) => module.Team),
       },
       {
+        path: 'audit',
+        title: 'Audit log · DreamDevOps',
+        canActivate: [permissionGuard('audit:read')],
+        loadComponent: () => import('./features/audit/audit-log').then((module) => module.AuditLog),
+      },
+      {
+        path: 'notifications',
+        title: 'Notifications · DreamDevOps',
+        canActivate: [permissionGuard('notifications:manage')],
+        loadComponent: () => import('./features/notifications/notifications').then((module) => module.Notifications),
+      },
+      {
+        path: 'platform/activity',
+        title: 'My activity · DreamDevOps',
+        canActivate: [permissionGuard('audit:read-own')],
+        loadComponent: () => import('./features/audit/my-activity').then((module) => module.MyActivity),
+      },
+      {
         path: 'platform/companies',
         title: 'Companies · DreamDevOps',
         canActivate: [permissionGuard('companies:manage')],

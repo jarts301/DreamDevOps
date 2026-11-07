@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { deadLetterQueueName } from '../application/ports.ts';
 import type { Job, JobHandler, JobQueue, QueueOptions } from '../application/ports.ts';
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** A fake JobQueue for fast tests. The same contract tests run against this and pg-boss. */
 export class InMemoryJobQueue implements JobQueue {
   readonly #retryLimits = new Map<string, number>();
@@ -16,6 +18,9 @@ export class InMemoryJobQueue implements JobQueue {
 
   async send(queue: string, data: object, options: { readonly id?: string } = {}): Promise<string | null> {
     this.#assertQueueExists(queue);
+    if (options.id !== undefined && !UUID_PATTERN.test(options.id)) {
+      throw new Error('A job ID must be a UUID.');
+    }
     const id = options.id ?? randomUUID();
     const key = `${queue}/${id}`;
     if (this.#seenIds.has(key)) {

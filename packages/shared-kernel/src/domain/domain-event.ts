@@ -7,6 +7,8 @@ export interface DomainEvent<TType extends string = string, TPayload extends obj
   readonly eventType: TType;
   readonly eventVersion: number;
   readonly companyId: CompanyId;
+  /** The user who caused the event, or null when the platform did it on its own. */
+  readonly actorId: string | null;
   readonly occurredAt: string;
   readonly payload: TPayload;
 }
@@ -15,6 +17,7 @@ export interface NewDomainEvent<TType extends string, TPayload extends object> {
   readonly eventType: TType;
   readonly eventVersion?: number;
   readonly companyId: CompanyId;
+  readonly actorId?: string | null;
   readonly payload: TPayload;
   readonly occurredAt?: Date;
   readonly eventId?: string;
@@ -37,6 +40,7 @@ export function createDomainEvent<TType extends string, TPayload extends object>
     eventType: event.eventType,
     eventVersion,
     companyId: event.companyId,
+    actorId: event.actorId ?? null,
     occurredAt: (event.occurredAt ?? new Date()).toISOString(),
     payload: event.payload,
   });

@@ -26,6 +26,8 @@ export interface CreatedInvitation {
   readonly id: string;
   readonly token: string;
   readonly expiresAt: string;
+  /** Whether the API emailed the link. Missing from responses that send no email. */
+  readonly emailSent?: boolean;
 }
 
 /** The fragment never reaches a server, so the token stays out of server and proxy logs. */

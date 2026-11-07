@@ -69,7 +69,7 @@ export class CompaniesService {
           [companyId, name, slug, actor.userId],
         );
         await appendToOutbox(tx, [
-          createDomainEvent({ eventType: 'CompanyCreated', companyId, payload: { name, slug, createdBy: actor.userId } }),
+          createDomainEvent({ eventType: 'CompanyCreated', companyId, actorId: actor.userId, payload: { name, slug, createdBy: actor.userId } }),
         ]);
         const invitation = await this.#access.inviteFirstAdminIn(tx, actor, email);
         return {
@@ -99,6 +99,7 @@ export class CompaniesService {
         createDomainEvent({
           eventType: 'CompanyRenamed',
           companyId,
+          actorId: actor.userId,
           payload: { name, previousName: current.name, renamedBy: actor.userId },
         }),
       ]);
@@ -116,7 +117,7 @@ export class CompaniesService {
         [companyId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({ eventType: 'CompanySuspended', companyId, payload: { suspendedBy: actor.userId } }),
+        createDomainEvent({ eventType: 'CompanySuspended', companyId, actorId: actor.userId, payload: { suspendedBy: actor.userId } }),
       ]);
     });
   }
@@ -132,8 +133,8 @@ export class CompaniesService {
         [companyId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({ eventType: 'CompanyReactivated', companyId, payload: { reactivatedBy: actor.userId } }),
-        createDomainEvent({ eventType: 'CompanyProvisioningRequested', companyId, payload: {} }),
+        createDomainEvent({ eventType: 'CompanyReactivated', companyId, actorId: actor.userId, payload: { reactivatedBy: actor.userId } }),
+        createDomainEvent({ eventType: 'CompanyProvisioningRequested', companyId, actorId: actor.userId, payload: {} }),
       ]);
     });
   }
@@ -157,6 +158,7 @@ export class CompaniesService {
         createDomainEvent({
           eventType: 'CompanyProvisioningRequested',
           companyId,
+          actorId: actor.userId,
           payload: { requestedBy: actor.userId },
         }),
       ]);
@@ -164,13 +166,17 @@ export class CompaniesService {
   }
 
   /** Sends a new first-admin invitation, such as when the first one was lost. */
-  inviteFirstAdmin(actor: Principal, idValue: unknown, emailValue: unknown): Promise<CreatedInvitation> {
+  inviteFirstAdmin(
+    actor: Principal,
+    idValue: unknown,
+    emailValue: unknown,
+  ): Promise<{ invitation: CreatedInvitation; companyName: string }> {
     const email = normalizeEmail(emailValue);
     return this.#inCompany(idValue, async (tx, _companyId, current) => {
       if (current.status === 'suspended') {
         throw new TenancyError('conflict', 'Reactivate the company first.');
       }
-      return this.#access.inviteFirstAdminIn(tx, actor, email);
+      return { invitation: await this.#access.inviteFirstAdminIn(tx, actor, email), companyName: current.name };
     });
   }
 

@@ -31,6 +31,18 @@ export interface AppConfig {
   /** Attempts before a company's provisioning is marked as failed. */
   readonly provisioningMaxAttempts: number;
   readonly provisioningRetrySeconds: number;
+  readonly smtpHost: string;
+  readonly smtpPort: number;
+  /** The sender, such as "DreamDevOps <no-reply@example.com>". */
+  readonly smtpFrom: string;
+  readonly smtpSecurity: 'tls' | 'starttls' | 'none';
+  readonly smtpUsername: string | null;
+  readonly smtpPassword: string | null;
+  /** Allows http:// webhook addresses. For local testing only. */
+  readonly webhookAllowInsecure: boolean;
+  /** Allows webhooks to reach internal and local addresses. For local testing only. */
+  readonly webhookAllowPrivateNetworks: boolean;
+  readonly notificationRetrySeconds: number;
 }
 
 export class InvalidConfigError extends Error {
@@ -52,6 +64,17 @@ export function loadConfig(env: Environment): AppConfig {
   const keycloakIssuerUrl = url(env, 'KEYCLOAK_ISSUER_URL');
   const secureCookies = env.SECURE_COOKIES !== 'false';
   const requireVerifiedEmail = env.REQUIRE_VERIFIED_EMAIL !== 'false';
+  const smtpSecurity = env.SMTP_SECURITY ?? 'starttls';
+  if (smtpSecurity !== 'tls' && smtpSecurity !== 'starttls' && smtpSecurity !== 'none') {
+    throw new InvalidConfigError('SMTP_SECURITY must be tls, starttls or none.');
+  }
+  const webhookAllowInsecure = env.WEBHOOK_ALLOW_INSECURE === 'true';
+  const webhookAllowPrivateNetworks = env.WEBHOOK_ALLOW_PRIVATE_NETWORKS === 'true';
+  if (isProduction && (smtpSecurity === 'none' || webhookAllowInsecure || webhookAllowPrivateNetworks)) {
+    throw new InvalidConfigError(
+      'SMTP_SECURITY=none, WEBHOOK_ALLOW_INSECURE and WEBHOOK_ALLOW_PRIVATE_NETWORKS are for local testing only.',
+    );
+  }
   if (isProduction) {
     if (!keycloakIssuerUrl.startsWith('https://')) {
       throw new InvalidConfigError('KEYCLOAK_ISSUER_URL must use https in production.');
@@ -86,6 +109,15 @@ export function loadConfig(env: Environment): AppConfig {
     forgejoPassword: required(env, 'FORGEJO_BOT_PASSWORD'),
     provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),
     provisioningRetrySeconds: integer(env, 'PROVISIONING_RETRY_SECONDS', 30),
+    smtpHost: required(env, 'SMTP_HOST'),
+    smtpPort: integer(env, 'SMTP_PORT', 587),
+    smtpFrom: required(env, 'SMTP_FROM'),
+    smtpSecurity,
+    smtpUsername: env.SMTP_USERNAME || null,
+    smtpPassword: env.SMTP_PASSWORD || null,
+    webhookAllowInsecure,
+    webhookAllowPrivateNetworks,
+    notificationRetrySeconds: integer(env, 'NOTIFICATION_RETRY_SECONDS', 30),
   };
 }
 

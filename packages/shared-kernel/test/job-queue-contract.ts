@@ -47,6 +47,13 @@ export function describeJobQueueContract(name: string, createHarness: () => Prom
       await expect(harness.queue.send(queue, {}, { id })).resolves.toBeNull();
     });
 
+    it('refuses a job ID that is not a UUID', async () => {
+      const queue = queueName();
+      await harness.queue.createQueue(queue);
+
+      await expect(harness.queue.send(queue, {}, { id: 'not-a-uuid' })).rejects.toThrow();
+    });
+
     it('runs a failed job again', async () => {
       const queue = queueName();
       let calls = 0;
@@ -61,6 +68,43 @@ export function describeJobQueueContract(name: string, createHarness: () => Prom
       await harness.queue.send(queue, {});
 
       await harness.eventually(() => expect(calls).toBe(2));
+    });
+
+    it('works through a backlog quickly, not one job per polling interval', async () => {
+      const queue = queueName();
+      let done = 0;
+      await harness.queue.createQueue(queue);
+      await harness.queue.work(queue, async () => {
+        done += 1;
+      });
+      const started = Date.now();
+
+      for (let index = 0; index < 40; index += 1) {
+        await harness.queue.send(queue, { index });
+      }
+
+      await harness.eventually(() => expect(done).toBe(40));
+      expect(Date.now() - started).toBeLessThan(10_000);
+    });
+
+    it('retries only the job that failed, not the jobs beside it', async () => {
+      const queue = queueName();
+      const calls = new Map<number, number>();
+      await harness.queue.createQueue(queue, { retryLimit: 2, retryDelaySeconds: 1 });
+      await harness.queue.work(queue, async (job) => {
+        const index = (job.data as { index: number }).index;
+        calls.set(index, (calls.get(index) ?? 0) + 1);
+        if (index === 2 && calls.get(index) === 1) {
+          throw new Error('Temporary failure');
+        }
+      });
+
+      for (let index = 0; index < 5; index += 1) {
+        await harness.queue.send(queue, { index });
+      }
+
+      await harness.eventually(() => expect(calls.get(2)).toBe(2));
+      expect([0, 1, 3, 4].map((index) => calls.get(index))).toEqual([1, 1, 1, 1]);
     });
 
     it('moves a job to the dead letter queue when its retries run out', async () => {

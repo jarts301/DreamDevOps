@@ -12,6 +12,11 @@ process.env.RELAY_DATABASE_URL ??= roleUrl('relay', 'DREAMDEVOPS_DB_RELAY_PASSWO
 process.env.JOBS_DATABASE_URL ??= roleUrl('jobs', 'DREAMDEVOPS_DB_JOBS_PASSWORD');
 process.env.FORGEJO_URL ??= `http://localhost:${process.env.FORGEJO_HTTP_PORT ?? '3000'}`;
 process.env.FORGEJO_BOT_USERNAME ??= 'dreamdevops-bot';
+// Mailpit catches every email locally and sends nothing out.
+process.env.SMTP_HOST ??= 'localhost';
+process.env.SMTP_PORT ??= process.env.MAILPIT_SMTP_PORT ?? '1025';
+process.env.SMTP_SECURITY ??= 'none';
+process.env.SMTP_FROM ??= 'DreamDevOps <no-reply@example.com>';
 process.env.KEYCLOAK_ISSUER_URL ??= `http://localhost:${process.env.KEYCLOAK_PORT ?? '8081'}/realms/dreamdevops`;
 process.env.KEYCLOAK_CLIENT_ID ??= 'dreamdevops-dashboard';
 process.env.KEYCLOAK_CLIENT_SECRET ??= process.env.DREAMDEVOPS_KEYCLOAK_CLIENT_SECRET;

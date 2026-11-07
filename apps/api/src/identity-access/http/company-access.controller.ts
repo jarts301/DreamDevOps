@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Req } from '@nestjs/common';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
+import { InvitationEmails } from '../../notifications/application/invitation-emails.ts';
 import { CompanyAccessService } from '../application/company-access.service.ts';
 
 const MANAGE_USERS = 'company-users:manage';
@@ -9,9 +10,14 @@ const MANAGE_USERS = 'company-users:manage';
 @Controller('company')
 export class CompanyAccessController {
   readonly #service: CompanyAccessService;
+  readonly #emails: InvitationEmails;
 
-  constructor(@Inject(CompanyAccessService) service: CompanyAccessService) {
+  constructor(
+    @Inject(CompanyAccessService) service: CompanyAccessService,
+    @Inject(InvitationEmails) emails: InvitationEmails,
+  ) {
     this.#service = service;
+    this.#emails = emails;
   }
 
   @RequirePermissions(MANAGE_USERS)
@@ -48,8 +54,17 @@ export class CompanyAccessController {
 
   @RequirePermissions(MANAGE_USERS)
   @Post('invitations')
-  invite(@Req() request: ApiRequest, @Body() body: { email?: unknown; role?: unknown }): Promise<object> {
-    return this.#service.invite(request.principal!, body?.email, body?.role);
+  async invite(@Req() request: ApiRequest, @Body() body: { email?: unknown; role?: unknown }): Promise<object> {
+    const principal = request.principal!;
+    const invitation = await this.#service.invite(principal, body?.email, body?.role);
+    const emailSent = await this.#emails.send({
+      to: invitation.email,
+      companyName: principal.companyName ?? 'your company',
+      role: invitation.role,
+      invitedBy: principal.displayName,
+      invitation,
+    });
+    return { ...invitation, emailSent };
   }
 
   @RequirePermissions(MANAGE_USERS)

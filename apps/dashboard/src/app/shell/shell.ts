@@ -15,7 +15,10 @@ interface NavigationItem {
 const NAVIGATION: readonly NavigationItem[] = [
   { path: '/', label: 'Overview' },
   { path: '/team', label: 'Team', permission: 'company-users:manage' },
+  { path: '/audit', label: 'Audit log', permission: 'audit:read' },
+  { path: '/notifications', label: 'Notifications', permission: 'notifications:manage' },
   { path: '/platform/companies', label: 'Companies', permission: 'companies:manage' },
+  { path: '/platform/activity', label: 'My activity', permission: 'audit:read-own' },
 ];
 
 @Component({

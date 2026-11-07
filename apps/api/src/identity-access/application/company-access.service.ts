@@ -15,6 +15,8 @@ const invalidInvitation = () => new AccessError('not-found', 'This invitation is
 
 export interface CreatedInvitation {
   readonly id: string;
+  readonly email: string;
+  readonly role: string;
   /** Shown once. Only its hash is stored. */
   readonly token: string;
   readonly expiresAt: string;
@@ -76,6 +78,7 @@ export class CompanyAccessService {
         createDomainEvent({
           eventType: 'RoleGranted',
           companyId: currentCompanyId(),
+          actorId: actor.userId,
           payload: { userId, role, previousRole: currentRole, grantedBy: actor.userId },
         }),
       ]);
@@ -94,6 +97,7 @@ export class CompanyAccessService {
         createDomainEvent({
           eventType: 'MemberRemoved',
           companyId: currentCompanyId(),
+          actorId: actor.userId,
           payload: { userId, role: currentRole, removedBy: actor.userId },
         }),
       ]);
@@ -138,6 +142,7 @@ export class CompanyAccessService {
         createDomainEvent({
           eventType: 'InvitationRevoked',
           companyId: currentCompanyId(),
+          actorId: actor.userId,
           payload: { invitationId: id, revokedBy: actor.userId },
         }),
       ]);
@@ -207,6 +212,7 @@ export class CompanyAccessService {
           createDomainEvent({
             eventType: 'RoleGranted',
             companyId: currentCompanyId(),
+            actorId: principal.userId,
             payload: { userId: principal.userId, role: invitation.role_key, invitationId: invitation.id },
           }),
         ]);
@@ -292,8 +298,9 @@ async function createInvitation(
     createDomainEvent({
       eventType: 'UserInvited',
       companyId: currentCompanyId(),
+      actorId: invitedBy,
       payload: { invitationId: invitation.id, role, invitedBy },
     }),
   ]);
-  return { id: invitation.id, token, expiresAt: invitation.expires_at.toISOString() };
+  return { id: invitation.id, token, expiresAt: invitation.expires_at.toISOString(), email, role };
 }

@@ -11,6 +11,13 @@ describe('createDomainEvent', () => {
     expect(event.eventVersion).toBe(1);
     expect(new Date(event.occurredAt).toISOString()).toBe(event.occurredAt);
     expect(event.payload).toEqual({ name: 'api' });
+    expect(event.actorId).toBeNull();
+  });
+
+  it('records who caused it', () => {
+    const event = createDomainEvent({ eventType: 'ApplicationCreated', companyId, actorId: 'user-7', payload: {} });
+
+    expect(event.actorId).toBe('user-7');
   });
 
   it('gives each event its own ID', () => {

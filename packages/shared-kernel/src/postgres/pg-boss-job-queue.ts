@@ -9,6 +9,8 @@ export interface PgBossJobQueueOptions {
   readonly onError?: (error: unknown) => void;
 }
 
+const BATCH_SIZE = 10;
+
 /** The pg-boss adapter for the JobQueue port. Its tables live in their own schema. */
 export class PgBossJobQueue implements JobQueue {
   readonly #boss: PgBoss;
@@ -40,14 +42,32 @@ export class PgBossJobQueue implements JobQueue {
     return this.#boss.send(queue, data, options.id === undefined ? {} : { id: options.id });
   }
 
+  /**
+   * Takes up to 10 jobs at a time and keeps fetching while a backlog remains, instead of
+   * waiting a polling interval after every job. Each job succeeds or fails on its own, so
+   * one failure never runs the jobs beside it again.
+   */
   async work(queue: string, handler: JobHandler): Promise<void> {
     await this.#boss.work<object>(
       queue,
-      { pollingIntervalSeconds: this.#pollingIntervalSeconds },
+      {
+        pollingIntervalSeconds: this.#pollingIntervalSeconds,
+        batchSize: BATCH_SIZE,
+        burstWhenBatchFull: true,
+        perJobResults: true,
+      },
       async (jobs) => {
+        const results: { id: string; status: 'completed' | 'failed'; output?: object }[] = [];
         for (const job of jobs) {
-          await handler({ id: job.id, data: job.data });
+          try {
+            await handler({ id: job.id, data: job.data });
+            results.push({ id: job.id, status: 'completed' });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Job failed';
+            results.push({ id: job.id, status: 'failed', output: { message } });
+          }
         }
+        return results;
       },
     );
   }

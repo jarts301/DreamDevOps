@@ -9,6 +9,7 @@ interface OutboxRow {
   event_type: string;
   event_version: number;
   company_id: string;
+  actor_id: string | null;
   occurred_at: Date;
   payload: object;
 }
@@ -50,7 +51,7 @@ export class OutboxRelay {
     try {
       await client.query('BEGIN');
       const { rows } = await client.query<OutboxRow>(
-        `SELECT sequence, event_id, event_type, event_version, company_id, occurred_at, payload
+        `SELECT sequence, event_id, event_type, event_version, company_id, actor_id, occurred_at, payload
          FROM kernel.outbox
          WHERE published_at IS NULL
          ORDER BY sequence
@@ -117,6 +118,7 @@ function toDomainEvent(row: OutboxRow): DomainEvent {
     eventType: row.event_type,
     eventVersion: row.event_version,
     companyId: parseCompanyId(row.company_id),
+    actorId: row.actor_id,
     occurredAt: row.occurred_at.toISOString(),
     payload: row.payload,
   };

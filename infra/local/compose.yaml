@@ -88,6 +88,19 @@ services:
       retries: 30
       start_period: 20s
 
+  # Catches every email the platform sends, and shows it in a web page. Nothing leaves.
+  mailpit:
+    image: axllent/mailpit:v1.33.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILPIT_WEB_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # Creates the first Forgejo administrator, then exits. Safe to run repeatedly.
   forgejo-init:
     image: codeberg.org/forgejo/forgejo:15.0.11
@@ -152,6 +165,8 @@ services:
         condition: service_completed_successfully
       platform-db-init:
         condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
 
   smoke-test:
     image: postgres:17.11-alpine

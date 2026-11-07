@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Req } from '@nestjs/common';
 import { RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
+import { InvitationEmails } from '../../notifications/application/invitation-emails.ts';
 import { CompaniesService } from '../application/companies.service.ts';
 
 const MANAGE_COMPANIES = 'companies:manage';
@@ -10,9 +11,14 @@ const MANAGE_COMPANIES = 'companies:manage';
 @RequirePermissions(MANAGE_COMPANIES)
 export class CompaniesController {
   readonly #service: CompaniesService;
+  readonly #emails: InvitationEmails;
 
-  constructor(@Inject(CompaniesService) service: CompaniesService) {
+  constructor(
+    @Inject(CompaniesService) service: CompaniesService,
+    @Inject(InvitationEmails) emails: InvitationEmails,
+  ) {
     this.#service = service;
+    this.#emails = emails;
   }
 
   @Get()
@@ -21,8 +27,19 @@ export class CompaniesController {
   }
 
   @Post()
-  create(@Req() request: ApiRequest, @Body() body: { name?: unknown; firstAdminEmail?: unknown }): Promise<object> {
-    return this.#service.create(request.principal!, body?.name, body?.firstAdminEmail);
+  async create(
+    @Req() request: ApiRequest,
+    @Body() body: { name?: unknown; firstAdminEmail?: unknown },
+  ): Promise<object> {
+    const { company, invitation } = await this.#service.create(request.principal!, body?.name, body?.firstAdminEmail);
+    const emailSent = await this.#emails.send({
+      to: invitation.email,
+      companyName: company.name,
+      role: invitation.role,
+      invitedBy: request.principal!.displayName,
+      invitation,
+    });
+    return { company, invitation: { ...invitation, emailSent } };
   }
 
   @Patch(':id')
@@ -50,11 +67,19 @@ export class CompaniesController {
   }
 
   @Post(':id/first-admin-invitation')
-  inviteFirstAdmin(
+  async inviteFirstAdmin(
     @Req() request: ApiRequest,
     @Param('id') id: string,
     @Body() body: { email?: unknown },
   ): Promise<object> {
-    return this.#service.inviteFirstAdmin(request.principal!, id, body?.email);
+    const { invitation, companyName } = await this.#service.inviteFirstAdmin(request.principal!, id, body?.email);
+    const emailSent = await this.#emails.send({
+      to: invitation.email,
+      companyName,
+      role: invitation.role,
+      invitedBy: request.principal!.displayName,
+      invitation,
+    });
+    return { ...invitation, emailSent };
   }
 }

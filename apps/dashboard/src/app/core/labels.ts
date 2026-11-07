@@ -20,6 +20,7 @@ const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'deployments-production:run': 'Deploy to production and roll back',
   'dashboards:view': 'View dashboards and logs',
   'audit:read': 'Read the audit log',
+  'notifications:manage': 'Manage chat notifications',
 };
 
 export function roleName(role: string | null): string {

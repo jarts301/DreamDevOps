@@ -16,9 +16,17 @@ export async function appendToOutbox(
       throw new CrossTenantEventError();
     }
     await transaction.query(
-      `INSERT INTO kernel.outbox (event_id, event_type, event_version, company_id, occurred_at, payload)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [event.eventId, event.eventType, event.eventVersion, event.companyId, event.occurredAt, event.payload],
+      `INSERT INTO kernel.outbox (event_id, event_type, event_version, company_id, actor_id, occurred_at, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        event.eventId,
+        event.eventType,
+        event.eventVersion,
+        event.companyId,
+        event.actorId,
+        event.occurredAt,
+        event.payload,
+      ],
     );
   }
 }

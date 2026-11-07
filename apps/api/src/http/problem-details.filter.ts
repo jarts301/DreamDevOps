@@ -2,6 +2,7 @@ import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Logger 
 import { MissingTenantContextError } from '@dreamdevops/shared-kernel';
 import type { Response } from 'express';
 import { AccessError } from '../identity-access/domain/errors.ts';
+import { NotificationError } from '../notifications/domain/errors.ts';
 import { TenancyError } from '../tenancy/domain/errors.ts';
 
 const GENERIC_MESSAGES: Readonly<Record<number, string>> = {
@@ -33,7 +34,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     if (error instanceof HttpException) {
       return { status: error.getStatus(), detail: error.message };
     }
-    if (error instanceof AccessError || error instanceof TenancyError) {
+    if (error instanceof AccessError || error instanceof TenancyError || error instanceof NotificationError) {
       const statuses = { invalid: 400, 'not-found': 404, conflict: 409 };
       return { status: statuses[error.kind], detail: error.message };
     }

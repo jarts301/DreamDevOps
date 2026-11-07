@@ -8,7 +8,8 @@ import { configureApp } from '../src/configure-app.ts';
 import { IDENTITY_PROVIDER, USER_DIRECTORY } from '../src/identity-access/application/ports.ts';
 import { SESSION_STORE } from '../src/session/session-store.ts';
 import { DATABASE_POOL } from '../src/tokens.ts';
-import { FakeIdentityProvider, InMemoryUserDirectory } from './fakes.ts';
+import { MAILER } from '../src/notifications/application/ports.ts';
+import { FakeIdentityProvider, FakeMailer, InMemoryUserDirectory } from './fakes.ts';
 import { InMemorySessionStore } from './in-memory-session-store.ts';
 
 export const PUBLIC_URL = 'http://api.test';
@@ -39,6 +40,15 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   forgejoPassword: 'unused',
   provisioningMaxAttempts: 3,
   provisioningRetrySeconds: 1,
+  smtpHost: 'unused',
+  smtpPort: 25,
+  smtpFrom: 'DreamDevOps <no-reply@example.com>',
+  smtpSecurity: 'none',
+  smtpUsername: null,
+  smtpPassword: null,
+  webhookAllowInsecure: false,
+  webhookAllowPrivateNetworks: false,
+  notificationRetrySeconds: 1,
   ...overrides,
 });
 
@@ -59,6 +69,7 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
       controllers: options.controllers ?? [],
       overrides: [
         ...(options.background ? [] : [{ provide: BACKGROUND_PROCESSING, useClass: NoBackgroundProcessing }]),
+        { provide: MAILER, useValue: new FakeMailer() },
         ...(options.overrides ?? []),
       ],
     }),

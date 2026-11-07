@@ -307,6 +307,35 @@ th {
   font-weight: 600;
 }
 
+.field-wide {
+  margin: 12px 0;
+}
+
+.checkbox-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 6px 16px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.checkbox-group legend {
+  padding: 0 4px;
+  font-size: 0.9rem;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox input {
+  min-height: auto;
+}
+
 .cell-note {
   margin: 4px 0 0;
   color: var(--color-muted);
