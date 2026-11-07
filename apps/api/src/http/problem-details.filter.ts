@@ -1,6 +1,7 @@
 import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Logger } from '@nestjs/common';
 import { MissingTenantContextError } from '@dreamdevops/shared-kernel';
 import type { Response } from 'express';
+import { EditionError } from '../editions/domain/errors.ts';
 import { AccessError } from '../identity-access/domain/errors.ts';
 import { NotificationError } from '../notifications/domain/errors.ts';
 import { TenancyError } from '../tenancy/domain/errors.ts';
@@ -36,6 +37,10 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     }
     if (error instanceof AccessError || error instanceof TenancyError || error instanceof NotificationError) {
       const statuses = { invalid: 400, 'not-found': 404, conflict: 409 };
+      return { status: statuses[error.kind], detail: error.message };
+    }
+    if (error instanceof EditionError) {
+      const statuses = { invalid: 400, 'not-found': 404, conflict: 409, 'not-entitled': 403 };
       return { status: statuses[error.kind], detail: error.message };
     }
     // A route that needs a company was called by a user who doesn't act for one.

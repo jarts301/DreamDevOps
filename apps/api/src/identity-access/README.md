@@ -21,7 +21,7 @@ Each user has one role per company. Roles and their permissions are stored as da
 | Read the audit log | `audit:read` | Yes | | | | |
 | Manage chat notifications | `notifications:manage` | Yes | | | | |
 
-**Platform Admin** comes from the `platform-admin` realm role in Keycloak, not from a company. It grants `companies:manage` and `audit:read-own`, and no access to company data.
+**Platform Admin** comes from the `platform-admin` realm role in Keycloak, not from a company. It grants `companies:manage`, `audit:read-own` and `editions:manage`, and no access to company data.
 
 ## How a company gets its people
 
@@ -29,7 +29,7 @@ Each user has one role per company. Roles and their permissions are stored as da
 2. The person signs in or registers through Keycloak, then calls `POST /invitations/accept` with the token. Accepting needs both the token and a matching signed-in email address.
 3. The Company Admin invites everyone else with `POST /company/invitations`.
 
-Invitations last 7 days and work once. The token is returned once, to the person who created the invitation, and only its hash is stored. It has to be passed on by hand until Audit and Notification can send email.
+Invitations last 7 days and work once. The token is returned once, to the person who created the invitation, and only its hash is stored. It's also emailed to the invited address.
 
 ## Routes
 

@@ -1,5 +1,5 @@
 import type { Routes } from '@angular/router';
-import { authGuard, permissionGuard } from './core/guards';
+import { authGuard, companyGuard, permissionGuard } from './core/guards';
 import { Shell } from './shell/shell';
 
 export const routes: Routes = [
@@ -38,6 +38,19 @@ export const routes: Routes = [
         title: 'Notifications · DreamDevOps',
         canActivate: [permissionGuard('notifications:manage')],
         loadComponent: () => import('./features/notifications/notifications').then((module) => module.Notifications),
+      },
+      {
+        path: 'edition',
+        title: 'Edition · DreamDevOps',
+        canActivate: [companyGuard],
+        loadComponent: () => import('./features/editions/company-edition').then((module) => module.CompanyEdition),
+      },
+      {
+        path: 'platform/editions',
+        title: 'Editions · DreamDevOps',
+        canActivate: [permissionGuard('editions:manage')],
+        loadComponent: () =>
+          import('./features/editions/platform-editions').then((module) => module.PlatformEditions),
       },
       {
         path: 'platform/activity',

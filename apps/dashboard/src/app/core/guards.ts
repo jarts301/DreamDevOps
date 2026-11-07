@@ -29,3 +29,11 @@ export const permissionGuard =
     await session.load();
     return session.can(permission) ? true : router.parseUrl('/not-allowed');
   };
+
+/** Screens about the user's company, which only make sense when they act for one. */
+export const companyGuard: CanActivateFn = async () => {
+  const session = inject(SessionService);
+  const router = inject(Router);
+  const user = await session.load();
+  return user?.companyId ? true : router.parseUrl('/not-allowed');
+};

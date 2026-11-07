@@ -26,7 +26,7 @@ To see the whole flow:
 
 1. Sign in as `dev-platform-admin`, open **Companies**, and enter a company name and `dev-company-admin@example.com`. The company shows **Active** once its Git organization is set up.
 2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, sign in as `dev-company-admin` and accept.
-3. Open **Team** to invite others and manage roles, **Audit log** to see every change, and **Notifications** to post events to a chat tool.
+3. Open **Team** to invite others and manage roles, **Audit log** to see every change, **Notifications** to post events to a chat tool, and **Edition** to see what the company's edition includes. Platform admins set each company's edition under **Editions**.
 
 ## Layout
 

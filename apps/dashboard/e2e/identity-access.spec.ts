@@ -201,6 +201,23 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByText(/The log is intact\. \d+ entries checked\./)).toBeVisible();
   });
 
+  await test.step('the company admin sees what the Community Edition includes', async () => {
+    await adminPage.getByRole('link', { name: 'Edition', exact: true }).click();
+    await expect(adminPage.getByText('Your company uses the Community Edition.')).toBeVisible();
+    await expect(adminPage.getByText('Tamper-evident audit history')).toBeVisible();
+    await expect(adminPage.getByText('These need the Commercial Edition.', { exact: false })).toBeVisible();
+  });
+
+  await test.step('the platform admin sees each company’s edition, and only Community is installed', async () => {
+    await expect(page.getByRole('link', { name: 'Edition', exact: true })).toHaveCount(0);
+    await page.getByRole('link', { name: 'Editions' }).click();
+    await expect(page.getByText('Only the Community Edition is installed', { exact: false })).toBeVisible();
+    const edition = page.getByRole('combobox', { name: `Edition of ${companyName}` });
+    await expect(edition).toHaveValue('community');
+    await expect(edition).toBeDisabled();
+    await page.getByRole('link', { name: 'Companies' }).click();
+  });
+
   await test.step('suspending the company blocks its members at once', async () => {
     await page.getByRole('button', { name: `Suspend ${companyName}` }).click();
     await page.getByRole('button', { name: 'Confirm suspension' }).click();

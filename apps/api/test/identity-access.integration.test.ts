@@ -218,7 +218,7 @@ describe('user directory', () => {
     const directory = new PostgresUserDirectory(appPool);
     const id = await directory.recordLogin({ ...external, subject: 'directory|admin', platformAdmin: true });
     await expect(directory.loadAccess(id)).resolves.toMatchObject({
-      platformPermissions: ['audit:read-own', 'companies:manage'],
+      platformPermissions: ['audit:read-own', 'companies:manage', 'editions:manage'],
     });
 
     await directory.recordLogin({ ...external, subject: 'directory|admin', platformAdmin: false });

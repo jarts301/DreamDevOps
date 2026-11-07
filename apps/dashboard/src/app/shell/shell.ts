@@ -9,6 +9,8 @@ interface NavigationItem {
   readonly path: string;
   readonly label: string;
   readonly permission?: string;
+  /** Shown only to users who act for a company. */
+  readonly needsCompany?: boolean;
 }
 
 // Feature areas mirror the backend's contexts. Each new module adds its screens here.
@@ -17,7 +19,9 @@ const NAVIGATION: readonly NavigationItem[] = [
   { path: '/team', label: 'Team', permission: 'company-users:manage' },
   { path: '/audit', label: 'Audit log', permission: 'audit:read' },
   { path: '/notifications', label: 'Notifications', permission: 'notifications:manage' },
+  { path: '/edition', label: 'Edition', needsCompany: true },
   { path: '/platform/companies', label: 'Companies', permission: 'companies:manage' },
+  { path: '/platform/editions', label: 'Editions', permission: 'editions:manage' },
   { path: '/platform/activity', label: 'My activity', permission: 'audit:read-own' },
 ];
 
@@ -95,8 +99,11 @@ export class Shell {
   protected readonly memberships = computed(() => this.session.user()?.memberships ?? []);
   protected readonly navigation = computed(() => {
     // Reading the user here keeps the menu current after switching company.
-    this.session.user();
-    return NAVIGATION.filter((item) => item.permission === undefined || this.session.can(item.permission));
+    const hasCompany = Boolean(this.session.user()?.companyId);
+    return NAVIGATION.filter(
+      (item) =>
+        (item.permission === undefined || this.session.can(item.permission)) && (!item.needsCompany || hasCompany),
+    );
   });
 
   protected async chooseCompany(event: Event): Promise<void> {

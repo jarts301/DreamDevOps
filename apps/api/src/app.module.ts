@@ -30,6 +30,11 @@ import { ProvisioningSaga } from './tenancy/application/provisioning.ts';
 import { CompaniesController } from './tenancy/http/companies.controller.ts';
 import { ForgejoGitProvider } from './tenancy/infrastructure/forgejo-git-provider.ts';
 import { SESSION_STORE } from './session/session-store.ts';
+import { Entitlements } from './editions/application/entitlements.ts';
+import { ENTITLEMENT_PROVIDER, type EntitlementProvider } from './editions/application/ports.ts';
+import { EditionsController } from './editions/http/editions.controller.ts';
+import { FeatureGuard } from './editions/http/feature.guard.ts';
+import { CommunityEntitlementProvider } from './editions/infrastructure/community-entitlement-provider.ts';
 import { APP_CONFIG, DATABASE_POOL } from './tokens.ts';
 
 const MINUTE_MS = 60_000;
@@ -40,6 +45,11 @@ export interface AppModuleOptions {
   readonly controllers?: readonly Type<unknown>[];
   /** Replaces providers, such as the database, for tests that don't need the real one. */
   readonly overrides?: readonly Provider[];
+  /**
+   * Decides which commercial features each company has. The Commercial Edition passes
+   * its own provider here. Without one, the free Community provider is used.
+   */
+  readonly entitlementProvider?: EntitlementProvider;
 }
 
 @Module({})
@@ -77,6 +87,7 @@ export class AppModule implements OnApplicationShutdown {
         CompaniesController,
         AuditController,
         NotificationRulesController,
+        EditionsController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -168,12 +179,19 @@ export class AppModule implements OnApplicationShutdown {
             new NotificationRules(database, sender, { allowInsecureWebhooks: config.webhookAllowInsecure }),
           inject: [TenantDatabase, WEBHOOK_SENDER],
         },
+        { provide: ENTITLEMENT_PROVIDER, useValue: options.entitlementProvider ?? new CommunityEntitlementProvider() },
+        {
+          provide: Entitlements,
+          useFactory: (database: TenantDatabase, provider: EntitlementProvider) => new Entitlements(database, provider),
+          inject: [TenantDatabase, ENTITLEMENT_PROVIDER],
+        },
         { provide: BACKGROUND_PROCESSING, useClass: BackgroundProcessing },
         // Guards run in this order, so rate limits apply before any database work.
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: OriginGuard },
         { provide: APP_GUARD, useClass: SessionGuard },
         { provide: APP_GUARD, useClass: AuthorizationGuard },
+        { provide: APP_GUARD, useClass: FeatureGuard },
         { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
         { provide: APP_FILTER, useClass: ProblemDetailsFilter },
         ...(options.overrides ?? []),

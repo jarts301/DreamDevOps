@@ -9,6 +9,7 @@ const ROLE_NAMES: Readonly<Record<string, string>> = {
 const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'companies:manage': 'Start new companies',
   'audit:read-own': 'Read your own audit history',
+  'editions:manage': "Set each company's edition",
   'company-users:manage': 'Manage company users and roles',
   'targets:connect': 'Connect deployment targets',
   'applications:create': 'Create applications',

@@ -81,7 +81,7 @@ export class InMemoryUserDirectory implements UserDirectory {
       email: external.email,
       emailVerified: external.emailVerified,
       displayName: external.displayName,
-      platformPermissions: external.platformAdmin ? ['audit:read-own', 'companies:manage'] : [],
+      platformPermissions: external.platformAdmin ? ['audit:read-own', 'companies:manage', 'editions:manage'] : [],
       memberships: previous?.memberships ?? SAMPLE_MEMBERSHIPS[name] ?? [],
     });
     return id;

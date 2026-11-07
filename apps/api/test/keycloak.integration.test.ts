@@ -150,7 +150,7 @@ describe('login through a real Keycloak', () => {
 
     await agent.get('/api/v1/sample/platform-only').expect(200);
     const { body } = await agent.get('/api/v1/auth/me').expect(200);
-    expect(body.permissions).toEqual(['audit:read-own', 'companies:manage']);
+    expect(body.permissions).toEqual(['audit:read-own', 'companies:manage', 'editions:manage']);
     expect(body.companyId).toBeNull();
   });
 

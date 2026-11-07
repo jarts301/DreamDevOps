@@ -11,7 +11,17 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   CompanyReactivated: 'The company is reactivated',
   CompanyProvisioned: 'The company finishes setting up',
   CompanyProvisioningFailed: 'Setting up the company fails',
+  CompanyEditionChanged: "The company's edition changes",
 };
+
+const EDITION_NAMES: Readonly<Record<string, string>> = {
+  community: 'Community',
+  commercial: 'Commercial',
+};
+
+export function editionName(edition: unknown): string {
+  return typeof edition === 'string' ? (EDITION_NAMES[edition] ?? edition) : 'an edition';
+}
 
 const ROLE_NAMES: Readonly<Record<string, string>> = {
   'company-admin': 'Company Admin',
@@ -50,6 +60,8 @@ export function summarize(event: DomainEvent, companyName: string): string {
         return 'The company finished setting up.';
       case 'CompanyProvisioningFailed':
         return 'Setting up the company failed.';
+      case 'CompanyEditionChanged':
+        return `The company moved to the ${editionName(payload.edition)} Edition.`;
       default:
         return `${event.eventType} happened.`;
     }
