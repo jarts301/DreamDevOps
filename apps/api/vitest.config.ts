@@ -19,7 +19,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['test/**/*.test.ts'],
-          exclude: ['test/**/*.integration.test.ts'],
+          exclude: ['test/**/*.integration.test.ts', 'test/**/*.scaffold.test.ts'],
         },
       },
       {
@@ -29,6 +29,15 @@ export default defineConfig({
           include: ['test/**/*.integration.test.ts'],
           testTimeout: 30_000,
           hookTimeout: 120_000,
+        },
+      },
+      {
+        resolve,
+        test: {
+          // Slow, and needs Docker and the internet, so it runs only on request.
+          name: 'scaffolds',
+          include: ['test/**/*.scaffold.test.ts'],
+          testTimeout: 900_000,
         },
       },
     ],

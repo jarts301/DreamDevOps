@@ -16,6 +16,8 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   ApplicationUpdated: 'An application is renamed or its description changes',
   ApplicationArchived: 'An application is archived',
   ApplicationRestored: 'An archived application is restored',
+  RepositoryCreated: "An application's repository is ready",
+  RepositoryCreationFailed: "Creating an application's repository fails",
 };
 
 const EDITION_NAMES: Readonly<Record<string, string>> = {
@@ -74,6 +76,10 @@ export function summarize(event: DomainEvent, companyName: string): string {
         return `The application "${String(payload.name)}" was archived.`;
       case 'ApplicationRestored':
         return `The application "${String(payload.name)}" was restored.`;
+      case 'RepositoryCreated':
+        return `The repository of "${String(payload.name)}" is ready: ${String(payload.repository)}.`;
+      case 'RepositoryCreationFailed':
+        return `Creating the repository of "${String(payload.name)}" failed.`;
       case 'CompanyEditionChanged':
         return `The company moved to the ${editionName(payload.edition)} Edition.`;
       default:

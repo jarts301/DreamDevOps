@@ -215,8 +215,32 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await adminPage.getByLabel('Description (optional)').fill('Charges customers');
     await adminPage.getByRole('button', { name: 'Register application' }).click();
     await expect(adminPage.getByText('Billing API is registered.')).toBeVisible();
-    await expect(adminPage.getByRole('cell', { name: 'billing-api' })).toBeVisible();
-    await expect(adminPage.getByRole('cell', { name: 'Not created yet' })).toBeVisible();
+    await expect(adminPage.getByRole('cell', { name: 'billing-api', exact: true })).toBeVisible();
+  });
+
+  const repository = `${companyName.toLowerCase().replaceAll(' ', '-')}/billing-api`;
+
+  await test.step('its repository is created in Forgejo from the blueprint', async () => {
+    // The page refreshes on its own while the repository is being created.
+    await expect(adminPage.getByRole('link', { name: repository })).toBeVisible({ timeout: 60_000 });
+    await expect(adminPage.getByText('From node-service 1.0.0')).toBeVisible();
+  });
+
+  await test.step('the company admin signs in to Forgejo through Keycloak and joins their team', async () => {
+    await expect(adminPage.getByText('Sign in to Forgejo once with your DreamDevOps account')).toBeVisible();
+    const [forgejo] = await Promise.all([
+      adminPage.waitForEvent('popup'),
+      adminPage.getByRole('link', { name: 'Sign in to Forgejo' }).click(),
+    ]);
+    // Already signed in to Keycloak, so Forgejo creates the account without asking again.
+    await forgejo.waitForURL((url) => url.port === '3000' && !url.pathname.startsWith('/user/'));
+    await adminPage.getByRole('button', { name: 'Check again' }).click();
+    await expect(adminPage.getByText("You're in the Readers team now.")).toBeVisible();
+
+    await forgejo.goto(`http://localhost:3000/${repository}`);
+    await expect(forgejo.getByText('package.json', { exact: true })).toBeVisible();
+    await expect(forgejo.getByText('develop', { exact: true }).first()).toBeVisible();
+    await forgejo.close();
   });
 
   await test.step('the platform admin sees each company’s edition, and only Community is installed', async () => {

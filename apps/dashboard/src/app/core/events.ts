@@ -34,6 +34,12 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return `Archived the application "${String(payload['name'])}"`;
     case 'ApplicationRestored':
       return `Restored the application "${String(payload['name'])}"`;
+    case 'RepositoryRequested':
+      return "Asked for an application's repository to be created";
+    case 'RepositoryCreated':
+      return `Created the repository ${String(payload['repository'])} for "${String(payload['name'])}"`;
+    case 'RepositoryCreationFailed':
+      return `Creating the repository of "${String(payload['name'])}" failed: ${String(payload['reason'] ?? 'unknown reason')}`;
     case 'CompanyEditionChanged':
       return `Moved the company from the ${editionName(payload['previousEdition'])} to the ${editionName(payload['edition'])} Edition`;
     case 'UserInvited':

@@ -37,6 +37,10 @@ services:
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
       KC_HEALTH_ENABLED: "true"
+      # Browsers and the API use this address. Forgejo reaches Keycloak inside Docker,
+      # so its server-to-server calls use whichever address it asked on.
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8081}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?copy .env.example to .env}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?copy .env.example to .env}
     volumes:
@@ -70,7 +74,17 @@ services:
       FORGEJO__server__SSH_DOMAIN: localhost
       FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_PORT:-2222}
       FORGEJO__security__INSTALL_LOCK: "true"
-      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      # Accounts are created only by signing in through Keycloak, never by a sign-up form.
+      FORGEJO__service__DISABLE_REGISTRATION: "false"
+      FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "true"
+      FORGEJO__service__SHOW_REGISTRATION_BUTTON: "false"
+      FORGEJO__openid__ENABLE_OPENID_SIGNIN: "false"
+      FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      # The username is the Keycloak user ID, which the platform knows and no one can choose.
+      FORGEJO__oauth2_client__USERNAME: userid
+      # Never attach a Keycloak login to an existing local account, such as the bot's.
+      FORGEJO__oauth2_client__ACCOUNT_LINKING: disabled
+      FORGEJO__oauth2_client__UPDATE_AVATAR: "false"
       # Only the platform bot may create organizations, one for each company.
       FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
     volumes:
@@ -113,11 +127,29 @@ services:
       FORGEJO_BOT_USERNAME: dreamdevops-bot
       FORGEJO_BOT_EMAIL: dreamdevops-bot@example.com
       FORGEJO_BOT_PASSWORD: ${FORGEJO_BOT_PASSWORD:?copy the new values from .env.example to .env}
+      FORGEJO_KEYCLOAK_CLIENT_SECRET: ${FORGEJO_KEYCLOAK_CLIENT_SECRET:?copy the new values from .env.example to .env}
     volumes:
       - forgejo-data:/data
       - ./ops:/ops:ro
     depends_on:
       forgejo:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  # Adds the Forgejo login client to Keycloak, then exits. Safe to run repeatedly.
+  keycloak-init:
+    image: quay.io/keycloak/keycloak:26.8.1
+    entrypoint: ["/bin/bash", "/ops/keycloak-init.sh"]
+    environment:
+      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      FORGEJO_KEYCLOAK_CLIENT_SECRET: ${FORGEJO_KEYCLOAK_CLIENT_SECRET:?copy the new values from .env.example to .env}
+      FORGEJO_PUBLIC_URL: http://localhost:${FORGEJO_HTTP_PORT:-3000}
+    volumes:
+      - ./ops:/ops:ro
+    depends_on:
+      keycloak:
         condition: service_healthy
 
   # Creates the DreamDevOps database and roles, then exits. Safe to run repeatedly.
@@ -162,6 +194,8 @@ services:
       forgejo:
         condition: service_healthy
       forgejo-init:
+        condition: service_completed_successfully
+      keycloak-init:
         condition: service_completed_successfully
       platform-db-init:
         condition: service_completed_successfully

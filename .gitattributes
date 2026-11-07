@@ -1,2 +1,5 @@
 # Shell scripts run inside Linux containers, so they must keep LF line endings.
 *.sh text eol=lf
+# Blueprints are copied byte for byte into new repositories and checked by checksum,
+# so they keep LF line endings on every operating system.
+blueprints/** text eol=lf

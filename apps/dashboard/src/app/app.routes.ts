@@ -28,6 +28,11 @@ export const routes: Routes = [
         loadComponent: () => import('./features/catalog/applications').then((module) => module.Applications),
       },
       {
+        path: 'blueprints',
+        title: 'Blueprints · DreamDevOps',
+        loadComponent: () => import('./features/catalog/blueprints').then((module) => module.Blueprints),
+      },
+      {
         path: 'team',
         title: 'Team · DreamDevOps',
         canActivate: [permissionGuard('company-users:manage')],

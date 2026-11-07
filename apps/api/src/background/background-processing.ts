@@ -5,6 +5,8 @@ import pg from 'pg';
 import { AuditLog } from '../audit/application/audit-log.ts';
 import type { AppConfig } from '../config/app-config.ts';
 import { DELIVERY_QUEUE, type DeliveryJob, NotificationRules } from '../notifications/application/notification-rules.ts';
+import { REPOSITORY_TRIGGERS, Repositories } from '../source-governance/application/repositories.ts';
+import { ACCESS_TRIGGERS, SourceAccess } from '../source-governance/application/source-access.ts';
 import { PROVISIONING_TRIGGERS, ProvisioningSaga } from '../tenancy/application/provisioning.ts';
 import { APP_CONFIG } from '../tokens.ts';
 
@@ -21,6 +23,8 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
   readonly #saga: ProvisioningSaga;
   readonly #audit: AuditLog;
   readonly #notifications: NotificationRules;
+  readonly #repositories: Repositories;
+  readonly #access: SourceAccess;
   #queue: PgBossJobQueue | undefined;
   #relay: OutboxRelay | undefined;
   #relayPool: pg.Pool | undefined;
@@ -30,11 +34,15 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     @Inject(ProvisioningSaga) saga: ProvisioningSaga,
     @Inject(AuditLog) audit: AuditLog,
     @Inject(NotificationRules) notifications: NotificationRules,
+    @Inject(Repositories) repositories: Repositories,
+    @Inject(SourceAccess) access: SourceAccess,
   ) {
     this.#config = config;
     this.#saga = saga;
     this.#audit = audit;
     this.#notifications = notifications;
+    this.#repositories = repositories;
+    this.#access = access;
   }
 
   async onApplicationBootstrap(): Promise<void> {
@@ -52,6 +60,33 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
         retryLimit: this.#config.provisioningMaxAttempts + 2,
         retryDelaySeconds: this.#config.provisioningRetrySeconds,
       });
+    }
+    const retries = {
+      retryLimit: this.#config.provisioningMaxAttempts + 2,
+      retryDelaySeconds: this.#config.provisioningRetrySeconds,
+    };
+    for (const eventType of REPOSITORY_TRIGGERS) {
+      await bus.subscribe(
+        eventType,
+        'source-repositories',
+        (event) => this.#repositories.provision((event.payload as { applicationId: string }).applicationId),
+        retries,
+      );
+    }
+    for (const [eventType, archived] of [
+      ['ApplicationArchived', true],
+      ['ApplicationRestored', false],
+    ] as const) {
+      await bus.subscribe(
+        eventType,
+        'source-archiving',
+        (event) =>
+          this.#repositories.syncArchived((event.payload as { applicationId: string }).applicationId, archived),
+        retries,
+      );
+    }
+    for (const eventType of ACCESS_TRIGGERS) {
+      await bus.subscribe(eventType, 'source-access', () => this.#access.syncCompany(), retries);
     }
     await bus.subscribeToAll('audit', (event) => this.#audit.record(event), { retryLimit: 10, retryDelaySeconds: 5 });
     await bus.subscribeToAll('notifications', (event) => this.#notifications.fanOut(event, queue), {

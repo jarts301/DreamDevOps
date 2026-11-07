@@ -26,7 +26,8 @@ To see the whole flow:
 
 1. Sign in as `dev-platform-admin`, open **Companies**, and enter a company name and `dev-company-admin@example.com`. The company shows **Active** once its Git organization is set up.
 2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, sign in as `dev-company-admin` and accept.
-3. Open **Applications** to register the company's applications, **Team** to invite others and manage roles, **Audit log** to see every change, **Notifications** to post events to a chat tool, and **Edition** to see what the company's edition includes. Platform admins set each company's edition under **Editions**.
+3. Open **Applications** to register the company's applications and follow their repositories into Forgejo, **Team** to invite others and manage roles, **Audit log** to see every change, **Notifications** to post events to a chat tool, and **Edition** to see what the company's edition includes. Platform admins set each company's edition under **Editions**. **Blueprints** shows what each application type starts with.
+4. To use Git, choose **Sign in to Forgejo** on the **Applications** page, then **Check again** to join your team.
 
 ## Layout
 

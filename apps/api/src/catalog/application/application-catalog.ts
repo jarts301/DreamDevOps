@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
+import type { BlueprintLibrary } from '../../blueprints/infrastructure/blueprint-library.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import {
   type ApplicationStatus,
@@ -16,6 +17,14 @@ export interface ApplicationType {
   readonly key: string;
   readonly name: string;
   readonly description: string;
+  /** The blueprint new applications of this type start from. */
+  readonly blueprint: {
+    readonly key: string;
+    readonly version: string;
+    readonly name: string;
+    readonly language: string;
+    readonly framework: string;
+  };
 }
 
 export interface ApplicationView {
@@ -50,20 +59,39 @@ const SELECT_APPLICATIONS = 'SELECT * FROM catalog.applications_view() a';
 /** Each company's register of applications. Every query runs in the current company. */
 export class ApplicationCatalog {
   readonly #database: TenantDatabase;
+  readonly #blueprints: BlueprintLibrary;
 
-  constructor(database: TenantDatabase) {
+  constructor(database: TenantDatabase, blueprints: BlueprintLibrary) {
     this.#database = database;
+    this.#blueprints = blueprints;
   }
 
-  /** The types a company can register now. */
+  /** The types a company can register now: available ones that have a blueprint. */
   async types(): Promise<ApplicationType[]> {
     currentCompanyId();
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<ApplicationType>(
+    const rows = await this.#database.transaction(async (tx) => {
+      const { rows: types } = await tx.query<{ key: string; name: string; description: string }>(
         `SELECT key, name, description FROM catalog.application_types
          WHERE available ORDER BY sort_order, name`,
       );
-      return rows;
+      return types;
+    });
+    return rows.flatMap((type) => {
+      const blueprint = this.#blueprints.latestForType(type.key);
+      return blueprint === null
+        ? []
+        : [
+            {
+              ...type,
+              blueprint: {
+                key: blueprint.key,
+                version: blueprint.version,
+                name: blueprint.name,
+                language: blueprint.language,
+                framework: blueprint.framework,
+              },
+            },
+          ];
     });
   }
 
@@ -99,6 +127,9 @@ export class ApplicationCatalog {
       // One registration per company at a time, so two people can't take the same name or short name.
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalog:' || $1, 0))", [companyId]);
       const type = await availableType(tx, input.type);
+      if (this.#blueprints.latestForType(type) === null) {
+        throw new CatalogError('invalid', 'Choose one of the available application types.');
+      }
       await assertNameFree(tx, name, null);
       const slug = await freeSlug(tx, name);
       await tx.query(

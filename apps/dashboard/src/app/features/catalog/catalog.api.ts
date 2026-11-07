@@ -8,6 +8,53 @@ export interface ApplicationType {
   readonly key: string;
   readonly name: string;
   readonly description: string;
+  readonly blueprint: {
+    readonly key: string;
+    readonly version: string;
+    readonly name: string;
+    readonly language: string;
+    readonly framework: string;
+  };
+}
+
+export type RepositoryStatus = 'creating' | 'ready' | 'failed';
+
+export interface Repository {
+  readonly applicationId: string;
+  readonly status: RepositoryStatus;
+  readonly fullName: string;
+  readonly url: string;
+  readonly blueprint: { readonly key: string; readonly version: string } | null;
+  readonly lastError: string | null;
+}
+
+export type TeamKey = 'developers' | 'tech-leads' | 'readers';
+
+export interface SourceAccess {
+  readonly signInUrl: string;
+  readonly gitUrl: string;
+  readonly hasAccount: boolean;
+  readonly team: TeamKey;
+}
+
+export interface Blueprint {
+  readonly key: string;
+  readonly version: string;
+  readonly applicationType: string;
+  readonly name: string;
+  readonly description: string;
+  readonly language: string;
+  readonly framework: string;
+  readonly runtime: {
+    readonly port: number;
+    readonly livenessPath: string;
+    readonly readinessPath: string;
+    readonly resources: { readonly cpu: string; readonly memory: string };
+    readonly configuration: string;
+  };
+  readonly telemetry: string;
+  readonly pipeline: string;
+  readonly strategies: readonly string[];
 }
 
 export interface Application {
@@ -44,6 +91,28 @@ export class CatalogApi {
 
   archive(id: string): Promise<unknown> {
     return firstValueFrom(this.#http.post(`/api/v1/company/applications/${encodeURIComponent(id)}/archive`, {}));
+  }
+
+  repositories(): Promise<Repository[]> {
+    return firstValueFrom(this.#http.get<Repository[]>('/api/v1/company/repositories'));
+  }
+
+  requestRepository(applicationId: string): Promise<unknown> {
+    return firstValueFrom(
+      this.#http.post(`/api/v1/company/applications/${encodeURIComponent(applicationId)}/repository`, {}),
+    );
+  }
+
+  sourceAccess(): Promise<SourceAccess> {
+    return firstValueFrom(this.#http.get<SourceAccess>('/api/v1/company/source-access'));
+  }
+
+  syncSourceAccess(): Promise<SourceAccess> {
+    return firstValueFrom(this.#http.post<SourceAccess>('/api/v1/company/source-access/sync', {}));
+  }
+
+  blueprints(): Promise<Blueprint[]> {
+    return firstValueFrom(this.#http.get<Blueprint[]>('/api/v1/blueprints'));
   }
 
   restore(id: string): Promise<unknown> {

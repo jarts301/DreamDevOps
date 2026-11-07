@@ -32,10 +32,12 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Audit | A history of every change per company that shows any tampering, and platform admins' own activity |
 | Notifications | Emailed invitation links, and company rules that post chosen events to Slack or any webhook |
 | Applications | A register of each company's applications, with their type, that can be edited, archived and restored |
+| Repositories | Each application gets a private Forgejo repository from its type's blueprint, with Git Flow branches, branch and tag protection, and teams that follow company roles |
+| Blueprints | Versioned starting points: a Node.js service and an Angular frontend, each with tests, a Dockerfile and a pipeline |
 | Editions | Every company on the free Community Edition, with a per-company setting and an extension point for the Commercial Edition |
 | Dashboard | Screens for all of the above, in light and dark themes |
 
-Creating repositories for applications, building images, deploying, and monitoring aren't available yet. Companies can't be deleted.
+Running pipelines, building images, deploying, and monitoring aren't available yet. Companies can't be deleted.
 
 ## Prerequisites
 
@@ -140,6 +142,8 @@ Run these from the repository root.
 | `npm run test:unit` | Runs only the tests that need no services |
 | `npm run test:integration` | Runs only the tests against throwaway containers |
 | `npm run test:e2e` | Runs the browser test of the main flow |
+| `npm run test:scaffolds` | Checks that every blueprint produces a project that builds and runs. Slow, and needs Docker and the internet. |
+| `npm run blueprints:publish` | Publishes new blueprint versions. See [Blueprints](blueprints/README.md). |
 
 ## Configuration
 
@@ -214,6 +218,8 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Audit](apps/api/src/audit/README.md) | The tamper-evident history of changes |
 | [Notifications](apps/api/src/notifications/README.md) | Invitation emails, chat rules and webhook safety |
 | [Application catalog](apps/api/src/catalog/README.md) | Application types, registering and archiving applications |
+| [Blueprints](blueprints/README.md) | What each blueprint sets up, and how to publish a new version |
+| [Source governance](apps/api/src/source-governance/README.md) | Repositories, Git Flow rules, teams and Git accounts |
 | [Editions and entitlements](apps/api/src/editions/README.md) | Editions, the feature catalog, and how commercial features plug in |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |

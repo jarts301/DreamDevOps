@@ -30,6 +30,13 @@ import { ProvisioningSaga } from './tenancy/application/provisioning.ts';
 import { CompaniesController } from './tenancy/http/companies.controller.ts';
 import { ForgejoGitProvider } from './tenancy/infrastructure/forgejo-git-provider.ts';
 import { SESSION_STORE } from './session/session-store.ts';
+import { BlueprintsController } from './blueprints/http/blueprints.controller.ts';
+import { BlueprintLibrary } from './blueprints/infrastructure/blueprint-library.ts';
+import { SOURCE_HOST, type SourceHost } from './source-governance/application/ports.ts';
+import { Repositories } from './source-governance/application/repositories.ts';
+import { SourceAccess } from './source-governance/application/source-access.ts';
+import { SourceController } from './source-governance/http/source.controller.ts';
+import { ForgejoSourceHost } from './source-governance/infrastructure/forgejo-source-host.ts';
 import { ApplicationCatalog } from './catalog/application/application-catalog.ts';
 import { ApplicationsController } from './catalog/http/applications.controller.ts';
 import { Entitlements } from './editions/application/entitlements.ts';
@@ -91,6 +98,8 @@ export class AppModule implements OnApplicationShutdown {
         NotificationRulesController,
         EditionsController,
         ApplicationsController,
+        BlueprintsController,
+        SourceController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -188,10 +197,42 @@ export class AppModule implements OnApplicationShutdown {
           useFactory: (database: TenantDatabase, provider: EntitlementProvider) => new Entitlements(database, provider),
           inject: [TenantDatabase, ENTITLEMENT_PROVIDER],
         },
+        // Loaded once at startup, so a broken or changed blueprint stops the API from starting.
+        { provide: BlueprintLibrary, useFactory: () => BlueprintLibrary.load(config.blueprintsDir) },
         {
           provide: ApplicationCatalog,
-          useFactory: (database: TenantDatabase) => new ApplicationCatalog(database),
-          inject: [TenantDatabase],
+          useFactory: (database: TenantDatabase, blueprints: BlueprintLibrary) =>
+            new ApplicationCatalog(database, blueprints),
+          inject: [TenantDatabase, BlueprintLibrary],
+        },
+        {
+          provide: SOURCE_HOST,
+          useFactory: () =>
+            new ForgejoSourceHost({
+              url: config.forgejoUrl,
+              username: config.forgejoUsername,
+              password: config.forgejoPassword,
+            }),
+        },
+        {
+          provide: Repositories,
+          useFactory: (
+            database: TenantDatabase,
+            host: SourceHost,
+            catalog: ApplicationCatalog,
+            blueprints: BlueprintLibrary,
+          ) =>
+            new Repositories(database, host, catalog, blueprints, {
+              maxAttempts: config.provisioningMaxAttempts,
+              publicUrl: config.forgejoPublicUrl,
+            }),
+          inject: [TenantDatabase, SOURCE_HOST, ApplicationCatalog, BlueprintLibrary],
+        },
+        {
+          provide: SourceAccess,
+          useFactory: (database: TenantDatabase, host: SourceHost) =>
+            new SourceAccess(database, host, config.forgejoPublicUrl),
+          inject: [TenantDatabase, SOURCE_HOST],
         },
         { provide: BACKGROUND_PROCESSING, useClass: BackgroundProcessing },
         // Guards run in this order, so rate limits apply before any database work.

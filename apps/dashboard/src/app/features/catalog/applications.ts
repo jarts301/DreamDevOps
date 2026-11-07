@@ -1,9 +1,28 @@
 import { DatePipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, inject, type OnInit, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { errorMessage } from '../../core/api-error';
 import { SessionService } from '../../core/session.service';
-import { type Application, type ApplicationStatus, type ApplicationType, CatalogApi } from './catalog.api';
+import {
+  type Application,
+  type ApplicationStatus,
+  type ApplicationType,
+  CatalogApi,
+  type Repository,
+  type SourceAccess,
+  type TeamKey,
+} from './catalog.api';
+
+const TEAMS: Readonly<Record<TeamKey, { label: string; ability: string }>> = {
+  'tech-leads': { label: 'Tech Leads', ability: 'push code and approve pull requests' },
+  developers: { label: 'Developers', ability: 'push code and open pull requests' },
+  readers: { label: 'Readers', ability: 'read the code' },
+};
+
+/** How often the list refreshes while a repository is being created. */
+const REFRESH_MS = 3_000;
+/** How long after registering a missing repository counts as still being created. */
+const NEW_APPLICATION_MS = 2 * 60_000;
 
 type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null;
 
@@ -48,9 +67,35 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
           </button>
         </form>
         @if (chosenType(); as type) {
-          <p class="cell-note">{{ type.name }}: {{ type.description }}</p>
+          <p class="cell-note">
+            {{ type.name }}: {{ type.description }}. It starts from the {{ type.blueprint.name }} blueprint
+            {{ type.blueprint.version }}, in {{ type.blueprint.language }} with {{ type.blueprint.framework }}.
+          </p>
         }
-        <p class="cell-note">Registering doesn't create a repository yet.</p>
+        <p class="cell-note">
+          Registering creates a private repository from the blueprint, with Git Flow branches and rules.
+        </p>
+      </section>
+    }
+
+    @if (access(); as current) {
+      <section class="card" aria-labelledby="git-heading">
+        <h2 id="git-heading">Your Git access</h2>
+        @if (current.hasAccount) {
+          <p>You're in the {{ teamLabel(current.team) }} team in Forgejo, so you can {{ teamAbility(current.team) }}.</p>
+          <a class="button" [href]="current.gitUrl" target="_blank" rel="noopener">Open Forgejo</a>
+        } @else {
+          <p>
+            Sign in to Forgejo once with your DreamDevOps account, then check again here. You'll join the
+            {{ teamLabel(current.team) }} team, so you can {{ teamAbility(current.team) }}.
+          </p>
+          <div class="form-row">
+            <a class="button button-primary" [href]="current.signInUrl" target="_blank" rel="noopener">
+              Sign in to Forgejo
+            </a>
+            <button type="button" class="button" [disabled]="working()" (click)="checkAccess()">Check again</button>
+          </div>
+        }
       </section>
     }
 
@@ -86,6 +131,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
             </thead>
             <tbody>
               @for (application of applications(); track application.id) {
+                @let repository = repositories().get(application.id);
                 <tr>
                   <td>
                     {{ application.name }}
@@ -95,7 +141,47 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
                   </td>
                   <td>{{ application.type.name }}</td>
                   <td><code>{{ application.slug }}</code></td>
-                  <td><span class="muted">Not created yet</span></td>
+                  <td>
+                    @if (repository === undefined && isNew(application)) {
+                      <span class="status">Being created…</span>
+                    } @else if (repository === undefined) {
+                      <span class="muted">Not created</span>
+                      @if (canManage() && application.status === 'active') {
+                        <p class="cell-note">
+                          <button
+                            type="button"
+                            class="button"
+                            [attr.aria-label]="'Create the repository of ' + application.name"
+                            [disabled]="working()"
+                            (click)="requestRepository(application)"
+                          >
+                            Create repository
+                          </button>
+                        </p>
+                      }
+                    } @else if (repository.status === 'ready') {
+                      <a [href]="repository.url" target="_blank" rel="noopener">{{ repository.fullName }}</a>
+                      @if (repository.blueprint; as blueprint) {
+                        <p class="cell-note">From {{ blueprint.key }} {{ blueprint.version }}</p>
+                      }
+                    } @else if (repository.status === 'creating') {
+                      <span class="status">Being created…</span>
+                    } @else {
+                      <span class="status" data-status="provisioning-failed">Failed</span>
+                      <p class="cell-note">{{ repository.lastError }}</p>
+                      @if (canManage() && application.status === 'active') {
+                        <button
+                          type="button"
+                          class="button"
+                          [attr.aria-label]="'Try creating the repository of ' + application.name + ' again'"
+                          [disabled]="working()"
+                          (click)="requestRepository(application)"
+                        >
+                          Try again
+                        </button>
+                      }
+                    }
+                  </td>
                   <td>
                     {{ application.createdAt | date: 'mediumDate' }}
                     @if (application.createdBy?.displayName; as creator) {
@@ -169,13 +255,16 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
     </section>
   `,
 })
-export class Applications implements OnInit {
+export class Applications implements OnInit, OnDestroy {
   readonly #api = inject(CatalogApi);
   readonly #forms = inject(NonNullableFormBuilder);
   readonly #session = inject(SessionService);
+  #refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
   protected readonly applications = signal<Application[]>([]);
   protected readonly types = signal<ApplicationType[]>([]);
+  protected readonly repositories = signal<ReadonlyMap<string, Repository>>(new Map());
+  protected readonly access = signal<SourceAccess | null>(null);
   protected readonly status = signal<ApplicationStatus>('active');
   protected readonly loading = signal(true);
   protected readonly working = signal(false);
@@ -213,6 +302,52 @@ export class Applications implements OnInit {
       await this.#refresh();
     });
     this.loading.set(false);
+    // Git access isn't needed to use the page, so a failure here only hides the card.
+    try {
+      this.access.set(await this.#api.sourceAccess());
+    } catch {
+      this.access.set(null);
+    }
+  }
+
+  ngOnDestroy(): void {
+    clearTimeout(this.#refreshTimer);
+  }
+
+  /**
+   * A repository is created in the background, so for a moment after registering there's
+   * no record of it yet. Such an application shows as being created, not as missing.
+   */
+  protected isNew(application: Application): boolean {
+    return application.status === 'active' && Date.now() - Date.parse(application.createdAt) < NEW_APPLICATION_MS;
+  }
+
+  protected teamLabel(team: TeamKey): string {
+    return TEAMS[team].label;
+  }
+
+  protected teamAbility(team: TeamKey): string {
+    return TEAMS[team].ability;
+  }
+
+  protected async checkAccess(): Promise<void> {
+    await this.#attempt(async () => {
+      const access = await this.#api.syncSourceAccess();
+      this.access.set(access);
+      this.notice.set(
+        access.hasAccount
+          ? `You're in the ${this.teamLabel(access.team)} team now.`
+          : "Forgejo doesn't have your account yet. Sign in to Forgejo first.",
+      );
+    });
+  }
+
+  protected async requestRepository(application: Application): Promise<void> {
+    await this.#attempt(async () => {
+      await this.#api.requestRepository(application.id);
+      this.notice.set(`The repository of ${application.name} is being created.`);
+      await this.#refresh();
+    });
   }
 
   protected isEditing(application: Application, kind: NonNullable<Editing>['kind']): boolean {
@@ -268,8 +403,18 @@ export class Applications implements OnInit {
     });
   }
 
+  /** Reloads the list, and keeps reloading while any repository is being created. */
   async #refresh(): Promise<void> {
-    this.applications.set(await this.#api.list(this.status()));
+    clearTimeout(this.#refreshTimer);
+    const [applications, repositories] = await Promise.all([this.#api.list(this.status()), this.#api.repositories()]);
+    this.applications.set(applications);
+    this.repositories.set(new Map(repositories.map((repository) => [repository.applicationId, repository])));
+    const waiting = applications.some(
+      (application) => this.isNew(application) && !this.repositories().has(application.id),
+    );
+    if (waiting || repositories.some((repository) => repository.status === 'creating')) {
+      this.#refreshTimer = setTimeout(() => void this.#attempt(() => this.#refresh()), REFRESH_MS);
+    }
   }
 
   async #attempt(work: () => Promise<void>): Promise<void> {

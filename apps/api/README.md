@@ -40,7 +40,7 @@ All routes start with `/api/v1`.
 | `GET /auth/callback` | Public | Finishes login and creates the session |
 | `GET /auth/me` | Signed in | Shows the signed-in user |
 | `POST /auth/logout` | Signed in | Ends the session |
-| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md) and [Application Catalog](src/catalog/README.md) guides |
+| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md), [Application Catalog](src/catalog/README.md) and [Source Governance](src/source-governance/README.md) guides |
 | `GET /health/live` | Public | The process is running |
 | `GET /health/ready` | Public | The process can reach its database |
 
@@ -81,3 +81,4 @@ Each queue's worker takes up to 10 jobs at a time and keeps going while a backlo
 | `npm run test:unit` | The real application with in-memory fakes, with no Docker |
 | `npm run test:integration` | Access rules and company provisioning against a throwaway PostgreSQL, plus login through a throwaway Keycloak and organizations in a throwaway Forgejo, using Docker Desktop |
 | `npm test` | Both |
+| `npm run test:scaffolds` | Every blueprint version, rendered, installed, tested, built and run as a container. Needs Docker and the internet. |

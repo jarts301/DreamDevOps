@@ -1,0 +1,28 @@
+{
+  "key": "angular-frontend",
+  "version": "1.0.0",
+  "applicationType": "web-frontend",
+  "name": "Angular frontend",
+  "description": "An Angular app served by nginx, with settings read at runtime so one image serves every environment.",
+  "language": "TypeScript",
+  "framework": "Angular 22",
+  "runtime": {
+    "port": 8080,
+    "livenessPath": "/healthz",
+    "readinessPath": "/healthz",
+    "resources": {
+      "cpu": "100m",
+      "memory": "64Mi"
+    },
+    "configuration": "Environment variables written to /config.json"
+  },
+  "telemetry": "Request logs from nginx",
+  "pipeline": ".forgejo/workflows/ci.yaml",
+  "strategies": [
+    "recreate",
+    "rolling",
+    "blue-green",
+    "canary",
+    "a-b"
+  ]
+}

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import type { INestApplication, Provider, Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -9,7 +10,8 @@ import { IDENTITY_PROVIDER, USER_DIRECTORY } from '../src/identity-access/applic
 import { SESSION_STORE } from '../src/session/session-store.ts';
 import { DATABASE_POOL } from '../src/tokens.ts';
 import { MAILER } from '../src/notifications/application/ports.ts';
-import { FakeIdentityProvider, FakeMailer, InMemoryUserDirectory } from './fakes.ts';
+import { SOURCE_HOST } from '../src/source-governance/application/ports.ts';
+import { FakeIdentityProvider, FakeMailer, FakeSourceHost, InMemoryUserDirectory } from './fakes.ts';
 import { InMemorySessionStore } from './in-memory-session-store.ts';
 
 export const PUBLIC_URL = 'http://api.test';
@@ -38,6 +40,8 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   forgejoUrl: 'http://unused',
   forgejoUsername: 'unused',
   forgejoPassword: 'unused',
+  forgejoPublicUrl: 'http://git.test',
+  blueprintsDir: fileURLToPath(new URL('../../../blueprints', import.meta.url)),
   provisioningMaxAttempts: 3,
   provisioningRetrySeconds: 1,
   smtpHost: 'unused',
@@ -70,6 +74,7 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
       overrides: [
         ...(options.background ? [] : [{ provide: BACKGROUND_PROCESSING, useClass: NoBackgroundProcessing }]),
         { provide: MAILER, useValue: new FakeMailer() },
+        { provide: SOURCE_HOST, useValue: new FakeSourceHost() },
         ...(options.overrides ?? []),
       ],
     }),

@@ -42,3 +42,20 @@ curl -fsS -o /dev/null -X PATCH \
   -d "{\"login_name\": \"$FORGEJO_BOT_USERNAME\", \"source_id\": 0, \"allow_create_organization\": true, \"admin\": false}" \
   "http://forgejo:3000/api/v1/admin/users/$FORGEJO_BOT_USERNAME"
 echo "Forgejo platform bot may create organizations."
+
+# Members sign in to Forgejo through Keycloak. Their Forgejo username is their Keycloak
+# user ID, so the platform can find them, and no one can take a local account's name.
+if forgejo admin auth list --config "$config" | awk 'NR > 1 { print $2 }' | grep -qx keycloak; then
+  echo "Forgejo already signs in through Keycloak."
+else
+  forgejo admin auth add-oauth \
+    --config "$config" \
+    --name keycloak \
+    --provider openidConnect \
+    --key dreamdevops-forgejo \
+    --secret "$FORGEJO_KEYCLOAK_CLIENT_SECRET" \
+    --auto-discover-url http://keycloak:8080/realms/dreamdevops/.well-known/openid-configuration \
+    --scopes "openid email profile" \
+    --skip-local-2fa
+  echo "Forgejo now signs in through Keycloak."
+fi

@@ -20,6 +20,8 @@
     "db:migrate": "npm run db:migrate --workspaces --if-present",
     "start:api": "npm run start -w @dreamdevops/api",
     "start:dashboard": "npm run start -w @dreamdevops/dashboard",
-    "test:e2e": "npm run test:e2e -w @dreamdevops/dashboard"
+    "test:e2e": "npm run test:e2e -w @dreamdevops/dashboard",
+    "test:scaffolds": "npm run test:scaffolds -w @dreamdevops/api",
+    "blueprints:publish": "npm run blueprints:publish -w @dreamdevops/api"
   }
 }

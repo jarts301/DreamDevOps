@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 export interface AppConfig {
   readonly environment: string;
   readonly port: number;
@@ -28,6 +30,10 @@ export interface AppConfig {
   readonly forgejoUrl: string;
   readonly forgejoUsername: string;
   readonly forgejoPassword: string;
+  /** Forgejo's address in people's browsers, for links. Defaults to FORGEJO_URL. */
+  readonly forgejoPublicUrl: string;
+  /** The folder of versioned blueprints. Defaults to the repository's blueprints folder. */
+  readonly blueprintsDir: string;
   /** Attempts before a company's provisioning is marked as failed. */
   readonly provisioningMaxAttempts: number;
   readonly provisioningRetrySeconds: number;
@@ -55,6 +61,8 @@ export class InvalidConfigError extends Error {
 type Environment = Readonly<Record<string, string | undefined>>;
 
 const MINUTE_MS = 60_000;
+// Three folders up from both src/config and dist/config is the repository root.
+const DEFAULT_BLUEPRINTS_DIR = fileURLToPath(new URL('../../../../blueprints', import.meta.url));
 
 /** Reads settings once at startup and refuses to start if any are unsafe or missing. */
 export function loadConfig(env: Environment): AppConfig {
@@ -107,6 +115,8 @@ export function loadConfig(env: Environment): AppConfig {
     forgejoUrl: url(env, 'FORGEJO_URL'),
     forgejoUsername: required(env, 'FORGEJO_BOT_USERNAME'),
     forgejoPassword: required(env, 'FORGEJO_BOT_PASSWORD'),
+    forgejoPublicUrl: env.FORGEJO_PUBLIC_URL ? url(env, 'FORGEJO_PUBLIC_URL') : url(env, 'FORGEJO_URL'),
+    blueprintsDir: env.BLUEPRINTS_DIR || DEFAULT_BLUEPRINTS_DIR,
     provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),
     provisioningRetrySeconds: integer(env, 'PROVISIONING_RETRY_SECONDS', 30),
     smtpHost: required(env, 'SMTP_HOST'),

@@ -7,10 +7,41 @@ import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
 import { Applications } from './applications';
 
+const blueprint = (key: string, name: string, framework: string) => ({
+  key,
+  version: '1.0.0',
+  name,
+  language: 'TypeScript',
+  framework,
+});
 const TYPES = [
-  { key: 'restful-service', name: 'RESTful Service', description: 'An HTTP API' },
-  { key: 'web-frontend', name: 'Web Frontend', description: 'Runs in the browser' },
+  {
+    key: 'restful-service',
+    name: 'RESTful Service',
+    description: 'An HTTP API',
+    blueprint: blueprint('node-service', 'Node.js service', 'Fastify'),
+  },
+  {
+    key: 'web-frontend',
+    name: 'Web Frontend',
+    description: 'Runs in the browser',
+    blueprint: blueprint('angular-frontend', 'Angular frontend', 'Angular 22'),
+  },
 ];
+const ACCESS = {
+  signInUrl: 'http://git.test/user/oauth2/keycloak',
+  gitUrl: 'http://git.test',
+  hasAccount: true,
+  team: 'tech-leads',
+};
+const READY = {
+  applicationId: 'a-1',
+  status: 'ready',
+  fullName: 'acme/billing',
+  url: 'http://git.test/acme/billing',
+  blueprint: { key: 'node-service', version: '1.0.0' },
+  lastError: null,
+};
 
 const BILLING = {
   id: 'a-1',
@@ -55,13 +86,17 @@ describe('Applications', () => {
     await settle();
     await fixture.whenStable();
   };
-  const answerList = async (applications: object[], status = 'active') => {
+  const answerList = async (applications: object[], status = 'active', repositories: object[] = [READY]) => {
     await settle();
     const request = http.expectOne((candidate) => candidate.url === '/api/v1/company/applications');
     expect(request.request.params.get('status')).toBe(status);
     request.flush(applications);
+    http.expectOne('/api/v1/company/repositories').flush(repositories);
   };
-  const open = async (applications: object[] = [BILLING], options: { manager?: boolean } = { manager: true }) => {
+  const open = async (
+    applications: object[] = [BILLING],
+    options: { manager?: boolean; repositories?: object[]; access?: object } = { manager: true },
+  ) => {
     setUp(options.manager ? ['applications:create'] : ['dashboards:view']);
     const fixture = TestBed.createComponent(Applications);
     fixture.detectChanges();
@@ -69,7 +104,9 @@ describe('Applications', () => {
     if (options.manager) {
       http.expectOne('/api/v1/company/application-types').flush(TYPES);
     }
-    await answerList(applications);
+    await answerList(applications, 'active', options.repositories ?? [READY]);
+    await settle();
+    http.expectOne('/api/v1/company/source-access').flush(options.access ?? ACCESS);
     await render(fixture);
     return fixture;
   };
@@ -99,7 +136,10 @@ describe('Applications', () => {
     expect(text(fixture)).toContain('Charges customers');
     expect(text(fixture)).toContain('RESTful Service');
     expect(text(fixture)).toContain('by Ana Admin');
-    expect(text(fixture)).toContain('Not created yet');
+    const link = element(fixture).querySelector<HTMLAnchorElement>('a[href="http://git.test/acme/billing"]')!;
+    expect(link.textContent).toBe('acme/billing');
+    expect(link.rel).toBe('noopener');
+    expect(text(fixture)).toContain('From node-service 1.0.0');
   });
 
   it('shows members without the permission the list only', async () => {
@@ -113,6 +153,7 @@ describe('Applications', () => {
   it('registers an application of the chosen type', async () => {
     const fixture = await open([]);
     expect(text(fixture)).toContain('RESTful Service: An HTTP API');
+    expect(text(fixture)).toContain('It starts from the Node.js service blueprint 1.0.0, in TypeScript with Fastify.');
 
     await type(fixture, 'input[formcontrolname="name"]', 'Storefront');
     const select = element(fixture).querySelector<HTMLSelectElement>('select[formcontrolname="type"]')!;
@@ -185,16 +226,130 @@ describe('Applications', () => {
     const fixture = await open();
 
     button(fixture, 'Archived').click();
-    await answerList([LEGACY], 'archived');
+    await answerList([LEGACY], 'archived', []);
     await render(fixture);
     expect(text(fixture)).toContain('Archived applications');
     expect(button(fixture, 'Archived').getAttribute('aria-pressed')).toBe('true');
 
     button(fixture, 'Restore Legacy').click();
     http.expectOne('/api/v1/company/applications/a-2/restore').flush(null);
-    await answerList([], 'archived');
+    await answerList([], 'archived', []);
     await render(fixture);
 
     expect(text(fixture)).toContain('Legacy is restored.');
+  });
+  it('keeps refreshing while a repository is being created', async () => {
+    setUp(['dashboards:view']);
+    vi.useFakeTimers();
+    try {
+      const fixture = TestBed.createComponent(Applications);
+      fixture.detectChanges();
+      await vi.advanceTimersByTimeAsync(0);
+      http.expectOne((candidate) => candidate.url === '/api/v1/company/applications').flush([BILLING]);
+      http.expectOne('/api/v1/company/repositories').flush([{ ...READY, status: 'creating', blueprint: null }]);
+      await vi.advanceTimersByTimeAsync(0);
+      http.expectOne('/api/v1/company/source-access').flush(ACCESS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(text(fixture)).toContain('Being created…');
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      http.expectOne((candidate) => candidate.url === '/api/v1/company/applications').flush([BILLING]);
+      http.expectOne('/api/v1/company/repositories').flush([READY]);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      http.expectNone('/api/v1/company/repositories');
+      expect(text(fixture)).toContain('acme/billing');
+      fixture.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a just-registered application as being created until its repository appears', async () => {
+    setUp(['dashboards:view']);
+    vi.useFakeTimers();
+    try {
+      const fresh = { ...BILLING, createdAt: new Date().toISOString() };
+      const fixture = TestBed.createComponent(Applications);
+      fixture.detectChanges();
+      await vi.advanceTimersByTimeAsync(0);
+      http.expectOne((candidate) => candidate.url === '/api/v1/company/applications').flush([fresh]);
+      http.expectOne('/api/v1/company/repositories').flush([]);
+      await vi.advanceTimersByTimeAsync(0);
+      http.expectOne('/api/v1/company/source-access').flush(ACCESS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(text(fixture)).toContain('Being created…');
+      expect(text(fixture)).not.toContain('Not created');
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      http.expectOne((candidate) => candidate.url === '/api/v1/company/applications').flush([fresh]);
+      http.expectOne('/api/v1/company/repositories').flush([READY]);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      http.expectNone('/api/v1/company/repositories');
+      expect(text(fixture)).toContain('acme/billing');
+      fixture.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('explains a failed repository and tries again on request', async () => {
+    const fixture = await open([BILLING], {
+      manager: true,
+      repositories: [{ ...READY, status: 'failed', lastError: 'The Git service could not be reached.' }],
+    });
+    expect(text(fixture)).toContain('Failed');
+    expect(text(fixture)).toContain('The Git service could not be reached.');
+
+    button(fixture, 'Try creating the repository of Billing again').click();
+    const request = http.expectOne('/api/v1/company/applications/a-1/repository');
+    expect(request.request.method).toBe('POST');
+    request.flush(null);
+    await answerList([BILLING], 'active', [READY]);
+    await render(fixture);
+
+    expect(text(fixture)).toContain('The repository of Billing is being created.');
+  });
+
+  it('offers to create a repository for an application registered before repositories existed', async () => {
+    const fixture = await open([BILLING], { manager: true, repositories: [] });
+
+    expect(text(fixture)).toContain('Not created');
+    button(fixture, 'Create the repository of Billing').click();
+    http.expectOne('/api/v1/company/applications/a-1/repository').flush(null);
+    await answerList([BILLING], 'active', [READY]);
+    await render(fixture);
+
+    expect(text(fixture)).toContain('acme/billing');
+  });
+
+  it('shows members their Git team', async () => {
+    const fixture = await open([BILLING], { manager: false });
+
+    expect(text(fixture)).toContain(
+      "You're in the Tech Leads team in Forgejo, so you can push code and approve pull requests.",
+    );
+    expect(button(fixture, 'Create the repository of Billing')).toBeUndefined();
+  });
+
+  it('asks members without a Git account to sign in to Forgejo, then checks again', async () => {
+    const fixture = await open([BILLING], {
+      manager: false,
+      access: { ...ACCESS, hasAccount: false, team: 'developers' },
+    });
+    const signIn = [...element(fixture).querySelectorAll('a')].find(
+      (link) => link.textContent?.trim() === 'Sign in to Forgejo',
+    )!;
+    expect(signIn.href).toBe('http://git.test/user/oauth2/keycloak');
+
+    button(fixture, 'Check again').click();
+    const request = http.expectOne('/api/v1/company/source-access/sync');
+    expect(request.request.method).toBe('POST');
+    request.flush({ ...ACCESS, team: 'developers' });
+    await render(fixture);
+
+    expect(text(fixture)).toContain("You're in the Developers team now.");
+    expect(text(fixture)).toContain('push code and open pull requests');
   });
 });
