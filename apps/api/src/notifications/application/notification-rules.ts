@@ -2,20 +2,22 @@ import { createHash } from 'node:crypto';
 import {
   createDomainEvent,
   currentCompanyId,
+  describeError,
   type DomainEvent,
+  isUuid,
   type JobQueue,
   parseCompanyId,
   runWithCompany,
 } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { Principal } from '../../identity-access/domain/access.ts';
+import { normalizeName } from '../../shared/names.ts';
+import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
 import { NOTIFIABLE_EVENTS, summarize } from '../domain/event-catalog.ts';
 import { NotificationError } from '../domain/errors.ts';
 import { RefusedWebhookError, type WebhookSender } from './ports.ts';
 
 export const DELIVERY_QUEUE = 'notifications.deliver';
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type RuleKind = 'slack' | 'generic';
 
@@ -55,11 +57,18 @@ export interface NotificationRulesOptions {
 /** Company rules that post chosen events to a chat tool, and their delivery. */
 export class NotificationRules {
   readonly #database: TenantDatabase;
+  readonly #companies: CompanyDirectory;
   readonly #sender: WebhookSender;
   readonly #options: NotificationRulesOptions;
 
-  constructor(database: TenantDatabase, sender: WebhookSender, options: NotificationRulesOptions) {
+  constructor(
+    database: TenantDatabase,
+    companies: CompanyDirectory,
+    sender: WebhookSender,
+    options: NotificationRulesOptions,
+  ) {
     this.#database = database;
+    this.#companies = companies;
     this.#sender = sender;
     this.#options = options;
   }
@@ -143,7 +152,7 @@ export class NotificationRules {
       await this.#recordDelivery(rule.id, null);
       return { delivered: true, error: null };
     } catch (error) {
-      const reason = describe(error);
+      const reason = describeError(error);
       await this.#recordDelivery(rule.id, reason);
       return { delivered: false, error: reason };
     }
@@ -179,7 +188,7 @@ export class NotificationRules {
         await this.#sender.post(rule.url, message(rule.kind, job.event, summarize(job.event, companyName), companyName));
         await this.#recordDelivery(rule.id, null);
       } catch (error) {
-        await this.#recordDelivery(rule.id, describe(error));
+        await this.#recordDelivery(rule.id, describeError(error));
         if (!(error instanceof RefusedWebhookError)) {
           throw error;
         }
@@ -195,12 +204,7 @@ export class NotificationRules {
   }
 
   async #companyName(): Promise<string> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ name: string }>('SELECT name FROM tenancy.companies WHERE id = $1', [
-        currentCompanyId(),
-      ]);
-      return rows[0]?.name ?? 'Your company';
-    });
+    return (await this.#companies.find(currentCompanyId()))?.name ?? 'Your company';
   }
 
   async #recordDelivery(id: string, error: string | null): Promise<void> {
@@ -261,15 +265,16 @@ function toView(row: RuleRow): RuleView {
 }
 
 function ruleId(value: unknown): string {
-  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+  if (!isUuid(value)) {
     throw new NotificationError('invalid', 'The rule ID is not valid.');
   }
   return value.toLowerCase();
 }
 
 function ruleName(value: unknown): string {
-  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  if (name.length < 2 || name.length > 80) {
+  // Unlike company and application names, rule names have never refused control characters.
+  const name = normalizeName(value, { minLength: 2, maxLength: 80, refuseControlCharacters: false });
+  if (name === null) {
     throw new NotificationError('invalid', 'Enter a rule name between 2 and 80 characters.');
   }
   return name;
@@ -288,8 +293,4 @@ function chosenEvents(value: unknown): string[] {
     throw new NotificationError('invalid', 'Choose at least one event from the list.');
   }
   return types as string[];
-}
-
-function describe(error: unknown): string {
-  return (error instanceof Error ? error.message : 'Unknown error').slice(0, 300);
 }

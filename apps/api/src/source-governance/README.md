@@ -68,3 +68,7 @@ All routes start with `/api/v1`.
 |---|---|
 | `FORGEJO_PUBLIC_URL` | Forgejo's address in browsers, for links. Defaults to `FORGEJO_URL`. |
 | `BLUEPRINTS_DIR` | The blueprints folder. Defaults to the repository's `blueprints` folder. |
+
+## For other modules
+
+Other modules find an application's repository through `RepositoryLookup`, in `application/repository-lookup.ts`, and never read this module's tables. `RepositoryRequested` and `RepositoryCreated` are a contract, typed in `domain/events.ts`, because Builds reacts to `RepositoryCreated`. Change them only compatibly. See the [architecture guide](../../../../ARCHITECTURE.md).

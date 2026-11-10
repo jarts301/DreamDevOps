@@ -44,3 +44,7 @@ The bot, `dreamdevops-bot`, is a Forgejo user that isn't an administrator. It's 
 ## Events
 
 Changes publish `CompanyCreated`, `CompanyRenamed`, `CompanySuspended`, `CompanyReactivated`, `CompanyProvisioningRequested`, `CompanyProvisioned` and `CompanyProvisioningFailed`. Their payloads hold names and IDs, not email addresses.
+
+## For other modules
+
+Other modules read companies through `CompanyDirectory`, in `application/company-directory.ts`, which finds a company by ID or slug, or lists them all. It's in a Nest module of its own, `CompanyDirectoryModule`, so using it doesn't depend on the rest of Tenancy. No other module reads Tenancy's tables. See the [architecture guide](../../../../ARCHITECTURE.md).

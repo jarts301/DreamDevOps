@@ -14,6 +14,7 @@ import { FakeIdentityProvider } from './fakes.ts';
 import { describeSessionStoreContract } from './session-store-contract.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { type Agent, signIn as signInAs } from './support/integration.ts';
 
 @Controller('sample')
 class SampleController {
@@ -59,14 +60,7 @@ let appPool: pg.Pool;
 let ownerPool: pg.Pool;
 let app: INestApplication;
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
-type Agent = Awaited<ReturnType<typeof signIn>>;
+const signIn = (user: string) => signInAs(app, user);
 
 let companyCounter = 0;
 const newCompany = () => {
@@ -232,24 +226,35 @@ describe('user directory', () => {
 });
 
 describe('the role matrix', () => {
-  // The proposal's permission matrix, written out independently of the migration.
+  // The proposal's permission matrix, written out independently of the migrations
+  // (0012 added the environment permissions).
   const MATRIX: Record<string, string[]> = {
     'company-admin': [
       'applications:create',
       'audit:read',
       'company-users:manage',
       'dashboards:view',
+      'environments:manage',
       'notifications:manage',
       'targets:connect',
     ],
     developer: ['code:push', 'dashboards:view', 'deployments-test:run', 'feature-images:build'],
-    operator: ['dashboards:view', 'deployments-production:run', 'deployments-test:run', 'targets:connect'],
+    operator: [
+      'dashboards:view',
+      'deployments-production:run',
+      'deployments-test:run',
+      'environments-production:manage',
+      'environments:manage',
+      'targets:connect',
+    ],
     'tech-lead': [
       'applications:create',
       'code:push',
       'dashboards:view',
       'deployments-production:run',
       'deployments-test:run',
+      'environments-production:manage',
+      'environments:manage',
       'feature-images:build',
       'pull-requests:approve',
       'releases:start',

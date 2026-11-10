@@ -40,11 +40,13 @@ All routes start with `/api/v1`.
 | `GET /auth/callback` | Public | Finishes login and creates the session |
 | `GET /auth/me` | Signed in | Shows the signed-in user |
 | `POST /auth/logout` | Signed in | Ends the session |
-| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md), [Application Catalog](src/catalog/README.md) and [Source Governance](src/source-governance/README.md) guides |
+| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md), [Application Catalog](src/catalog/README.md), [Source Governance](src/source-governance/README.md), [Builds](src/builds/README.md) and [Environments](src/environments/README.md) guides |
 | `GET /health/live` | Public | The process is running |
 | `GET /health/ready` | Public | The process can reach its database |
 
 ## Rules for module code
+
+Each bounded context is a folder with `domain`, `application`, `infrastructure`, `http` and `messaging` layers, and a Nest module that puts it together. Contexts use each other only through what they publish. The [architecture guide](../../ARCHITECTURE.md) explains the layers and rules, and `test/architecture.test.ts` checks them.
 
 Every route must declare who can call it, with one of these decorators. A route with none is denied to everyone.
 
@@ -55,6 +57,8 @@ Every route must declare who can call it, with one of these decorators. A route 
 ```
 
 Each request runs in the signed-in user's company, which comes only from the server-side session. Use `TenantDatabase` for company data, and row-level security limits it to that company. If a user with no company calls such a route, the answer is 403.
+
+When a rule refuses a request, throw the context's subclass of the shared kernel's `DomainError`, such as `CatalogError`. Its kind, such as `conflict`, decides the status, and its message is shown to the user.
 
 ## Security controls
 
@@ -70,15 +74,15 @@ Behind a reverse proxy, set `TRUSTED_PROXIES` to the number of proxies, or every
 
 ## Background processing
 
-The API also runs the outbox relay and the job queue, which deliver saved events to the modules that react to them: company provisioning, the audit log and chat notifications. Each uses its own database role. They start and stop with the API.
+The API also runs the outbox relay and the job queue, which deliver saved events to the modules that react to them: company provisioning, repositories, image builds, deployments, the audit log and chat notifications. Each uses its own database role. They start and stop with the API. Each context sets up what it reacts to in its `messaging` folder.
 
-Each queue's worker takes up to 10 jobs at a time and keeps going while a backlog remains. Each job succeeds or fails on its own, so one failure never repeats the jobs beside it.
+Each queue's worker takes up to 10 jobs at a time and keeps going while a backlog remains. Each job succeeds or fails on its own, so one failure never repeats the jobs beside it. Builds take minutes, so their worker takes one at a time, with a heartbeat that lets a stopped API's build start again. Deployments work the same way, two at a time.
 
 ## Tests
 
 | Command, from this folder | What it runs |
 |---|---|
-| `npm run test:unit` | The real application with in-memory fakes, with no Docker |
-| `npm run test:integration` | Access rules and company provisioning against a throwaway PostgreSQL, plus login through a throwaway Keycloak and organizations in a throwaway Forgejo, using Docker Desktop |
+| `npm run test:unit` | The real application with in-memory fakes, the architecture rules, and the Forgejo, registry and Docker adapters against stand-ins, with no Docker |
+| `npm run test:integration` | Access rules, company provisioning, image builds and deployments against a throwaway PostgreSQL, plus login through a throwaway Keycloak and organizations in a throwaway Forgejo, using Docker Desktop |
 | `npm test` | Both |
 | `npm run test:scaffolds` | Every blueprint version, rendered, installed, tested, built and run as a container. Needs Docker and the internet. |

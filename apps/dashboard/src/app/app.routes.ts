@@ -28,6 +28,24 @@ export const routes: Routes = [
         loadComponent: () => import('./features/catalog/applications').then((module) => module.Applications),
       },
       {
+        path: 'builds',
+        title: 'Builds · DreamDevOps',
+        canActivate: [companyGuard],
+        loadComponent: () => import('./features/builds/builds').then((module) => module.Builds),
+      },
+      {
+        path: 'environments',
+        title: 'Environments · DreamDevOps',
+        canActivate: [companyGuard],
+        loadComponent: () => import('./features/environments/environments').then((module) => module.Environments),
+      },
+      {
+        path: 'hosting',
+        title: 'Hosting · DreamDevOps',
+        canActivate: [companyGuard],
+        loadComponent: () => import('./features/environments/hosting-targets').then((module) => module.HostingTargets),
+      },
+      {
         path: 'blueprints',
         title: 'Blueprints · DreamDevOps',
         loadComponent: () => import('./features/catalog/blueprints').then((module) => module.Blueprints),

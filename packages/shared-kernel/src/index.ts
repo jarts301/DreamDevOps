@@ -1,10 +1,14 @@
 export { parseCompanyId, InvalidCompanyIdError } from './domain/company-id.ts';
+export { isUuid } from './domain/identifiers.ts';
+export { DomainError } from './domain/domain-error.ts';
+export type { DomainErrorKind } from './domain/domain-error.ts';
+export { describeError, MAX_ERROR_DESCRIPTION_LENGTH } from './application/error-description.ts';
 export type { CompanyId } from './domain/company-id.ts';
 export { createDomainEvent, InvalidDomainEventError } from './domain/domain-event.ts';
 export type { DomainEvent, NewDomainEvent } from './domain/domain-event.ts';
 export { AggregateRoot } from './domain/aggregate-root.ts';
 export { runWithCompany, currentCompanyId, MissingTenantContextError } from './application/tenant-context.ts';
 export { deadLetterQueueName } from './application/ports.ts';
-export type { EventPublisher, Job, JobHandler, JobQueue, QueueOptions } from './application/ports.ts';
+export type { EventPublisher, Job, JobHandler, JobQueue, QueueOptions, WorkOptions } from './application/ports.ts';
 export { EventBus } from './application/event-bus.ts';
 export type { EventHandler } from './application/event-bus.ts';

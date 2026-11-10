@@ -1,7 +1,8 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { errorMessage } from '../../core/api-error';
+import { RouterLink } from '@angular/router';
+import { PageActivity } from '../../core/page-activity';
 import { SessionService } from '../../core/session.service';
 import {
   type Application,
@@ -29,7 +30,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
 /** The company's applications. Every member can see them, and Tech Leads and Company Admins manage them. */
 @Component({
   selector: 'app-applications',
-  imports: [DatePipe, ReactiveFormsModule],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Applications</h1>
@@ -138,6 +139,16 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
                     @if (application.description) {
                       <p class="cell-note">{{ application.description }}</p>
                     }
+                    @if (application.status === 'active') {
+                      <p class="cell-note">
+                        <a
+                          routerLink="/environments"
+                          [queryParams]="{ application: application.id }"
+                          [attr.aria-label]="'Environments of ' + application.name"
+                          >Environments</a
+                        >
+                      </p>
+                    }
                   </td>
                   <td>{{ application.type.name }}</td>
                   <td><code>{{ application.slug }}</code></td>
@@ -163,6 +174,16 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
                       <a [href]="repository.url" target="_blank" rel="noopener">{{ repository.fullName }}</a>
                       @if (repository.blueprint; as blueprint) {
                         <p class="cell-note">From {{ blueprint.key }} {{ blueprint.version }}</p>
+                      }
+                      @if (application.status === 'active') {
+                        <p class="cell-note">
+                          <a
+                            routerLink="/builds"
+                            [queryParams]="{ application: application.id }"
+                            [attr.aria-label]="'Builds of ' + application.name"
+                            >Builds and versions</a
+                          >
+                        </p>
                       }
                     } @else if (repository.status === 'creating') {
                       <span class="status">Being created…</span>
@@ -267,9 +288,10 @@ export class Applications implements OnInit, OnDestroy {
   protected readonly access = signal<SourceAccess | null>(null);
   protected readonly status = signal<ApplicationStatus>('active');
   protected readonly loading = signal(true);
-  protected readonly working = signal(false);
-  protected readonly error = signal<string | null>(null);
-  protected readonly notice = signal<string | null>(null);
+  readonly #activity = new PageActivity('clear-on-failure');
+  protected readonly working = this.#activity.working;
+  protected readonly error = this.#activity.error;
+  protected readonly notice = this.#activity.notice;
   protected readonly editing = signal<Editing>(null);
   protected readonly chosenTypeKey = signal('');
   protected readonly canManage = computed(() => {
@@ -293,7 +315,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   async ngOnInit(): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       if (this.canManage()) {
         const types = await this.#api.types();
         this.types.set(types);
@@ -331,7 +353,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async checkAccess(): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       const access = await this.#api.syncSourceAccess();
       this.access.set(access);
       this.notice.set(
@@ -343,7 +365,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async requestRepository(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.requestRepository(application.id);
       this.notice.set(`The repository of ${application.name} is being created.`);
       await this.#refresh();
@@ -359,7 +381,7 @@ export class Applications implements OnInit, OnDestroy {
     this.status.set(status);
     this.editing.set(null);
     this.notice.set(null);
-    await this.#attempt(() => this.#refresh());
+    await this.#activity.run(() => this.#refresh());
   }
 
   protected startEdit(application: Application): void {
@@ -369,7 +391,7 @@ export class Applications implements OnInit, OnDestroy {
 
   protected async register(): Promise<void> {
     const { name, type, description } = this.registerForm.getRawValue();
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       const application = await this.#api.register({ name, type, description });
       this.registerForm.reset({ name: '', type, description: '' });
       this.notice.set(`${application.name} is registered.`);
@@ -379,7 +401,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async save(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.update(application.id, this.editForm.getRawValue());
       this.editing.set(null);
       await this.#refresh();
@@ -387,7 +409,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async archive(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.archive(application.id);
       this.editing.set(null);
       this.notice.set(`${application.name} is archived. You can restore it from the archived list.`);
@@ -396,7 +418,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async restore(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.restore(application.id);
       this.notice.set(`${application.name} is restored.`);
       await this.#refresh();
@@ -413,20 +435,7 @@ export class Applications implements OnInit, OnDestroy {
       (application) => this.isNew(application) && !this.repositories().has(application.id),
     );
     if (waiting || repositories.some((repository) => repository.status === 'creating')) {
-      this.#refreshTimer = setTimeout(() => void this.#attempt(() => this.#refresh()), REFRESH_MS);
-    }
-  }
-
-  async #attempt(work: () => Promise<void>): Promise<void> {
-    this.error.set(null);
-    this.working.set(true);
-    try {
-      await work();
-    } catch (error) {
-      this.notice.set(null);
-      this.error.set(errorMessage(error));
-    } finally {
-      this.working.set(false);
+      this.#refreshTimer = setTimeout(() => void this.#activity.run(() => this.#refresh()), REFRESH_MS);
     }
   }
 }

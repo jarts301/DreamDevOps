@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { createDomainEvent, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { createDomainEvent, currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { Pool } from 'pg';
 import type { Principal } from '../domain/access.ts';
@@ -8,7 +8,6 @@ import { AccessError } from '../domain/errors.ts';
 
 const COMPANY_ADMIN = 'company-admin';
 const INVITATION_LIFETIME_DAYS = 7;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One message for every unusable token, so failures reveal nothing about invitations. */
 const invalidInvitation = () => new AccessError('not-found', 'This invitation is not valid.');
@@ -227,7 +226,7 @@ function hashToken(token: string): string {
 }
 
 function uuid(value: unknown): string {
-  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+  if (!isUuid(value)) {
     throw new AccessError('invalid', 'The ID is not valid.');
   }
   return value.toLowerCase();

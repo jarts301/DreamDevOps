@@ -9,7 +9,9 @@ Each user has one role per company. Roles and their permissions are stored as da
 | Action | Permission | Company Admin | Tech Lead | Developer | Operator | Viewer |
 |---|---|---|---|---|---|---|
 | Manage company users and roles | `company-users:manage` | Yes | | | | |
-| Connect deployment targets | `targets:connect` | Yes | | | Yes | |
+| Connect hosting targets | `targets:connect` | Yes | | | Yes | |
+| Manage environments | `environments:manage` | Yes | Yes | | Yes | |
+| Manage production environments | `environments-production:manage` | | Yes | | Yes | |
 | Register and manage applications | `applications:create` | Yes | Yes | | | |
 | Push code and open PRs | `code:push` | | Yes | Yes | | |
 | Approve PRs into develop or main | `pull-requests:approve` | | Yes | | | |
@@ -20,6 +22,8 @@ Each user has one role per company. Roles and their permissions are stored as da
 | View dashboards and logs | `dashboards:view` | Yes | Yes | Yes | Yes | Yes |
 | Read the audit log | `audit:read` | Yes | | | | |
 | Manage chat notifications | `notifications:manage` | Yes | | | | |
+
+The [Environments guide](../environments/README.md#permissions) explains what the environment and deployment permissions allow, such as deploying only releases to production.
 
 **Platform Admin** comes from the `platform-admin` realm role in Keycloak, not from a company. It grants `companies:manage`, `audit:read-own` and `editions:manage`, and no access to company data.
 

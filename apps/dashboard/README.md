@@ -19,23 +19,31 @@ Open <http://localhost:4200> and sign in as a sample user. Their password is `KE
 | Sample user | Starts as |
 |---|---|
 | `dev-platform-admin` | Platform Admin, who manages companies |
-| `dev-company-admin` | No company until invited |
-| `dev-developer` | No company until invited |
+| `dev-company-admin` | Company Admin of Dummy Company |
+| `dev-tech-lead` | Tech Lead of Dummy Company |
+| `dev-developer` | Developer of Dummy Company |
+| `dev-operator` | Operator of Dummy Company |
+| `dev-viewer` | Viewer of Dummy Company |
 
-To see the whole flow:
+To try a role, sign in as its account: Dummy Company is ready when the API starts. To see the whole flow, from starting a company to accepting an invitation, use a new company and a new account you register:
 
-1. Sign in as `dev-platform-admin`, open **Companies**, and enter a company name and `dev-company-admin@example.com`. The company shows **Active** once its Git organization is set up.
-2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, sign in as `dev-company-admin` and accept.
+1. Sign in as `dev-platform-admin`, open **Companies**, and enter a company name and the email of an account you'll register. The company shows **Active** once its Git organization is set up.
+2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, register with that email, and accept.
 3. Open **Applications** to register the company's applications and follow their repositories into Forgejo, **Team** to invite others and manage roles, **Audit log** to see every change, **Notifications** to post events to a chat tool, and **Edition** to see what the company's edition includes. Platform admins set each company's edition under **Editions**. **Blueprints** shows what each application type starts with.
 4. To use Git, choose **Sign in to Forgejo** on the **Applications** page, then **Check again** to join your team.
+5. Open **Builds** to follow each application's images. As a Tech Lead, start a release, and watch its first candidate go through validation, building, scanning, publishing, signing and verification. Open a pull request from a `feature/*` branch into `develop` in Forgejo to build a development image of it, and merge the release branch into `main` to build, sign and tag the release.
+6. Open **Environments** to give each application its environments. They run on **This machine** unless you choose another target, which you can connect on **Hosting**. As a Tech Lead or Operator, mark one as production, and notice that changing it afterwards asks for its name and a reason.
+7. Choose **Deploy** on an environment, pick a version that built, and follow its steps: checking, verifying the signature, pulling, starting and waiting until it's healthy. Open its address once it runs. Production offers only releases, and asks for its name first. This needs Docker, as builds do.
+8. Open **Variables** on an environment to give it settings, such as `LOG_LEVEL`, and secrets, such as `DATABASE_URL`. The environment then shows that what runs has older settings, and **Apply now** starts it again with them.
 
 ## Layout
 
 | Folder | Contents |
 |---|---|
-| `src/app/core` | Session, route guards, error messages and role labels |
+| `src/app/core` | Session, route guards, error messages, role labels, and `PageActivity`, which every page runs its actions through |
 | `src/app/shell` | The page frame and navigation. New feature areas add their menu item here. |
 | `src/app/features` | One folder per feature area |
+| `src/app/shared` | Components several feature areas use, such as the steps of a build or a deployment |
 
 ## Tests
 

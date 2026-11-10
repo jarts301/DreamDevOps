@@ -1,11 +1,6 @@
 import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Logger } from '@nestjs/common';
-import { MissingTenantContextError } from '@dreamdevops/shared-kernel';
+import { DomainError, type DomainErrorKind, MissingTenantContextError } from '@dreamdevops/shared-kernel';
 import type { Response } from 'express';
-import { CatalogError } from '../catalog/domain/errors.ts';
-import { EditionError } from '../editions/domain/errors.ts';
-import { AccessError } from '../identity-access/domain/errors.ts';
-import { NotificationError } from '../notifications/domain/errors.ts';
-import { TenancyError } from '../tenancy/domain/errors.ts';
 
 const GENERIC_MESSAGES: Readonly<Record<number, string>> = {
   400: 'The request is not valid.',
@@ -16,6 +11,17 @@ const GENERIC_MESSAGES: Readonly<Record<number, string>> = {
   413: 'The request is too large.',
   429: 'Too many requests. Try again shortly.',
   500: 'Something went wrong on our side.',
+  503: 'A service the platform depends on is unavailable. Try again shortly.',
+};
+
+/** The status each kind of refusal answers with, in every module. */
+const DOMAIN_ERROR_STATUSES: Readonly<Record<DomainErrorKind, number>> = {
+  invalid: 400,
+  forbidden: 403,
+  'not-entitled': 403,
+  'not-found': 404,
+  conflict: 409,
+  unavailable: 503,
 };
 
 /** Answers every error in one format (RFC 9457), and never reveals internal details. */
@@ -36,18 +42,10 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     if (error instanceof HttpException) {
       return { status: error.getStatus(), detail: error.message };
     }
-    if (
-      error instanceof AccessError ||
-      error instanceof TenancyError ||
-      error instanceof NotificationError ||
-      error instanceof CatalogError
-    ) {
-      const statuses = { invalid: 400, 'not-found': 404, conflict: 409 };
-      return { status: statuses[error.kind], detail: error.message };
-    }
-    if (error instanceof EditionError) {
-      const statuses = { invalid: 400, 'not-found': 404, conflict: 409, 'not-entitled': 403 };
-      return { status: statuses[error.kind], detail: error.message };
+    // Every module's refusals, whichever module they come from.
+    if (error instanceof DomainError) {
+      const kind: DomainErrorKind = error.kind;
+      return { status: DOMAIN_ERROR_STATUSES[kind], detail: error.message };
     }
     // A route that needs a company was called by a user who doesn't act for one.
     if (error instanceof MissingTenantContextError) {

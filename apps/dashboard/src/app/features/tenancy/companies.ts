@@ -1,7 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { errorMessage } from '../../core/api-error';
+import { PageActivity } from '../../core/page-activity';
 import type { CreatedInvitation } from '../identity-access/identity-access.api';
 import { InvitationResult } from '../identity-access/invitation-result';
 import { type Company, type CompanyStatus, TenancyApi } from './tenancy.api';
@@ -182,8 +182,9 @@ export class Companies implements OnInit, OnDestroy {
 
   protected readonly companies = signal<Company[]>([]);
   protected readonly loading = signal(true);
-  protected readonly working = signal(false);
-  protected readonly error = signal<string | null>(null);
+  readonly #activity = new PageActivity('no-notice');
+  protected readonly working = this.#activity.working;
+  protected readonly error = this.#activity.error;
   protected readonly editing = signal<Editing>(null);
   protected readonly invitation = signal<{ invitation: CreatedInvitation; email: string } | null>(null);
 
@@ -197,7 +198,7 @@ export class Companies implements OnInit, OnDestroy {
   protected readonly inviteForm = this.#forms.group({ email: ['', [Validators.required, Validators.email]] });
 
   async ngOnInit(): Promise<void> {
-    await this.#attempt(() => this.#refresh());
+    await this.#activity.run(() => this.#refresh());
     this.loading.set(false);
   }
 
@@ -222,7 +223,7 @@ export class Companies implements OnInit, OnDestroy {
   protected async create(): Promise<void> {
     const { name, email } = this.createForm.getRawValue();
     this.invitation.set(null);
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       const { invitation } = await this.#api.create(name, email);
       this.invitation.set({ invitation, email });
       this.createForm.reset();
@@ -231,7 +232,7 @@ export class Companies implements OnInit, OnDestroy {
   }
 
   protected async rename(company: Company): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.rename(company.id, this.renameForm.getRawValue().name);
       this.editing.set(null);
       await this.#refresh();
@@ -239,7 +240,7 @@ export class Companies implements OnInit, OnDestroy {
   }
 
   protected async suspend(company: Company): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.suspend(company.id);
       this.editing.set(null);
       await this.#refresh();
@@ -247,14 +248,14 @@ export class Companies implements OnInit, OnDestroy {
   }
 
   protected async reactivate(company: Company): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.reactivate(company.id);
       await this.#refresh();
     });
   }
 
   protected async retry(company: Company): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.retryProvisioning(company.id);
       await this.#refresh();
     });
@@ -263,7 +264,7 @@ export class Companies implements OnInit, OnDestroy {
   protected async inviteAdmin(company: Company): Promise<void> {
     const { email } = this.inviteForm.getRawValue();
     this.invitation.set(null);
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       const invitation = await this.#api.inviteFirstAdmin(company.id, email);
       this.invitation.set({ invitation, email });
       this.inviteForm.reset();
@@ -277,19 +278,7 @@ export class Companies implements OnInit, OnDestroy {
     const companies = await this.#api.list();
     this.companies.set(companies);
     if (companies.some((company) => company.status === 'provisioning')) {
-      this.#refreshTimer = setTimeout(() => void this.#attempt(() => this.#refresh()), REFRESH_MS);
-    }
-  }
-
-  async #attempt(work: () => Promise<void>): Promise<void> {
-    this.error.set(null);
-    this.working.set(true);
-    try {
-      await work();
-    } catch (error) {
-      this.error.set(errorMessage(error));
-    } finally {
-      this.working.set(false);
+      this.#refreshTimer = setTimeout(() => void this.#activity.run(() => this.#refresh()), REFRESH_MS);
     }
   }
 }

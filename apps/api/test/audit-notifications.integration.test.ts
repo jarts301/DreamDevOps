@@ -4,8 +4,7 @@ import type { INestApplication } from '@nestjs/common';
 import { createDomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
 import pg from 'pg';
-import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AuditLog } from '../src/audit/application/audit-log.ts';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { MAILER } from '../src/notifications/application/ports.ts';
@@ -14,6 +13,7 @@ import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider } from './fakes.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { eventually as waitUntil, signIn as signInAs, unique } from './support/integration.ts';
 
 let database: TestDatabase;
 let ownerPool: pg.Pool;
@@ -25,21 +25,10 @@ let receiverUrl: string;
 const received: { path: string; body: Record<string, unknown> }[] = [];
 let failingPaths = new Set<string>();
 
-const eventually = (assertion: () => Promise<void> | void) => vi.waitFor(assertion, { timeout: 20_000, interval: 150 });
+const eventually = (assertion: () => Promise<void> | void) => waitUntil(assertion);
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
+const signIn = (user: string) => signInAs(app, user);
 
-let counter = 0;
-const unique = (prefix: string) => {
-  counter += 1;
-  return `${prefix}-${'abcdefghijklmnopqrstuvwxyz'[Math.floor(counter / 26) % 26]}${'abcdefghijklmnopqrstuvwxyz'[counter % 26]}`;
-};
 
 interface MailpitMessage {
   ID: string;
@@ -381,7 +370,10 @@ describe('chat notifications', () => {
     const { body } = await admin.post(`/api/v1/company/notification-rules/${rule.id}/test`).expect(200);
 
     expect(body).toEqual({ delivered: true, error: null });
-    expect(received[0]!.body.text).toContain('This is a test message');
+    // The admin joining may reach the new rule too, before or after, so order isn't checked.
+    expect(received.filter((item) => item.path === '/test').map((item) => String(item.body.text))).toContainEqual(
+      expect.stringContaining('This is a test message'),
+    );
   });
 
   it('never shows the full address after saving it', async () => {

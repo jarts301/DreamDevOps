@@ -5,13 +5,33 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from '../src/app.module.ts';
 import { BACKGROUND_PROCESSING, NoBackgroundProcessing } from '../src/background/background-processing.ts';
 import type { AppConfig } from '../src/config/app-config.ts';
-import { configureApp } from '../src/configure-app.ts';
+import { APP_CREATION_OPTIONS, configureApp } from '../src/configure-app.ts';
 import { IDENTITY_PROVIDER, USER_DIRECTORY } from '../src/identity-access/application/ports.ts';
 import { SESSION_STORE } from '../src/session/session-store.ts';
 import { DATABASE_POOL } from '../src/tokens.ts';
 import { MAILER } from '../src/notifications/application/ports.ts';
 import { SOURCE_HOST } from '../src/source-governance/application/ports.ts';
-import { FakeIdentityProvider, FakeMailer, FakeSourceHost, InMemoryUserDirectory } from './fakes.ts';
+import {
+  BUILD_SOURCE,
+  IMAGE_BUILDER,
+  IMAGE_REGISTRY,
+  IMAGE_SCANNER,
+} from '../src/builds/application/ports.ts';
+import { IMAGE_SIGNING_KEY } from '../src/builds/application/tokens.ts';
+import { HOST_RUNTIMES, SECRET_BOX } from '../src/environments/application/ports.ts';
+import { SecretBox } from '../src/environments/domain/secret-box.ts';
+import { SigningKey } from '../src/builds/domain/signature.ts';
+import {
+  FakeBuildSource,
+  FakeHostRuntime,
+  FakeIdentityProvider,
+  FakeImageBuilder,
+  FakeImageRegistry,
+  FakeImageScanner,
+  FakeMailer,
+  FakeSourceHost,
+  InMemoryUserDirectory,
+} from './fakes.ts';
 import { InMemorySessionStore } from './in-memory-session-store.ts';
 
 export const PUBLIC_URL = 'http://api.test';
@@ -53,6 +73,25 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   webhookAllowInsecure: false,
   webhookAllowPrivateNetworks: false,
   notificationRetrySeconds: 1,
+  forgejoWebhookUrl: 'http://api.test/api/v1/hooks/forgejo',
+  forgejoWebhookSecret: 'fake-dummy-webhook-secret',
+  registryUrl: 'http://registry.test',
+  // Tests supply their own key, so this file is never read or created.
+  imageSigningKeyFile: '/nonexistent/image-signing.key',
+  imageScanner: 'trivy',
+  trivyImage: 'unused',
+  buildConcurrency: 1,
+  buildTimeoutMs: 60_000,
+  buildMaxAttempts: 3,
+  buildRetrySeconds: 1,
+  localHosting: true,
+  localHostingBindAddress: '127.0.0.1',
+  deployMaxAttempts: 2,
+  deployRetrySeconds: 1,
+  deployHealthTimeoutMs: 5_000,
+  // Tests supply their own key, so this file is never read or created.
+  secretsKeyFile: '/nonexistent/environment-secrets.key',
+  sampleData: null,
   ...overrides,
 });
 
@@ -67,6 +106,7 @@ export interface TestAppOptions {
 /** Builds the real application from explicit providers. */
 export async function buildApp(options: TestAppOptions): Promise<INestApplication> {
   const config = testConfig(options.config);
+  const registry = new FakeImageRegistry();
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule.forRoot({
       config,
@@ -75,10 +115,18 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
         ...(options.background ? [] : [{ provide: BACKGROUND_PROCESSING, useClass: NoBackgroundProcessing }]),
         { provide: MAILER, useValue: new FakeMailer() },
         { provide: SOURCE_HOST, useValue: new FakeSourceHost() },
+        { provide: IMAGE_SIGNING_KEY, useValue: SigningKey.generate().key },
+        { provide: BUILD_SOURCE, useValue: new FakeBuildSource() },
+        { provide: IMAGE_REGISTRY, useValue: registry },
+        { provide: IMAGE_BUILDER, useValue: new FakeImageBuilder(registry) },
+        { provide: IMAGE_SCANNER, useValue: new FakeImageScanner() },
+        // Tests never run containers on the machine that runs them.
+        { provide: HOST_RUNTIMES, useValue: [new FakeHostRuntime()] },
+        { provide: SECRET_BOX, useValue: SecretBox.fromKeyText(SecretBox.generateKeyText()) },
         ...(options.overrides ?? []),
       ],
     }),
-    { bodyParser: false, logger: false },
+    { ...APP_CREATION_OPTIONS, logger: false },
   );
   configureApp(app, config);
   await app.init();

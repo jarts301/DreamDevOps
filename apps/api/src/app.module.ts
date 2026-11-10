@@ -1,50 +1,30 @@
-import { type DynamicModule, Inject, Module, type OnApplicationShutdown, type Provider, type Type } from '@nestjs/common';
+import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import pg from 'pg';
+import { AuditModule } from './audit/audit.module.ts';
+import { BackgroundModule } from './background/background.module.ts';
+import { BlueprintsModule } from './blueprints/blueprints.module.ts';
+import { BuildsModule } from './builds/builds.module.ts';
+import { CatalogModule } from './catalog/catalog.module.ts';
 import type { AppConfig } from './config/app-config.ts';
+import type { EntitlementProvider } from './editions/application/ports.ts';
+import { EditionsModule } from './editions/editions.module.ts';
+import { EnvironmentsModule } from './environments/environments.module.ts';
+import { FeatureGuard } from './editions/http/feature.guard.ts';
 import { HealthController } from './health/health.controller.ts';
 import { AuthorizationGuard, OriginGuard, SessionGuard } from './http/guards.ts';
 import { ProblemDetailsFilter } from './http/problem-details.filter.ts';
 import { TenantContextInterceptor } from './http/tenant-context.interceptor.ts';
-import { CompanyAccessService } from './identity-access/application/company-access.service.ts';
-import { IDENTITY_PROVIDER, USER_DIRECTORY } from './identity-access/application/ports.ts';
 import { AuthController } from './identity-access/http/auth.controller.ts';
-import { CompanyAccessController, InvitationsController } from './identity-access/http/company-access.controller.ts';
-import { KeycloakIdentityProvider } from './identity-access/infrastructure/keycloak-identity-provider.ts';
-import { PostgresUserDirectory } from './identity-access/infrastructure/postgres-user-directory.ts';
-import { PostgresSessionStore } from './session/postgres-session-store.ts';
-import { BACKGROUND_PROCESSING, BackgroundProcessing } from './background/background-processing.ts';
-import { AuditLog } from './audit/application/audit-log.ts';
-import { AuditController } from './audit/http/audit.controller.ts';
-import { InvitationEmails } from './notifications/application/invitation-emails.ts';
-import { NotificationRules } from './notifications/application/notification-rules.ts';
-import { MAILER, type Mailer, WEBHOOK_SENDER, type WebhookSender } from './notifications/application/ports.ts';
-import { NotificationRulesController } from './notifications/http/notification-rules.controller.ts';
-import { SafeWebhookSender } from './notifications/infrastructure/safe-webhook-sender.ts';
-import { SmtpMailer } from './notifications/infrastructure/smtp-mailer.ts';
-import { CompaniesService } from './tenancy/application/companies.service.ts';
-import { GIT_PROVIDER, type GitProvider } from './tenancy/application/ports.ts';
-import { ProvisioningSaga } from './tenancy/application/provisioning.ts';
-import { CompaniesController } from './tenancy/http/companies.controller.ts';
-import { ForgejoGitProvider } from './tenancy/infrastructure/forgejo-git-provider.ts';
-import { SESSION_STORE } from './session/session-store.ts';
-import { BlueprintsController } from './blueprints/http/blueprints.controller.ts';
-import { BlueprintLibrary } from './blueprints/infrastructure/blueprint-library.ts';
-import { SOURCE_HOST, type SourceHost } from './source-governance/application/ports.ts';
-import { Repositories } from './source-governance/application/repositories.ts';
-import { SourceAccess } from './source-governance/application/source-access.ts';
-import { SourceController } from './source-governance/http/source.controller.ts';
-import { ForgejoSourceHost } from './source-governance/infrastructure/forgejo-source-host.ts';
-import { ApplicationCatalog } from './catalog/application/application-catalog.ts';
-import { ApplicationsController } from './catalog/http/applications.controller.ts';
-import { Entitlements } from './editions/application/entitlements.ts';
-import { ENTITLEMENT_PROVIDER, type EntitlementProvider } from './editions/application/ports.ts';
-import { EditionsController } from './editions/http/editions.controller.ts';
-import { FeatureGuard } from './editions/http/feature.guard.ts';
-import { CommunityEntitlementProvider } from './editions/infrastructure/community-entitlement-provider.ts';
-import { APP_CONFIG, DATABASE_POOL } from './tokens.ts';
+import { InvitationsController } from './identity-access/http/company-access.controller.ts';
+import { IdentityAccessModule } from './identity-access/identity-access.module.ts';
+import { NotificationsModule } from './notifications/notifications.module.ts';
+import type { ModuleSettings } from './platform/module-settings.ts';
+import { tokenOf } from './platform/module-settings.ts';
+import { PlatformModule } from './platform/platform.module.ts';
+import { SourceGovernanceModule } from './source-governance/source-governance.module.ts';
+import { CompanyDirectoryModule } from './tenancy/company-directory.module.ts';
+import { TenancyModule } from './tenancy/tenancy.module.ts';
 
 const MINUTE_MS = 60_000;
 
@@ -61,16 +41,35 @@ export interface AppModuleOptions {
   readonly entitlementProvider?: EntitlementProvider;
 }
 
+/**
+ * Puts the application together. Each bounded context is its own Nest module, which
+ * states what it needs from other contexts and what it offers them. That keeps every
+ * dependency between contexts visible, so any context can later become its own service.
+ */
 @Module({})
-export class AppModule implements OnApplicationShutdown {
-  readonly #pool: pg.Pool;
-
-  constructor(@Inject(DATABASE_POOL) pool: pg.Pool) {
-    this.#pool = pool;
-  }
-
+export class AppModule {
   static forRoot(options: AppModuleOptions): DynamicModule {
     const { config } = options;
+    const settings: ModuleSettings = { config, overrides: options.overrides ?? [] };
+    const modules = [
+      PlatformModule.register(settings),
+      IdentityAccessModule.register(settings),
+      TenancyModule.register(settings),
+      CompanyDirectoryModule.register(settings),
+      AuditModule.register(settings),
+      NotificationsModule.register(settings),
+      EditionsModule.register(settings, options.entitlementProvider),
+      BlueprintsModule.register(settings),
+      CatalogModule.register(settings),
+      SourceGovernanceModule.register(settings),
+      BuildsModule.register(settings),
+      EnvironmentsModule.register(settings),
+      BackgroundModule.register(settings),
+    ];
+    // Replacements for tokens no module provides are added here, as they always were.
+    const provided = new Set(modules.flatMap((module) => (module.providers ?? []).map(tokenOf)));
+    const unclaimed = settings.overrides.filter((override) => !provided.has(tokenOf(override)));
+
     return {
       module: AppModule,
       imports: [
@@ -88,153 +87,10 @@ export class AppModule implements OnApplicationShutdown {
             },
           ],
         }),
+        ...modules,
       ],
-      controllers: [
-        AuthController,
-        CompanyAccessController,
-        InvitationsController,
-        CompaniesController,
-        AuditController,
-        NotificationRulesController,
-        EditionsController,
-        ApplicationsController,
-        BlueprintsController,
-        SourceController,
-        HealthController,
-        ...(options.controllers ?? []),
-      ],
+      controllers: [HealthController, ...(options.controllers ?? [])],
       providers: [
-        { provide: APP_CONFIG, useValue: config },
-        {
-          provide: DATABASE_POOL,
-          useFactory: () => new pg.Pool({ connectionString: config.databaseUrl }),
-        },
-        {
-          provide: TenantDatabase,
-          useFactory: (pool: pg.Pool) => new TenantDatabase(pool),
-          inject: [DATABASE_POOL],
-        },
-        {
-          provide: SESSION_STORE,
-          useFactory: (pool: pg.Pool) => new PostgresSessionStore(pool),
-          inject: [DATABASE_POOL],
-        },
-        {
-          provide: IDENTITY_PROVIDER,
-          useFactory: () =>
-            new KeycloakIdentityProvider({
-              issuerUrl: config.keycloakIssuerUrl,
-              clientId: config.keycloakClientId,
-              clientSecret: config.keycloakClientSecret,
-            }),
-        },
-        {
-          provide: USER_DIRECTORY,
-          useFactory: (pool: pg.Pool) => new PostgresUserDirectory(pool),
-          inject: [DATABASE_POOL],
-        },
-        {
-          provide: CompanyAccessService,
-          useFactory: (database: TenantDatabase, pool: pg.Pool) =>
-            new CompanyAccessService(database, pool, { requireVerifiedEmail: config.requireVerifiedEmail }),
-          inject: [TenantDatabase, DATABASE_POOL],
-        },
-        {
-          provide: CompaniesService,
-          useFactory: (database: TenantDatabase, access: CompanyAccessService) => new CompaniesService(database, access),
-          inject: [TenantDatabase, CompanyAccessService],
-        },
-        {
-          provide: GIT_PROVIDER,
-          useFactory: () =>
-            new ForgejoGitProvider({
-              url: config.forgejoUrl,
-              username: config.forgejoUsername,
-              password: config.forgejoPassword,
-            }),
-        },
-        {
-          provide: ProvisioningSaga,
-          useFactory: (database: TenantDatabase, git: GitProvider) =>
-            new ProvisioningSaga(database, git, { maxAttempts: config.provisioningMaxAttempts }),
-          inject: [TenantDatabase, GIT_PROVIDER],
-        },
-        {
-          provide: AuditLog,
-          useFactory: (database: TenantDatabase, pool: pg.Pool) => new AuditLog(database, pool),
-          inject: [TenantDatabase, DATABASE_POOL],
-        },
-        {
-          provide: MAILER,
-          useFactory: () =>
-            new SmtpMailer({
-              host: config.smtpHost,
-              port: config.smtpPort,
-              from: config.smtpFrom,
-              security: config.smtpSecurity,
-              username: config.smtpUsername,
-              password: config.smtpPassword,
-            }),
-        },
-        {
-          provide: InvitationEmails,
-          useFactory: (mailer: Mailer) => new InvitationEmails(mailer, config.dashboardUrl),
-          inject: [MAILER],
-        },
-        {
-          provide: WEBHOOK_SENDER,
-          useFactory: () => new SafeWebhookSender({ allowPrivateNetworks: config.webhookAllowPrivateNetworks }),
-        },
-        {
-          provide: NotificationRules,
-          useFactory: (database: TenantDatabase, sender: WebhookSender) =>
-            new NotificationRules(database, sender, { allowInsecureWebhooks: config.webhookAllowInsecure }),
-          inject: [TenantDatabase, WEBHOOK_SENDER],
-        },
-        { provide: ENTITLEMENT_PROVIDER, useValue: options.entitlementProvider ?? new CommunityEntitlementProvider() },
-        {
-          provide: Entitlements,
-          useFactory: (database: TenantDatabase, provider: EntitlementProvider) => new Entitlements(database, provider),
-          inject: [TenantDatabase, ENTITLEMENT_PROVIDER],
-        },
-        // Loaded once at startup, so a broken or changed blueprint stops the API from starting.
-        { provide: BlueprintLibrary, useFactory: () => BlueprintLibrary.load(config.blueprintsDir) },
-        {
-          provide: ApplicationCatalog,
-          useFactory: (database: TenantDatabase, blueprints: BlueprintLibrary) =>
-            new ApplicationCatalog(database, blueprints),
-          inject: [TenantDatabase, BlueprintLibrary],
-        },
-        {
-          provide: SOURCE_HOST,
-          useFactory: () =>
-            new ForgejoSourceHost({
-              url: config.forgejoUrl,
-              username: config.forgejoUsername,
-              password: config.forgejoPassword,
-            }),
-        },
-        {
-          provide: Repositories,
-          useFactory: (
-            database: TenantDatabase,
-            host: SourceHost,
-            catalog: ApplicationCatalog,
-            blueprints: BlueprintLibrary,
-          ) =>
-            new Repositories(database, host, catalog, blueprints, {
-              maxAttempts: config.provisioningMaxAttempts,
-              publicUrl: config.forgejoPublicUrl,
-            }),
-          inject: [TenantDatabase, SOURCE_HOST, ApplicationCatalog, BlueprintLibrary],
-        },
-        {
-          provide: SourceAccess,
-          useFactory: (database: TenantDatabase, host: SourceHost) =>
-            new SourceAccess(database, host, config.forgejoPublicUrl),
-          inject: [TenantDatabase, SOURCE_HOST],
-        },
-        { provide: BACKGROUND_PROCESSING, useClass: BackgroundProcessing },
         // Guards run in this order, so rate limits apply before any database work.
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: OriginGuard },
@@ -243,12 +99,8 @@ export class AppModule implements OnApplicationShutdown {
         { provide: APP_GUARD, useClass: FeatureGuard },
         { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
         { provide: APP_FILTER, useClass: ProblemDetailsFilter },
-        ...(options.overrides ?? []),
+        ...unclaimed,
       ],
     };
-  }
-
-  async onApplicationShutdown(): Promise<void> {
-    await this.#pool.end();
   }
 }

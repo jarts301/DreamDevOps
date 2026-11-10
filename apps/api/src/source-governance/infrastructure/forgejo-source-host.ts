@@ -1,13 +1,9 @@
 import type { BlueprintFile } from '../../blueprints/domain/blueprint.ts';
+import { expectOk as expectForgejoOk, ForgejoApi, type ForgejoConnection, segment } from '../../shared/forgejo/forgejo-api.ts';
 import { PermanentSourceError, type RepositorySpec, type SourceHost } from '../application/ports.ts';
 import { type GitFlowPolicy, TEAMS, type TeamKey } from '../domain/git-flow.ts';
 
-export interface ForgejoSourceOptions {
-  readonly url: string;
-  readonly username: string;
-  readonly password: string;
-  readonly timeoutMs?: number;
-}
+export type ForgejoSourceOptions = ForgejoConnection;
 
 interface ForgejoTeam {
   id: number;
@@ -31,10 +27,10 @@ const PAGE_SIZE = 50;
  * changes it.
  */
 export class ForgejoSourceHost implements SourceHost {
-  readonly #options: ForgejoSourceOptions;
+  readonly #api: ForgejoApi;
 
   constructor(options: ForgejoSourceOptions) {
-    this.#options = options;
+    this.#api = new ForgejoApi(options, { defaultTimeoutMs: 30_000 });
   }
 
   async ensureTeams(organization: string): Promise<void> {
@@ -60,17 +56,17 @@ export class ForgejoSourceHost implements SourceHost {
       const current = existing.get(team.key);
       const response =
         current === undefined
-          ? await this.#request('POST', `/orgs/${segment(organization)}/teams`, body)
-          : await this.#request('PATCH', `/teams/${current.id}`, body);
+          ? await this.#api.request('POST', `/orgs/${segment(organization)}/teams`, body)
+          : await this.#api.request('PATCH', `/teams/${current.id}`, body);
       await expectOk(response, `set up the ${team.key} team`);
     }
   }
 
   async ensureRepository(spec: RepositorySpec): Promise<{ id: string; empty: boolean }> {
     const marker = ownershipMarker(spec.applicationId);
-    let response = await this.#request('GET', repoPath(spec));
+    let response = await this.#api.request('GET', repoPath(spec));
     if (response.status === 404) {
-      const created = await this.#request('POST', `/orgs/${segment(spec.organization)}/repos`, {
+      const created = await this.#api.request('POST', `/orgs/${segment(spec.organization)}/repos`, {
         name: spec.name,
         description: marker,
         private: true,
@@ -80,7 +76,7 @@ export class ForgejoSourceHost implements SourceHost {
       if (created.status !== 409) {
         await expectOk(created, 'create the repository');
       }
-      response = await this.#request('GET', repoPath(spec));
+      response = await this.#api.request('GET', repoPath(spec));
     }
     await expectOk(response, 'read the repository');
     const repository = (await response.json()) as ForgejoRepository;
@@ -91,7 +87,7 @@ export class ForgejoSourceHost implements SourceHost {
   }
 
   async commitInitialFiles(spec: RepositorySpec, files: readonly BlueprintFile[], message: string): Promise<void> {
-    const response = await this.#request('POST', `${repoPath(spec)}/contents`, {
+    const response = await this.#api.request('POST', `${repoPath(spec)}/contents`, {
       branch: 'main',
       message,
       files: files.map((file) => ({
@@ -104,7 +100,7 @@ export class ForgejoSourceHost implements SourceHost {
   }
 
   async applyGitFlow(spec: RepositorySpec, policy: GitFlowPolicy): Promise<void> {
-    const branch = await this.#request('POST', `${repoPath(spec)}/branches`, {
+    const branch = await this.#api.request('POST', `${repoPath(spec)}/branches`, {
       new_branch_name: policy.defaultBranch,
       old_branch_name: 'main',
       old_ref_name: 'main',
@@ -113,11 +109,11 @@ export class ForgejoSourceHost implements SourceHost {
       await expectOk(branch, `create the ${policy.defaultBranch} branch`);
     }
     await expectOk(
-      await this.#request('PATCH', repoPath(spec), { default_branch: policy.defaultBranch }),
+      await this.#api.request('PATCH', repoPath(spec), { default_branch: policy.defaultBranch }),
       'set the default branch',
     );
 
-    const rulesResponse = await this.#request('GET', `${repoPath(spec)}/branch_protections`);
+    const rulesResponse = await this.#api.request('GET', `${repoPath(spec)}/branch_protections`);
     await expectOk(rulesResponse, 'read the branch rules');
     const existingRules = new Set(((await rulesResponse.json()) as { rule_name: string }[]).map((rule) => rule.rule_name));
     for (const rule of policy.branches) {
@@ -125,7 +121,7 @@ export class ForgejoSourceHost implements SourceHost {
         rule_name: rule.pattern,
         enable_push: rule.directPush === 'platform',
         enable_push_whitelist: rule.directPush === 'platform',
-        push_whitelist_usernames: rule.directPush === 'platform' ? [this.#options.username] : [],
+        push_whitelist_usernames: rule.directPush === 'platform' ? [this.#api.username] : [],
         enable_merge_whitelist: false,
         required_approvals: rule.requiredApprovals,
         enable_approvals_whitelist: true,
@@ -135,27 +131,27 @@ export class ForgejoSourceHost implements SourceHost {
         apply_to_admins: true,
       };
       const response = existingRules.has(rule.pattern)
-        ? await this.#request('PATCH', `${repoPath(spec)}/branch_protections/${segment(rule.pattern)}`, body)
-        : await this.#request('POST', `${repoPath(spec)}/branch_protections`, body);
+        ? await this.#api.request('PATCH', `${repoPath(spec)}/branch_protections/${segment(rule.pattern)}`, body)
+        : await this.#api.request('POST', `${repoPath(spec)}/branch_protections`, body);
       await expectOk(response, `protect ${rule.pattern}`);
     }
 
-    const tagsResponse = await this.#request('GET', `${repoPath(spec)}/tag_protections`);
+    const tagsResponse = await this.#api.request('GET', `${repoPath(spec)}/tag_protections`);
     await expectOk(tagsResponse, 'read the tag rules');
     const tagRules = (await tagsResponse.json()) as { id: number; name_pattern: string }[];
     for (const pattern of policy.platformTags) {
-      const body = { name_pattern: pattern, whitelist_usernames: [this.#options.username], whitelist_teams: [] };
+      const body = { name_pattern: pattern, whitelist_usernames: [this.#api.username], whitelist_teams: [] };
       const current = tagRules.find((rule) => rule.name_pattern === pattern);
       const response =
         current === undefined
-          ? await this.#request('POST', `${repoPath(spec)}/tag_protections`, body)
-          : await this.#request('PATCH', `${repoPath(spec)}/tag_protections/${current.id}`, body);
+          ? await this.#api.request('POST', `${repoPath(spec)}/tag_protections`, body)
+          : await this.#api.request('PATCH', `${repoPath(spec)}/tag_protections/${current.id}`, body);
       await expectOk(response, `protect ${pattern} tags`);
     }
   }
 
   async setArchived(spec: RepositorySpec, archived: boolean): Promise<void> {
-    const response = await this.#request('PATCH', repoPath(spec), { archived });
+    const response = await this.#api.request('PATCH', repoPath(spec), { archived });
     if (response.status === 404) {
       return;
     }
@@ -163,7 +159,7 @@ export class ForgejoSourceHost implements SourceHost {
   }
 
   async userExists(username: string): Promise<boolean> {
-    const response = await this.#request('GET', `/users/${segment(username)}`);
+    const response = await this.#api.request('GET', `/users/${segment(username)}`);
     if (response.status === 404) {
       return false;
     }
@@ -178,7 +174,7 @@ export class ForgejoSourceHost implements SourceHost {
     }
     const members: string[] = [];
     for (let page = 1; ; page += 1) {
-      const response = await this.#request('GET', `/teams/${id}/members?limit=${PAGE_SIZE}&page=${page}`);
+      const response = await this.#api.request('GET', `/teams/${id}/members?limit=${PAGE_SIZE}&page=${page}`);
       await expectOk(response, `read the ${team} team`);
       const batch = (await response.json()) as { login: string }[];
       members.push(...batch.map((user) => user.login));
@@ -190,19 +186,19 @@ export class ForgejoSourceHost implements SourceHost {
 
   async addTeamMember(organization: string, team: TeamKey, username: string): Promise<void> {
     const id = await this.#requireTeam(organization, team);
-    await expectOk(await this.#request('PUT', `/teams/${id}/members/${segment(username)}`), `add someone to ${team}`);
+    await expectOk(await this.#api.request('PUT', `/teams/${id}/members/${segment(username)}`), `add someone to ${team}`);
   }
 
   async removeTeamMember(organization: string, team: TeamKey, username: string): Promise<void> {
     const id = await this.#requireTeam(organization, team);
-    const response = await this.#request('DELETE', `/teams/${id}/members/${segment(username)}`);
+    const response = await this.#api.request('DELETE', `/teams/${id}/members/${segment(username)}`);
     if (response.status !== 404) {
       await expectOk(response, `remove someone from ${team}`);
     }
   }
 
   async #teams(organization: string): Promise<Map<string, ForgejoTeam>> {
-    const response = await this.#request('GET', `/orgs/${segment(organization)}/teams?limit=${PAGE_SIZE}`);
+    const response = await this.#api.request('GET', `/orgs/${segment(organization)}/teams?limit=${PAGE_SIZE}`);
     await expectOk(response, 'read the teams');
     return new Map(((await response.json()) as ForgejoTeam[]).map((team) => [team.name, team]));
   }
@@ -218,24 +214,6 @@ export class ForgejoSourceHost implements SourceHost {
     }
     return id;
   }
-
-  async #request(method: string, path: string, body?: object): Promise<Response> {
-    const credentials = Buffer.from(`${this.#options.username}:${this.#options.password}`).toString('base64');
-    try {
-      return await fetch(`${this.#options.url.replace(/\/$/, '')}/api/v1${path}`, {
-        method,
-        headers: {
-          Authorization: `Basic ${credentials}`,
-          Accept: 'application/json',
-          ...(body !== undefined && { 'Content-Type': 'application/json' }),
-        },
-        ...(body !== undefined && { body: JSON.stringify(body) }),
-        signal: AbortSignal.timeout(this.#options.timeoutMs ?? 30_000),
-      });
-    } catch {
-      throw new Error('The Git service could not be reached.');
-    }
-  }
 }
 
 export function ownershipMarker(applicationId: string): string {
@@ -246,17 +224,6 @@ function repoPath(spec: RepositorySpec): string {
   return `/repos/${segment(spec.organization)}/${segment(spec.name)}`;
 }
 
-function segment(value: string): string {
-  return encodeURIComponent(value);
-}
-
-async function expectOk(response: Response, action: string): Promise<void> {
-  if (response.ok) {
-    return;
-  }
-  if (response.status === 401 || response.status === 403) {
-    throw new PermanentSourceError(`The Git service refused the platform's credentials to ${action}.`);
-  }
-  // Server errors may pass, so they are retried. Details stay out of the message.
-  throw new Error(`The Git service could not ${action} (status ${response.status}).`);
+function expectOk(response: Response, action: string): Promise<void> {
+  return expectForgejoOk(response, action, PermanentSourceError);
 }

@@ -10,6 +10,7 @@ import {
   unknownPlaceholders,
 } from '../src/blueprints/domain/blueprint.ts';
 import { BlueprintLibrary } from '../src/blueprints/infrastructure/blueprint-library.ts';
+import { parseDockerfile } from '../src/builds/domain/dockerfile-policy.ts';
 import { GIT_FLOW, planTeamChanges, teamFor, type TeamKey } from '../src/source-governance/domain/git-flow.ts';
 
 const BLUEPRINTS = fileURLToPath(new URL('../../../blueprints', import.meta.url));
@@ -38,6 +39,21 @@ describe('the published blueprints', () => {
       expect(files.some((candidate) => candidate.path === 'package-lock.json')).toBe(true);
       expect(files.some((candidate) => candidate.path === '.dockerignore')).toBe(true);
       expect(files.some((candidate) => candidate.path === 'compose.yaml')).toBe(true);
+    }
+  });
+
+  it('apply the security fixes released since their base images, and still run as a non-root user', () => {
+    for (const manifest of library.latest()) {
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      const instructions = parseDockerfile(files.find((candidate) => candidate.path === 'Dockerfile')!.content.toString());
+      // Only the last stage ends up in the image, so that's where the fixes must be.
+      const lastStage = instructions.slice(instructions.findLastIndex((instruction) => instruction.keyword === 'FROM'));
+      const upgrade = lastStage.findIndex((instruction) => instruction.keyword === 'RUN' && instruction.args === 'apk upgrade --no-cache');
+      expect(upgrade, manifest.key).toBeGreaterThan(0);
+      const user = lastStage.findLast((instruction) => instruction.keyword === 'USER');
+      expect(user, manifest.key).toBeDefined();
+      expect(lastStage.indexOf(user!), manifest.key).toBeGreaterThan(upgrade);
+      expect(['root', '0'], manifest.key).not.toContain(user!.args);
     }
   });
 
@@ -71,11 +87,11 @@ describe('the blueprint library', () => {
 
   it('refuses a version that was never published', () => {
     makeCopy();
-    cpSync(join(copy, 'node-service/1.0.0'), join(copy, 'node-service/1.1.0'), { recursive: true });
-    const manifest = join(copy, 'node-service/1.1.0/blueprint.json');
-    writeFileSync(manifest, readFileSync(manifest, 'utf8').replace('"1.0.0"', '"1.1.0"'));
+    cpSync(join(copy, 'node-service/1.0.0'), join(copy, 'node-service/9.9.9'), { recursive: true });
+    const manifest = join(copy, 'node-service/9.9.9/blueprint.json');
+    writeFileSync(manifest, readFileSync(manifest, 'utf8').replace('"1.0.0"', '"9.9.9"'));
 
-    expect(loadCopy).toThrow("node-service@1.1.0: it isn't in published.json");
+    expect(loadCopy).toThrow("node-service@9.9.9: it isn't in published.json");
   });
 
   it('refuses a published version whose folder is missing', () => {

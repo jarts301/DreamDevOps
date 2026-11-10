@@ -12,6 +12,8 @@ process.env.RELAY_DATABASE_URL ??= roleUrl('relay', 'DREAMDEVOPS_DB_RELAY_PASSWO
 process.env.JOBS_DATABASE_URL ??= roleUrl('jobs', 'DREAMDEVOPS_DB_JOBS_PASSWORD');
 process.env.FORGEJO_URL ??= `http://localhost:${process.env.FORGEJO_HTTP_PORT ?? '3000'}`;
 process.env.FORGEJO_BOT_USERNAME ??= 'dreamdevops-bot';
+// Forgejo runs in Docker, so it reaches the API on this machine through Docker's name for it.
+process.env.FORGEJO_WEBHOOK_URL ??= `http://host.docker.internal:${apiPort}/api/v1/hooks/forgejo`;
 // Mailpit catches every email locally and sends nothing out.
 process.env.SMTP_HOST ??= 'localhost';
 process.env.SMTP_PORT ??= process.env.MAILPIT_SMTP_PORT ?? '1025';
@@ -27,5 +29,7 @@ process.env.API_PUBLIC_URL ??= `http://localhost:${apiPort}`;
 process.env.DASHBOARD_URL ??= 'http://localhost:4200/';
 // Browsers won't send Secure cookies over plain HTTP, which is all the local stack has.
 process.env.SECURE_COOKIES ??= 'false';
+// A sample company with a sample account in each role. Set SAMPLE_DATA=off in .env to skip it.
+process.env.SAMPLE_DATA ??= 'on';
 
 await import(new URL('../dist/main.js', import.meta.url).href);

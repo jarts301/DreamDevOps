@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Authenticated, Public, RequirePermissions } from '../src/http/access.decorators.ts';
 import { COMPANY_A, COMPANY_B } from './fakes.ts';
 import { createTestApp, DASHBOARD_URL } from './test-app.ts';
+import { signIn } from './support/integration.ts';
 
 @Controller('sample')
 class SampleController {
@@ -58,14 +59,6 @@ class SampleController {
 }
 
 
-/** Signs in the way a browser does and returns an agent that keeps the cookies. */
-async function signIn(app: INestApplication, user: string) {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-}
 
 describe('API', () => {
   let app: INestApplication;

@@ -1,6 +1,7 @@
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { Principal } from '../../identity-access/domain/access.ts';
+import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
 import { planTeamChanges, TEAMS, teamFor, type TeamKey } from '../domain/git-flow.ts';
 import type { SourceHost } from './ports.ts';
 
@@ -35,28 +36,27 @@ interface MemberAccount {
  */
 export class SourceAccess {
   readonly #database: TenantDatabase;
+  readonly #companies: CompanyDirectory;
   readonly #host: SourceHost;
   readonly #publicUrl: string;
 
-  constructor(database: TenantDatabase, host: SourceHost, publicUrl: string) {
+  constructor(database: TenantDatabase, companies: CompanyDirectory, host: SourceHost, publicUrl: string) {
     this.#database = database;
+    this.#companies = companies;
     this.#host = host;
     this.#publicUrl = publicUrl.replace(/\/$/, '');
   }
 
   /** Brings the current company's teams in line. Safe to repeat. */
   async syncCompany(): Promise<void> {
-    const { company, members } = await this.#database.transaction(async (tx) => {
-      const { rows: companies } = await tx.query<{ slug: string; status: string }>(
-        'SELECT slug, status FROM tenancy.companies WHERE id = $1',
-        [currentCompanyId()],
-      );
+    const company = await this.#companies.find(currentCompanyId());
+    const members = await this.#database.transaction(async (tx) => {
       const { rows } = await tx.query<MemberAccount>('SELECT * FROM source.member_accounts()');
-      return { company: companies[0], members: rows };
+      return rows;
     });
     // Until the organization exists there's nothing to sync. A suspended company keeps
     // its organization, and has no members here, so everyone is removed.
-    if (company === undefined || (company.status !== 'active' && company.status !== 'suspended')) {
+    if (company === null || (company.status !== 'active' && company.status !== 'suspended')) {
       return;
     }
 

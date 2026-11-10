@@ -124,5 +124,41 @@ export function describeJobQueueContract(name: string, createHarness: () => Prom
         { timeout: 20_000, interval: 250 },
       );
     });
+
+    it('applies changed settings when a queue is created again, such as after a restart', async () => {
+      const queue = queueName();
+      let calls = 0;
+      await harness.queue.createQueue(queue, { retryLimit: 1, retryDelaySeconds: 600 });
+      await harness.queue.createQueue(queue, { retryLimit: 1, retryDelaySeconds: 1 });
+      await harness.queue.work(queue, async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error('Temporary failure');
+        }
+      });
+
+      await harness.queue.send(queue, {});
+
+      await harness.eventually(() => expect(calls).toBe(2));
+    });
+
+    it('runs long jobs one at a time per worker, with a heartbeat and a longer expiry', async () => {
+      const queue = queueName();
+      const handled: number[] = [];
+      await harness.queue.createQueue(queue, { retryLimit: 1, expireInSeconds: 7_200, heartbeatSeconds: 30 });
+      await harness.queue.work(
+        queue,
+        async (job) => {
+          handled.push((job.data as { value: number }).value);
+        },
+        { concurrency: 2 },
+      );
+
+      for (const value of [1, 2, 3]) {
+        await harness.queue.send(queue, { value });
+      }
+
+      await harness.eventually(() => expect([...handled].sort()).toEqual([1, 2, 3]));
+    });
   });
 }

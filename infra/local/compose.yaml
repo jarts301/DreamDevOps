@@ -87,6 +87,14 @@ services:
       FORGEJO__oauth2_client__UPDATE_AVATAR: "false"
       # Only the platform bot may create organizations, one for each company.
       FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
+      # Images are published to Forgejo's own container registry, at localhost:3000.
+      FORGEJO__packages__ENABLED: "true"
+      # Webhooks tell the platform about new branches and merges. They may only go to the
+      # API on this machine, which Forgejo reaches through Docker's name for it.
+      FORGEJO__webhook__ALLOWED_HOST_LIST: host.docker.internal
+    extra_hosts:
+      # Docker Desktop knows this name already. Docker Engine on Linux needs it spelled out.
+      - "host.docker.internal:host-gateway"
     volumes:
       - forgejo-data:/data
     depends_on:

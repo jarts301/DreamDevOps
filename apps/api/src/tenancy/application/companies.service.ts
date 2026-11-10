@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type CompanyId, createDomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { type CompanyId, createDomainEvent, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import {
@@ -9,8 +9,6 @@ import {
 import { normalizeEmail } from '../../identity-access/domain/email.ts';
 import { type CompanyStatus, normalizeCompanyName, numberedSlug, slugFromName } from '../domain/company.ts';
 import { TenancyError } from '../domain/errors.ts';
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CompanySummary {
   readonly id: string;
@@ -185,7 +183,7 @@ export class CompaniesService {
     idValue: unknown,
     work: (tx: TenantTransaction, companyId: CompanyId, current: { name: string; status: CompanyStatus }) => Promise<T>,
   ): Promise<T> {
-    if (typeof idValue !== 'string' || !UUID_PATTERN.test(idValue)) {
+    if (!isUuid(idValue)) {
       throw new TenancyError('invalid', 'The company ID is not valid.');
     }
     const companyId = parseCompanyId(idValue);

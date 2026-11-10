@@ -1,3 +1,4 @@
+import { normalizeName } from '../../shared/names.ts';
 import { numberedSlug as sharedNumberedSlug, slugFromName as sharedSlugFromName } from '../../shared/slug.ts';
 import { TenancyError } from './errors.ts';
 
@@ -15,9 +16,8 @@ const MAX_SLUG_LENGTH = 40;
 
 /** Names are trimmed, single-spaced and between 2 and 80 characters, without control characters. */
 export function normalizeCompanyName(value: unknown): string {
-  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  // eslint-disable-next-line no-control-regex
-  if (name.length < 2 || name.length > 80 || /[\u0000-\u001f\u007f]/.test(name)) {
+  const name = normalizeName(value, { minLength: 2, maxLength: 80, refuseControlCharacters: true });
+  if (name === null) {
     throw new TenancyError('invalid', 'Enter a company name between 2 and 80 characters.');
   }
   return name;

@@ -10,6 +10,7 @@ import { Authenticated, RequirePermissions } from '../src/http/access.decorators
 import { summarize } from '../src/notifications/domain/event-catalog.ts';
 import { COMPANY_A, COMPANY_B } from './fakes.ts';
 import { createTestApp } from './test-app.ts';
+import { signIn as signInAs } from './support/integration.ts';
 
 const COMMUNITY = FEATURES.filter((feature) => feature.edition === 'community').map((feature) => feature.key);
 
@@ -109,13 +110,7 @@ describe('routes that need a feature', () => {
     await app.close();
   });
 
-  const signIn = async (user: string) => {
-    const agent = request.agent(app.getHttpServer());
-    const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-    const callback = new URL(login.headers.location as string);
-    await agent.get(callback.pathname + callback.search).expect(302);
-    return agent;
-  };
+  const signIn = (user: string) => signInAs(app, user);
 
   it('allow companies that have it', async () => {
     await (await signIn('developer-a')).get('/api/v1/sample/export').expect(200);

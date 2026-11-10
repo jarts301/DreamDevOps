@@ -140,6 +140,8 @@ describe('Applications', () => {
     expect(link.textContent).toBe('acme/billing');
     expect(link.rel).toBe('noopener');
     expect(text(fixture)).toContain('From node-service 1.0.0');
+    const builds = element(fixture).querySelector<HTMLAnchorElement>('a[aria-label="Builds of Billing"]')!;
+    expect(builds.getAttribute('href')).toBe('/builds?application=a-1');
   });
 
   it('shows members without the permission the list only', async () => {

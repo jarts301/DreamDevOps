@@ -1,12 +1,12 @@
 import { Logger } from '@nestjs/common';
-import { type CompanyId, createDomainEvent, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { type CompanyId, createDomainEvent, currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { Principal } from '../../identity-access/domain/access.ts';
+import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
 import { EditionError } from '../domain/errors.ts';
 import { type Edition, FEATURES, parseEdition, resolveFeatures } from '../domain/features.ts';
 import type { EntitlementProvider, ProviderStatus } from './ports.ts';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 
 export interface FeatureView {
@@ -32,10 +32,12 @@ export interface CompanyEditionView {
 export class Entitlements {
   readonly #logger = new Logger(Entitlements.name);
   readonly #database: TenantDatabase;
+  readonly #companies: CompanyDirectory;
   readonly #provider: EntitlementProvider;
 
-  constructor(database: TenantDatabase, provider: EntitlementProvider) {
+  constructor(database: TenantDatabase, companies: CompanyDirectory, provider: EntitlementProvider) {
     this.#database = database;
+    this.#companies = companies;
     this.#provider = provider;
   }
 
@@ -60,29 +62,31 @@ export class Entitlements {
 
   /** Every company's edition, for platform admins. It reveals no company data. */
   async listCompanies(): Promise<{ provider: ProviderStatus; companies: CompanyEditionView[] }> {
-    const companies = await runWithCompany(NO_COMPANY, () =>
+    const all = await this.#companies.all();
+    const editions = await runWithCompany(NO_COMPANY, () =>
       this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{
-          companyId: string;
-          companyName: string;
-          edition: Edition;
-          changedAt: Date | null;
-        }>(
-          `SELECT c.id AS "companyId", c.name AS "companyName",
-                  coalesce(e.edition, 'community') AS edition, e.changed_at AS "changedAt"
-           FROM tenancy.companies c
-           LEFT JOIN editions.company_editions e ON e.company_id = c.id
-           ORDER BY lower(c.name)`,
+        const { rows } = await tx.query<{ company_id: string; edition: Edition; changed_at: Date }>(
+          'SELECT company_id, edition, changed_at FROM editions.company_editions',
         );
-        return rows.map((row) => ({ ...row, changedAt: row.changedAt?.toISOString() ?? null }));
+        return new Map(rows.map((row) => [row.company_id, row]));
       }),
     );
+    // A company without a row is on the Community Edition.
+    const companies = all.map((company) => {
+      const chosen = editions.get(company.id);
+      return {
+        companyId: company.id,
+        companyName: company.name,
+        edition: chosen?.edition ?? 'community',
+        changedAt: chosen?.changed_at.toISOString() ?? null,
+      };
+    });
     return { provider: await this.#status(), companies };
   }
 
   /** Moves a company to another edition. The Commercial Edition needs the commercial code installed. */
   async setEdition(actor: Principal, companyIdValue: unknown, editionValue: unknown): Promise<void> {
-    if (typeof companyIdValue !== 'string' || !UUID_PATTERN.test(companyIdValue)) {
+    if (!isUuid(companyIdValue)) {
       throw new EditionError('invalid', 'The company ID is not valid.');
     }
     const edition = parseEdition(editionValue);
@@ -90,12 +94,13 @@ export class Entitlements {
       throw new EditionError('conflict', 'The Commercial Edition is not installed on this server.');
     }
     const companyId = parseCompanyId(companyIdValue);
+    if ((await this.#companies.find(companyId)) === null) {
+      throw new EditionError('not-found', 'This company does not exist.');
+    }
     await runWithCompany(companyId, () =>
       this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query('SELECT 1 FROM tenancy.companies WHERE id = $1 FOR UPDATE', [companyId]);
-        if (rows.length === 0) {
-          throw new EditionError('not-found', 'This company does not exist.');
-        }
+        // One change per company at a time, so the recorded previous edition is always right.
+        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('editions:' || $1, 0))", [companyId]);
         const previous = await editionOf(tx, companyId);
         if (previous === edition) {
           return;

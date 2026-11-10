@@ -1,35 +1,23 @@
 import type { INestApplication } from '@nestjs/common';
 import pg from 'pg';
-import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { PermanentSourceError, SOURCE_HOST } from '../src/source-governance/application/ports.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider, FakeSourceHost } from './fakes.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { type Agent, eventually as waitUntil, signIn as signInAs, unique } from './support/integration.ts';
 
 let database: TestDatabase;
 let ownerPool: pg.Pool;
 let app: INestApplication;
 const host = new FakeSourceHost();
 
-const eventually = (assertion: () => Promise<void> | void) => vi.waitFor(assertion, { timeout: 20_000, interval: 150 });
+const eventually = (assertion: () => Promise<void> | void) => waitUntil(assertion);
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
-type Agent = Awaited<ReturnType<typeof signIn>>;
+const signIn = (user: string) => signInAs(app, user);
 
-let counter = 0;
-const unique = (prefix: string) => {
-  counter += 1;
-  return `${prefix}-${'abcdefghijklmnopqrstuvwxyz'[Math.floor(counter / 26) % 26]}${'abcdefghijklmnopqrstuvwxyz'[counter % 26]}`;
-};
 /** The fake login gives each person this subject, which is also their Git username. */
 const gitUser = (name: string) => `fake|${name}`;
 
@@ -132,11 +120,11 @@ describe('application types', () => {
     expect(body).toEqual([
       expect.objectContaining({
         key: 'restful-service',
-        blueprint: expect.objectContaining({ key: 'node-service', version: '1.0.0', language: 'TypeScript' }),
+        blueprint: expect.objectContaining({ key: 'node-service', version: '1.1.0', language: 'TypeScript' }),
       }),
       expect.objectContaining({
         key: 'web-frontend',
-        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.0.0' }),
+        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.1.0' }),
       }),
     ]);
   });
@@ -161,7 +149,9 @@ describe('the blueprint library', () => {
     const { body } = await admin.get('/api/v1/blueprints').expect(200);
 
     expect(body.map((blueprint: { key: string; version: string }) => `${blueprint.key}@${blueprint.version}`)).toEqual([
+      'angular-frontend@1.1.0',
       'angular-frontend@1.0.0',
+      'node-service@1.1.0',
       'node-service@1.0.0',
     ]);
   });
@@ -180,7 +170,7 @@ describe('registering an application', () => {
       status: 'ready',
       fullName: `${organization}/billing-api`,
       url: `http://git.test/${organization}/billing-api`,
-      blueprint: { key: 'node-service', version: '1.0.0' },
+      blueprint: { key: 'node-service', version: '1.1.0' },
       lastError: null,
     });
     const stored = host.repositories.get(`${organization}/billing-api`)!;

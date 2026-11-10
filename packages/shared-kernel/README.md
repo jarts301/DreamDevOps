@@ -4,7 +4,7 @@ The building blocks every DreamDevOps module uses: company context, domain event
 
 | Import | Contents |
 |---|---|
-| `@dreamdevops/shared-kernel` | Company IDs, domain events, aggregates, company context, ports and the event bus. It has no database or vendor imports, so domain code can depend on it. |
+| `@dreamdevops/shared-kernel` | Company IDs, domain events, aggregates, `DomainError`, company context, ports and the event bus, and small helpers such as `isUuid` and `describeError`. It has no database or vendor imports, so domain code can depend on it. |
 | `@dreamdevops/shared-kernel/postgres` | Tenant transactions, the outbox and its relay, the pg-boss adapter and migrations. |
 | `@dreamdevops/shared-kernel/testing` | An in-memory job queue for fast tests. |
 
@@ -27,6 +27,7 @@ The change and its events commit together, so an event can't be lost or sent for
 - **Duplicates:** events can arrive more than once if the relay crashes after publishing, and failed handlers run again, so handlers must be idempotent.
 - **Ordering:** the relay publishes in saved order, but retries and multiple workers can change the order handlers run in, so handlers shouldn't rely on it.
 - **New company tables:** enable and force row-level security, using `kernel.current_company_id()` in the policy, as [the outbox migration](migrations/0001_create-kernel-outbox.sql) does.
+- **Long jobs:** a job that takes minutes, such as a build, needs its own queue with `expireInSeconds` and `heartbeatSeconds`, and a worker with a `concurrency`, so it runs one job at a time. Otherwise it may expire while still running and run twice.
 
 ## Database roles
 

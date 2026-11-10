@@ -49,6 +49,10 @@ e2e-results/
 # Local stack backups
 /infra/local/backups/
 
+# The local image signing key and secrets key, which the API creates on first start
+/infra/local/signing/
+/infra/local/secrets/
+
 # System files
 .DS_Store
 Thumbs.db

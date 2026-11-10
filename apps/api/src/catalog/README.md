@@ -35,3 +35,7 @@ All routes start with `/api/v1`. Every company member can read. Registering, edi
 ## Data separation
 
 Applications are company data. Row-level security limits every query to the current company, so another company's application can't be read or changed, even by ID. Names of the people who registered applications are read through a database function, because the app's database role can't read the user table.
+
+## For other modules
+
+Other modules use `ApplicationCatalog` to read applications. `ApplicationRegistered`, `ApplicationArchived` and `ApplicationRestored` are a contract, typed in `domain/events.ts`, because Source Governance reacts to them. Change them only compatibly. See the [architecture guide](../../../../ARCHITECTURE.md).

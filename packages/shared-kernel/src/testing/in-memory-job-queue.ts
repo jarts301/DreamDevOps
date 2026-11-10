@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { deadLetterQueueName } from '../application/ports.ts';
-import type { Job, JobHandler, JobQueue, QueueOptions } from '../application/ports.ts';
+import type { Job, JobHandler, JobQueue, QueueOptions, WorkOptions } from '../application/ports.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -31,7 +31,8 @@ export class InMemoryJobQueue implements JobQueue {
     return id;
   }
 
-  async work(queue: string, handler: JobHandler): Promise<void> {
+  /** Runs jobs one at a time, in the order they were sent, whatever the concurrency. */
+  async work(queue: string, handler: JobHandler, _options?: WorkOptions): Promise<void> {
     this.#assertQueueExists(queue);
     this.#handlers.set(queue, handler);
   }

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
+import { createDomainEvent, currentCompanyId, isUuid } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { BlueprintLibrary } from '../../blueprints/infrastructure/blueprint-library.ts';
+import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import {
   type ApplicationStatus,
@@ -10,8 +10,8 @@ import {
   normalizeDescription,
 } from '../domain/application.ts';
 import { CatalogError } from '../domain/errors.ts';
+import type { ApplicationRegisteredPayload, ApplicationStatusPayload } from '../domain/events.ts';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ApplicationType {
   readonly key: string;
@@ -59,9 +59,9 @@ const SELECT_APPLICATIONS = 'SELECT * FROM catalog.applications_view() a';
 /** Each company's register of applications. Every query runs in the current company. */
 export class ApplicationCatalog {
   readonly #database: TenantDatabase;
-  readonly #blueprints: BlueprintLibrary;
+  readonly #blueprints: BlueprintCatalog;
 
-  constructor(database: TenantDatabase, blueprints: BlueprintLibrary) {
+  constructor(database: TenantDatabase, blueprints: BlueprintCatalog) {
     this.#database = database;
     this.#blueprints = blueprints;
   }
@@ -138,7 +138,7 @@ export class ApplicationCatalog {
         [id, companyId, name, slug, type, description, actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
+        createDomainEvent<'ApplicationRegistered', ApplicationRegisteredPayload>({
           eventType: 'ApplicationRegistered',
           companyId,
           actorId: actor.userId,
@@ -211,7 +211,7 @@ export class ApplicationCatalog {
         [id, status],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
+        createDomainEvent<'ApplicationArchived' | 'ApplicationRestored', ApplicationStatusPayload>({
           eventType: status === 'archived' ? 'ApplicationArchived' : 'ApplicationRestored',
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -223,7 +223,7 @@ export class ApplicationCatalog {
 }
 
 function parseApplicationId(value: unknown): string {
-  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+  if (!isUuid(value)) {
     throw new CatalogError('invalid', 'The application ID is not valid.');
   }
   return value;

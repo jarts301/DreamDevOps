@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 export interface AppConfig {
@@ -49,6 +50,46 @@ export interface AppConfig {
   /** Allows webhooks to reach internal and local addresses. For local testing only. */
   readonly webhookAllowPrivateNetworks: boolean;
   readonly notificationRetrySeconds: number;
+  /** Where Forgejo sends webhooks about new branches and merges. It must reach this API. */
+  readonly forgejoWebhookUrl: string;
+  /** The master secret each repository's webhook secret is made from. */
+  readonly forgejoWebhookSecret: string;
+  /** The registry images are published to. Defaults to Forgejo's own, at FORGEJO_URL. */
+  readonly registryUrl: string;
+  /** The ECDSA P-256 private key, in PEM, that signs every image. */
+  readonly imageSigningKeyFile: string;
+  /** Whether images are scanned for vulnerabilities. "none" is for local testing only. */
+  readonly imageScanner: 'trivy' | 'none';
+  /** The Trivy image that scans images. */
+  readonly trivyImage: string;
+  /** How many builds run at once in this API process. */
+  readonly buildConcurrency: number;
+  readonly buildTimeoutMs: number;
+  /** Attempts before a build that keeps hitting temporary problems is marked as failed. */
+  readonly buildMaxAttempts: number;
+  readonly buildRetrySeconds: number;
+  /** Whether companies may run applications on this server's own Docker. */
+  readonly localHosting: boolean;
+  /** Where applications on this machine publish their ports. 127.0.0.1 keeps them to this machine. */
+  readonly localHostingBindAddress: string;
+  /** Attempts before a deployment that keeps hitting temporary problems is marked as failed. */
+  readonly deployMaxAttempts: number;
+  readonly deployRetrySeconds: number;
+  /** How long a new version has to become healthy before it's rolled back. */
+  readonly deployHealthTimeoutMs: number;
+  /** The key, 32 bytes in base64, that seals environments' secrets. */
+  readonly secretsKeyFile: string;
+  /**
+   * Sample data for local development: a sample company with a sample account in each
+   * role. Never in production.
+   */
+  readonly sampleData: {
+    /** Keycloak's own administrator, who can add sample accounts an older realm lacks. */
+    readonly keycloakAdminUsername: string;
+    readonly keycloakAdminPassword: string;
+    /** The password new sample accounts get. */
+    readonly password: string;
+  } | null;
 }
 
 export class InvalidConfigError extends Error {
@@ -63,6 +104,12 @@ type Environment = Readonly<Record<string, string | undefined>>;
 const MINUTE_MS = 60_000;
 // Three folders up from both src/config and dist/config is the repository root.
 const DEFAULT_BLUEPRINTS_DIR = fileURLToPath(new URL('../../../../blueprints', import.meta.url));
+// Created on first use on a developer's machine. Git ignores the folder.
+const DEFAULT_SIGNING_KEY_FILE = fileURLToPath(new URL('../../../../infra/local/signing/image-signing.key', import.meta.url));
+// Created on first use on a developer's machine, like the signing key. Git ignores the folder.
+const DEFAULT_SECRETS_KEY_FILE = fileURLToPath(new URL('../../../../infra/local/secrets/environment-secrets.key', import.meta.url));
+const DEFAULT_TRIVY_IMAGE = 'aquasec/trivy:0.58.1';
+const MIN_PRODUCTION_SECRET_LENGTH = 32;
 
 /** Reads settings once at startup and refuses to start if any are unsafe or missing. */
 export function loadConfig(env: Environment): AppConfig {
@@ -83,7 +130,39 @@ export function loadConfig(env: Environment): AppConfig {
       'SMTP_SECURITY=none, WEBHOOK_ALLOW_INSECURE and WEBHOOK_ALLOW_PRIVATE_NETWORKS are for local testing only.',
     );
   }
+  const imageScanner = env.IMAGE_SCANNER ?? 'trivy';
+  if (imageScanner !== 'trivy' && imageScanner !== 'none') {
+    throw new InvalidConfigError('IMAGE_SCANNER must be trivy or none.');
+  }
+  const localHosting = env.LOCAL_HOSTING ?? 'on';
+  if (localHosting !== 'on' && localHosting !== 'off') {
+    throw new InvalidConfigError('LOCAL_HOSTING must be on or off.');
+  }
+  const localHostingBindAddress = env.LOCAL_HOSTING_BIND_ADDRESS || '127.0.0.1';
+  if (isIP(localHostingBindAddress) === 0) {
+    throw new InvalidConfigError('LOCAL_HOSTING_BIND_ADDRESS must be an IP address, such as 127.0.0.1.');
+  }
+  const sampleData = env.SAMPLE_DATA ?? 'off';
+  if (sampleData !== 'on' && sampleData !== 'off') {
+    throw new InvalidConfigError('SAMPLE_DATA must be on or off.');
+  }
+  if (isProduction && sampleData === 'on') {
+    throw new InvalidConfigError('SAMPLE_DATA is for local development only.');
+  }
+  const forgejoWebhookSecret = required(env, 'FORGEJO_WEBHOOK_SECRET');
   if (isProduction) {
+    if (imageScanner === 'none') {
+      throw new InvalidConfigError('IMAGE_SCANNER=none is for local testing only.');
+    }
+    if (forgejoWebhookSecret.length < MIN_PRODUCTION_SECRET_LENGTH) {
+      throw new InvalidConfigError(`FORGEJO_WEBHOOK_SECRET must be at least ${MIN_PRODUCTION_SECRET_LENGTH} characters in production.`);
+    }
+    if (!env.IMAGE_SIGNING_KEY_FILE) {
+      throw new InvalidConfigError('IMAGE_SIGNING_KEY_FILE must be set in production.');
+    }
+    if (!env.SECRETS_KEY_FILE) {
+      throw new InvalidConfigError('SECRETS_KEY_FILE must be set in production.');
+    }
     if (!keycloakIssuerUrl.startsWith('https://')) {
       throw new InvalidConfigError('KEYCLOAK_ISSUER_URL must use https in production.');
     }
@@ -128,6 +207,32 @@ export function loadConfig(env: Environment): AppConfig {
     webhookAllowInsecure,
     webhookAllowPrivateNetworks,
     notificationRetrySeconds: integer(env, 'NOTIFICATION_RETRY_SECONDS', 30),
+    forgejoWebhookUrl: env.FORGEJO_WEBHOOK_URL
+      ? url(env, 'FORGEJO_WEBHOOK_URL')
+      : `${url(env, 'API_PUBLIC_URL')}/api/v1/hooks/forgejo`,
+    forgejoWebhookSecret,
+    registryUrl: env.IMAGE_REGISTRY_URL ? url(env, 'IMAGE_REGISTRY_URL') : url(env, 'FORGEJO_URL'),
+    imageSigningKeyFile: env.IMAGE_SIGNING_KEY_FILE || DEFAULT_SIGNING_KEY_FILE,
+    imageScanner,
+    trivyImage: env.TRIVY_IMAGE || DEFAULT_TRIVY_IMAGE,
+    buildConcurrency: Math.max(1, integer(env, 'BUILD_CONCURRENCY', 1)),
+    buildTimeoutMs: Math.max(1, integer(env, 'BUILD_TIMEOUT_MINUTES', 30)) * MINUTE_MS,
+    buildMaxAttempts: Math.max(1, integer(env, 'BUILD_MAX_ATTEMPTS', 3)),
+    buildRetrySeconds: integer(env, 'BUILD_RETRY_SECONDS', 30),
+    localHosting: localHosting === 'on',
+    localHostingBindAddress,
+    deployMaxAttempts: Math.max(1, integer(env, 'DEPLOY_MAX_ATTEMPTS', 2)),
+    deployRetrySeconds: integer(env, 'DEPLOY_RETRY_SECONDS', 15),
+    deployHealthTimeoutMs: Math.max(1, integer(env, 'DEPLOY_HEALTH_TIMEOUT_SECONDS', 120)) * 1000,
+    secretsKeyFile: env.SECRETS_KEY_FILE || DEFAULT_SECRETS_KEY_FILE,
+    sampleData:
+      sampleData === 'on'
+        ? {
+            keycloakAdminUsername: required(env, 'KEYCLOAK_ADMIN_USERNAME'),
+            keycloakAdminPassword: required(env, 'KEYCLOAK_ADMIN_PASSWORD'),
+            password: required(env, 'KEYCLOAK_DEV_USER_PASSWORD'),
+          }
+        : null,
   };
 }
 

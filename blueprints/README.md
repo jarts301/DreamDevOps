@@ -7,7 +7,7 @@ A blueprint is the starting point of every new application of one type. It holds
 | `node-service` | RESTful Service | TypeScript on Fastify and Node.js 24, with health checks and OpenTelemetry |
 | `angular-frontend` | Web Frontend | Angular 22 served by nginx, with settings read at runtime |
 
-Both scaffolds pin their base images by digest, install from a lockfile, and run as a non-root user with a read-only file system.
+Both scaffolds pin their base images by digest, install from a lockfile, and run as a non-root user with a read-only file system. From version 1.1.0, their images also apply the security fixes Alpine released after the base image, with `apk upgrade`, so building again fixes vulnerabilities a newer package fixes. Applications started from 1.0.0 can add the same lines to their `Dockerfile`.
 
 ## Layout
 

@@ -1,38 +1,27 @@
 import type { INestApplication } from '@nestjs/common';
 import pg from 'pg';
-import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { GIT_PROVIDER, PermanentProvisioningError } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider } from './fakes.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { eventually as waitUntil, signIn as signInAs, unique } from './support/integration.ts';
 
 let database: TestDatabase;
 let ownerPool: pg.Pool;
 let app: INestApplication;
 const git = new FakeGitProvider();
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
+const signIn = (user: string) => signInAs(app, user);
 
-let counter = 0;
-const unique = (prefix: string) => {
-  counter += 1;
-  return `${prefix}-${'abcdefghijklmnopqrstuvwxyz'[Math.floor(counter / 26) % 26]}${'abcdefghijklmnopqrstuvwxyz'[counter % 26]}`;
-};
 
 const statusOf = async (companyId: string) => {
   const { rows } = await ownerPool.query('SELECT status FROM tenancy.companies WHERE id = $1', [companyId]);
   return rows[0]?.status as string | undefined;
 };
 
-const eventually = (assertion: () => Promise<void> | void) => vi.waitFor(assertion, { timeout: 20_000, interval: 100 });
+const eventually = (assertion: () => Promise<void> | void) => waitUntil(assertion, { interval: 100 });
 
 /** Creates a company through the API and lets its first admin join. */
 const createCompany = async (name = unique('Acme')) => {
@@ -331,5 +320,34 @@ describe('events', () => {
       'CompanyProvisioningRequested',
     ]);
     expect(JSON.stringify(rows)).not.toContain('@example.com');
+  });
+
+  it('records nothing when a change changes nothing', async () => {
+    const { platformAdmin, company } = await createCompany();
+    await eventually(async () => expect(await statusOf(company.id)).toBe('active'));
+    // Read as the application role in the company's context, as row-level security requires.
+    const countEvents = async () => {
+      const client = new pg.Client({ connectionString: database.urlFor('app') });
+      await client.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("SELECT set_config('app.current_company_id', $1, true)", [company.id]);
+        const { rows } = await client.query("SELECT count(*) AS n FROM kernel.outbox WHERE event_type LIKE 'Company%'");
+        await client.query('ROLLBACK');
+        return Number(rows[0].n);
+      } finally {
+        await client.end();
+      }
+    };
+    const before = await countEvents();
+
+    await platformAdmin.patch(`/api/v1/platform/companies/${company.id}`).send({ name: company.name }).expect(204);
+    await platformAdmin.post(`/api/v1/platform/companies/${company.id}/reactivate`).expect(204);
+    await platformAdmin.post(`/api/v1/platform/companies/${company.id}/suspend`).expect(204);
+    await platformAdmin.post(`/api/v1/platform/companies/${company.id}/suspend`).expect(204);
+
+    expect(await countEvents()).toBe(before + 1);
+    await platformAdmin.post(`/api/v1/platform/companies/${company.id}/provision`).expect(409);
+    await platformAdmin.post('/api/v1/platform/companies/not-an-id/suspend').expect(400);
   });
 });
