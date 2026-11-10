@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { SessionService } from '../../core/session.service';
 import {
@@ -31,7 +32,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
  */
 @Component({
   selector: 'app-environments',
-  imports: [DatePipe, ReactiveFormsModule],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Environments</h1>
@@ -130,7 +131,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
               @for (environment of environments(); track environment.id) {
                 <tr>
                   <td>
-                    {{ environment.name }}
+                    <a [routerLink]="['/environments', environment.id]">{{ environment.name }}</a>
                     <p class="cell-note"><code>{{ environment.slug }}</code></p>
                   </td>
                   <td>{{ environment.kind === 'production' ? 'Production' : 'Test' }}</td>

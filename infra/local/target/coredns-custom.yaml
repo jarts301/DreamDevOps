@@ -1,0 +1,15 @@
+# Lets pods in the local target resolve platform.internal, the gateway's fixed address.
+# k3s applies files in its manifests folder when it starts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  platform.server: |
+    platform.internal:53 {
+      hosts {
+        10.213.90.10 platform.internal
+        fallthrough
+      }
+    }

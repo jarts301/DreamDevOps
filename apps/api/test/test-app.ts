@@ -1,3 +1,4 @@
+import { ENVIRONMENT_REPOSITORIES, PULL_ACCOUNTS, SECRET_STORE } from '../src/environments/application/ports.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,10 +16,13 @@ import { MAILER } from '../src/notifications/application/ports.ts';
 import { SOURCE_HOST } from '../src/source-governance/application/ports.ts';
 import { IMAGE_REGISTRY, PIPELINE_HOST } from '../src/builds/application/ports.ts';
 import {
+  FakeEnvironmentRepositories,
   FakeIdentityProvider,
   FakeImageRegistry,
   FakeMailer,
   FakePipelineHost,
+  FakePullAccounts,
+  FakeSecretStore,
   FakeSourceHost,
   InMemoryUserDirectory,
 } from './fakes.ts';
@@ -63,6 +67,14 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   agentChart: 'oci://charts.test/dreamdevops-agent',
   targetLostAfterSeconds: 180,
   demoData: false,
+  forgejoAdminUsername: 'forgejo-admin',
+  forgejoAdminPassword: 'fake-dummy-forgejo-admin-password',
+  openbaoUrl: 'http://openbao.test',
+  openbaoToken: 'fake-dummy-openbao-token-for-tests',
+  targetOpenbaoUrl: 'http://openbao.target.test',
+  targetRegistryHost: 'registry.target.test',
+  targetGitSshUrl: 'ssh://git@git.target.test:2222',
+  targetGitKnownHosts: '[git.target.test]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeTestHostKeyForTargetsOnly000000000000',
   provisioningMaxAttempts: 3,
   provisioningRetrySeconds: 1,
   smtpHost: 'unused',
@@ -98,6 +110,9 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
         { provide: SOURCE_HOST, useValue: new FakeSourceHost() },
         { provide: IMAGE_REGISTRY, useValue: new FakeImageRegistry() },
         { provide: PIPELINE_HOST, useValue: new FakePipelineHost() },
+        { provide: ENVIRONMENT_REPOSITORIES, useValue: new FakeEnvironmentRepositories() },
+        { provide: PULL_ACCOUNTS, useValue: new FakePullAccounts() },
+        { provide: SECRET_STORE, useValue: new FakeSecretStore() },
         ...(options.overrides ?? []),
       ],
     }),

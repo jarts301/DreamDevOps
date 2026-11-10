@@ -5,7 +5,17 @@ import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { SessionService } from '../../core/session.service';
 import { type Application, CatalogApi, type Repository } from '../catalog/catalog.api';
-import { type Build, type BuildKind, type BuildStatus, DeliveryApi, type Release, type ReleaseKind } from './delivery.api';
+import {
+  type Build,
+  type BuildKind,
+  type BuildStatus,
+  DeliveryApi,
+  type PipelineJob,
+  type Release,
+  type ReleaseKind,
+} from './delivery.api';
+import { DeploymentsPanel } from './deployments-panel';
+import { ProgressSteps, type Step } from './progress-steps';
 
 const STATUS_LABELS: Readonly<Record<BuildStatus, string>> = {
   queued: 'Waiting',
@@ -34,7 +44,7 @@ const REFRESH_MS = 5_000;
 /** One application: its repository, versions, builds and releases. */
 @Component({
   selector: 'app-application-detail',
-  imports: [DatePipe, ReactiveFormsModule, RouterLink],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink, ProgressSteps, DeploymentsPanel],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <p><a routerLink="/applications">← Applications</a></p>
@@ -58,26 +68,27 @@ const REFRESH_MS = 5_000;
       </p>
 
       @if (canBuildFeatures()) {
-        <section class="card" aria-labelledby="feature-heading">
-          <h2 id="feature-heading">Build a feature image</h2>
+        <section class="card" id="build-test-image" aria-labelledby="feature-heading">
+          <h2 id="feature-heading">Build a test image</h2>
           @if (featureBranches().length === 0) {
             <p class="muted">There are no feature/* branches yet. Push one, then build it here.</p>
           } @else {
             <form class="form-row" [formGroup]="featureForm" (ngSubmit)="buildFeature()">
               <label class="field">
                 <span>Branch</span>
-                <select formControlName="branch">
+                <select id="test-image-branch" formControlName="branch">
                   @for (branch of featureBranches(); track branch) {
                     <option [value]="branch">{{ branch }}</option>
                   }
                 </select>
               </label>
               <button type="submit" class="button button-primary" [disabled]="featureForm.invalid || working()">
-                Build image
+                Build test image
               </button>
             </form>
             <p class="cell-note">
-              Feature images are signed with the test key, so only test environments accept them.
+              Test images are built from feature/* branches and signed with the test key, so only test
+              environments that accept feature images can run them. You can follow each step below.
             </p>
           }
         </section>
@@ -191,6 +202,8 @@ const REFRESH_MS = 5_000;
         }
       </section>
 
+      <app-deployments-panel [application]="app.id" [versions]="versions()" />
+
       <section class="card" aria-labelledby="builds-heading">
         <h2 id="builds-heading">Builds</h2>
         @if (builds().length === 0) {
@@ -218,6 +231,7 @@ const REFRESH_MS = 5_000;
                     <td>{{ kindLabel(build.kind) }}</td>
                     <td>
                       <span class="status" [attr.data-status]="statusStyle(build.status)">{{ statusLabel(build.status) }}</span>
+                      <app-progress-steps [steps]="buildSteps(build)" [label]="'Steps of ' + build.tag" />
                       @if (build.failureReason) {
                         <p class="cell-note">{{ build.failureReason }}</p>
                       }
@@ -244,6 +258,8 @@ const REFRESH_MS = 5_000;
 export class ApplicationDetail implements OnInit, OnDestroy {
   /** From the route. */
   readonly id = input.required<string>();
+  /** "test" when someone came here to build a test image. From the address. */
+  readonly build = input<string>();
 
   readonly #catalog = inject(CatalogApi);
   readonly #delivery = inject(DeliveryApi);
@@ -292,6 +308,13 @@ export class ApplicationDetail implements OnInit, OnDestroy {
       await this.#refresh();
       this.suggest();
     });
+    if (this.build() === 'test' && this.canBuildFeatures()) {
+      // After the page renders, take people straight to the form.
+      setTimeout(() => {
+        document.getElementById('build-test-image')?.scrollIntoView({ block: 'start' });
+        document.getElementById('test-image-branch')?.focus();
+      });
+    }
   }
 
   ngOnDestroy(): void {
@@ -300,6 +323,15 @@ export class ApplicationDetail implements OnInit, OnDestroy {
 
   protected statusLabel(status: BuildStatus): string {
     return STATUS_LABELS[status];
+  }
+
+  /** The pipeline's jobs, with what each found once it's done. */
+  protected buildSteps(build: Build): Step[] {
+    return build.progress.map(({ job, state }) => ({
+      label: JOB_LABELS[job],
+      state,
+      detail: state === 'passed' || state === 'failed' ? jobDetail(job, build) : null,
+    }));
   }
 
   protected statusStyle(status: BuildStatus): string | null {
@@ -383,5 +415,31 @@ export class ApplicationDetail implements OnInit, OnDestroy {
         this.working.set(false);
       }
     }
+  }
+}
+
+const JOB_LABELS: Readonly<Record<PipelineJob, string>> = {
+  secrets: 'Secret scan',
+  test: 'Tests',
+  image: 'Image',
+  scan: 'Vulnerability scan',
+  sbom: 'SBOM',
+};
+
+function jobDetail(job: PipelineJob, build: Build): string | null {
+  const { reports } = build;
+  switch (job) {
+    case 'secrets':
+      return reports.secrets === undefined ? null : reports.secrets.found === 0 ? 'none found' : `${reports.secrets.found} found`;
+    case 'image':
+      return reports.image === undefined ? null : `${Math.round(reports.image.size / 1024 / 1024)} MB`;
+    case 'scan':
+      return reports.scan === undefined
+        ? null
+        : `${reports.scan.critical} critical, ${reports.scan.high} high`;
+    case 'sbom':
+      return reports.sbom === undefined ? null : `${reports.sbom.components} components`;
+    default:
+      return null;
   }
 }

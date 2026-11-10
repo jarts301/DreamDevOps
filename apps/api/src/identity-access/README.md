@@ -16,7 +16,9 @@ Each user has one role per company. Roles and their permissions are stored as da
 | Start releases and hotfixes | `releases:start` | | Yes | | | |
 | Build feature test images | `feature-images:build` | | Yes | Yes | | |
 | Deploy to test and roll back | `deployments-test:run` | | Yes | Yes | Yes | |
-| Deploy to production and roll back | `deployments-production:run` | | Yes | | Yes | |
+| Deploy to production and roll back, and approve production deployments | `deployments-production:run` | | Yes | | Yes | |
+| Manage every environment's variables and secrets | `environment-config:manage` | | Yes | | Yes | |
+| Manage test environments' variables and secrets | `test-environment-config:manage` | Yes | Yes | | Yes | |
 | View dashboards and logs | `dashboards:view` | Yes | Yes | Yes | Yes | Yes |
 | Read the audit log | `audit:read` | Yes | | | | |
 | Manage chat notifications | `notifications:manage` | Yes | | | | |

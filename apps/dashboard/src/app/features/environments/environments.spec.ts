@@ -1,6 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { describeEvent } from '../../core/events';
 import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
@@ -52,6 +53,7 @@ describe('Environments', () => {
   const setUp = (permissions: string[]) => {
     TestBed.configureTestingModule({
       providers: [
+        provideRouter([]),
         provideHttpClient(),
         provideHttpClientTesting(),
         {

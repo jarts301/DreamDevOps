@@ -5,6 +5,7 @@ import { BuildError } from '../builds/domain/errors.ts';
 import { ReleaseError } from '../releases/domain/errors.ts';
 import { CatalogError } from '../catalog/domain/errors.ts';
 import { EditionError } from '../editions/domain/errors.ts';
+import { DeploymentError } from '../deployments/domain/errors.ts';
 import { EnvironmentError } from '../environments/domain/errors.ts';
 import { AccessError } from '../identity-access/domain/errors.ts';
 import { NotificationError } from '../notifications/domain/errors.ts';
@@ -54,7 +55,11 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       return { status: statuses[error.kind], detail: error.message };
     }
     if (error instanceof EnvironmentError) {
-      const statuses = { invalid: 400, unauthorized: 401, 'not-found': 404, conflict: 409 };
+      const statuses = { invalid: 400, unauthorized: 401, forbidden: 403, 'not-found': 404, conflict: 409 };
+      return { status: statuses[error.kind], detail: error.message };
+    }
+    if (error instanceof DeploymentError) {
+      const statuses = { invalid: 400, forbidden: 403, 'not-entitled': 403, 'not-found': 404, conflict: 409 };
       return { status: statuses[error.kind], detail: error.message };
     }
     if (error instanceof EditionError) {

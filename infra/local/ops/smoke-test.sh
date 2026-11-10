@@ -71,6 +71,8 @@ check "Keycloak is ready" wget -qO- http://keycloak:9000/health/ready
 check "Keycloak accepts the administrator login" keycloak_login
 check "Keycloak rejects a bad login" keycloak_rejects_bad_login
 check "Forgejo signs people in through Keycloak" forgejo_signs_in_through_keycloak
+# Answers 200 only when OpenBao is initialized and unsealed.
+check "OpenBao is unsealed and ready" wget -qO- http://openbao:8200/v1/sys/health
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed."

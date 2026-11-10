@@ -54,6 +54,72 @@ export interface Reports {
   readonly image?: { readonly digest: string; readonly size: number };
   readonly scan?: ScanReport;
   readonly sbom?: { readonly components: number };
+  /** When each pipeline job started, as the jobs report it. */
+  readonly started?: Readonly<Partial<Record<PipelineJob, string>>>;
+  /** The jobs the pipeline said failed or were cancelled. */
+  readonly failedJobs?: readonly string[];
+}
+
+/** The pipeline's jobs, in the order they run. Checks run only the first two. */
+export const PIPELINE_JOBS = ['secrets', 'test', 'image', 'scan', 'sbom'] as const;
+export type PipelineJob = (typeof PIPELINE_JOBS)[number];
+
+export type JobState = 'waiting' | 'running' | 'passed' | 'failed' | 'skipped';
+
+export interface JobProgress {
+  readonly job: PipelineJob;
+  readonly state: JobState;
+  readonly startedAt: string | null;
+}
+
+const JOB_REPORT: Readonly<Record<PipelineJob, keyof Reports>> = {
+  secrets: 'secrets',
+  test: 'tests',
+  image: 'image',
+  scan: 'scan',
+  sbom: 'sbom',
+};
+
+/**
+ * Where each job of a build stands, for people to follow. A job is running once it said
+ * it started, and done once its report is in. When the build has finished, jobs that
+ * never ran count as skipped.
+ */
+export function buildProgress(
+  kind: BuildKind,
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted',
+  reports: Reports,
+): JobProgress[] {
+  const jobs = kind === 'check' ? PIPELINE_JOBS.slice(0, 2) : PIPELINE_JOBS;
+  const finished = status === 'succeeded' || status === 'failed' || status === 'deleted';
+  return jobs.map((job) => {
+    const startedAt = reports.started?.[job] ?? null;
+    const report = reports[JOB_REPORT[job]];
+    let state: JobState;
+    if (reports.failedJobs?.includes(job) || jobFailed(job, reports)) {
+      state = 'failed';
+    } else if (report !== undefined) {
+      state = 'passed';
+    } else if (finished) {
+      state = 'skipped';
+    } else {
+      state = startedAt === null ? 'waiting' : 'running';
+    }
+    return { job, state, startedAt };
+  });
+}
+
+function jobFailed(job: PipelineJob, reports: Reports): boolean {
+  switch (job) {
+    case 'secrets':
+      return (reports.secrets?.found ?? 0) > 0;
+    case 'test':
+      return reports.tests !== undefined && !reports.tests.passed;
+    case 'scan':
+      return (reports.scan?.critical ?? 0) > 0;
+    default:
+      return false;
+  }
 }
 
 export type Outcome =

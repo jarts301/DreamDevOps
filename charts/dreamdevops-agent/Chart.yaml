@@ -1,0 +1,10 @@
+apiVersion: v2
+name: dreamdevops-agent
+description: Connects a Kubernetes cluster to DreamDevOps as a deployment target. It installs the agent and Flux; the agent then has Flux install Argo Rollouts, Kyverno and the External Secrets Operator. Everything only makes outbound calls.
+type: application
+version: 0.1.3
+appVersion: "0.1.3"
+dependencies:
+  - name: flux2
+    version: 2.19.1
+    repository: https://fluxcd-community.github.io/helm-charts

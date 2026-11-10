@@ -34,6 +34,8 @@ jobs:
       - name: Look for secrets in the code
         run: |
           set -u
+          # Tells the platform this job started, so people can follow the build.
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/secrets/started" || true
           mkdir -p /tmp/source && cd /tmp/source
           wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
           gitleaks dir . --no-banner --redact --exit-code 0 --report-format json --report-path /tmp/secrets.json
@@ -50,6 +52,8 @@ jobs:
       - name: Run the tests
         run: |
           set -u
+          # Tells the platform this job started, so people can follow the build.
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/test/started" || true
           mkdir -p /tmp/source && cd /tmp/source
           wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
           if [ -f package.json ]; then
@@ -75,6 +79,8 @@ jobs:
     steps:
       - name: Build the image without root
         run: |
+          # Tells the platform this job started, so people can follow the build.
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/image/started" || true
           set -eu
           mkdir -p /tmp/source && cd /tmp/source
           wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
@@ -109,6 +115,8 @@ jobs:
     steps:
       - name: Scan the image for vulnerabilities
         run: |
+          # Tells the platform this job started, so people can follow the build.
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/scan/started" || true
           set -eu
           wget -qO /tmp/image.tar --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/image"
           # Trivy reads an OCI image layout only as a folder.
@@ -130,6 +138,8 @@ jobs:
     steps:
       - name: List the image's contents
         run: |
+          # Tells the platform this job started, so people can follow the build.
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/sbom/started" || true
           set -eu
           wget -qO /tmp/image.tar --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/image"
           /syft oci-archive:/tmp/image.tar --output cyclonedx-json=/tmp/sbom.json --quiet

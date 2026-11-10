@@ -18,6 +18,10 @@ const valid = {
   WEBHOOK_SECRET_KEY: 'fake-dummy-webhook-secret-key-for-tests-only',
   SIGNING_KEY_SECRET: 'fake-dummy-signing-key-secret-for-tests-only',
   IMAGE_RUNNER_LABEL: 'fake-dummy-image-runner',
+  FORGEJO_ADMIN_USERNAME: 'platform-admin',
+  FORGEJO_ADMIN_PASSWORD: 'fake-dummy-forgejo-admin-password',
+  OPENBAO_URL: 'http://localhost:8200',
+  OPENBAO_TOKEN: 'fake-dummy-openbao-platform-token',
 };
 
 const production = {
@@ -27,6 +31,7 @@ const production = {
   WEBHOOK_SECRET_KEY: 'a-real-webhook-secret-key-that-is-long-enough',
   SIGNING_KEY_SECRET: 'a-real-signing-key-secret-that-is-long-enough',
   IMAGE_RUNNER_LABEL: 'image-runner-3f9a2c7d41e6',
+  OPENBAO_TOKEN: 'a-real-openbao-token-that-is-long-enough',
   AGENT_API_URL: 'https://api.example.com',
 };
 

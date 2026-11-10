@@ -8,6 +8,8 @@ Runs the shared tools DreamDevOps needs on your own machine, using Docker Deskto
 | Keycloak | Login provider, with the `dreamdevops` realm and sample users | <http://localhost:8081> |
 | Forgejo | Git hosting, with a `dreamdevops-bot` user that creates each company's organization. People sign in through Keycloak. | <http://localhost:3000>, SSH on `localhost:2222` |
 | Mailpit | Catches every email and shows it in a web page. Nothing is sent out. | <http://localhost:8025>, SMTP on `localhost:1025` |
+| OpenBao | Keeps each environment's secrets | <http://localhost:8200> |
+| k3s target | A Kubernetes cluster to deploy to, started only on request | `localhost:6443` |
 | CI runners | Run Forgejo Actions jobs, each in a new unprivileged, short-lived container on their own Docker engine, which can't reach the other tools | Not reachable from outside |
 
 All ports bind to `127.0.0.1`, so other machines can't reach them. Every password in `.env.example` is a fake dummy value, starting with `fake-dummy-`, and must never be used on a server. The tools keep the passwords they started with, so changing one in `.env` after the first run means changing it inside the tool too, or resetting with `docker compose down -v`, which deletes all local data.
@@ -77,6 +79,36 @@ Platform admins, Company Admins and Tech Leads must sign in with a one-time code
 ## Demo users
 
 `keycloak-init` also adds one demo user for each role, `demo-platform-admin`, `demo-company-admin`, `demo-tech-lead`, `demo-developer`, `demo-operator` and `demo-viewer`, all with the password in `KEYCLOAK_DEV_USER_PASSWORD`. Users that already exist are left alone, so authenticators survive restarts. It also removes the earlier `dev-company-admin` and `dev-developer`. The local API adds the demo users to Demo Company when it starts.
+
+## OpenBao
+
+OpenBao keeps each environment's secrets. It starts sealed, so `openbao-init` unseals it on every `start`. The first time, it initializes OpenBao with one key, kept with the root token in the `openbao-keys` volume, which only `openbao-init` mounts. It also makes the platform's token, whose ID is `OPENBAO_PLATFORM_TOKEN`: that token writes and deletes secrets but can't read them.
+
+On servers, use auto-unseal with a cloud key service, keep no root token, and let OpenBao make the platform's token: a token with a chosen ID uses weaker hashing, which OpenBao warns about.
+
+## The local target
+
+A k3s cluster in Docker, like a customer's machine. It isn't started with the rest, because it needs about 2 GB of memory:
+
+```bash
+docker compose --profile target up -d
+```
+
+It reaches the platform only through `target-gateway`, at the fixed address `platform.internal` (`10.213.90.10`). The gateway forwards to Forgejo (web, registry and Git over SSH on port 2222), OpenBao and the API on your machine. Pods in k3s can't resolve Docker's service names, so k3s's DNS knows only that one name. The gateway also rewrites the registry's sign-in address, which Forgejo gives as `localhost:3000`.
+
+Application images are named by the gateway's address, `10.213.90.10:3000`: Kyverno checks signatures over plain HTTP only at private addresses.
+
+To connect it:
+
+1. Publish the agent once, and again after changing it: `npm run publish:local -w @dreamdevops/agent`.
+2. In the dashboard, open **Environments**, create an environment and choose **Connect a target**.
+3. Run the command it shows here, without the leading `helm`. The wrapper adds what the plain-HTTP local registry needs:
+
+   ```bash
+   docker compose --profile target run --rm target-helm upgrade --install dreamdevops-agent oci://platform.internal:3000/dreamdevops-bot/charts/dreamdevops-agent --namespace dreamdevops-system --create-namespace --set platformUrl=http://platform.internal:4000 --set registrationToken=...
+   ```
+
+The target shows as connected within a minute. Installing Argo Rollouts, Kyverno and the External Secrets Operator takes a few minutes more. To look inside, run `docker compose exec k3s kubectl get pods -A`. To start again from scratch, run `docker compose --profile target down` and delete the `k3s-data` and `k3s-config` volumes.
 
 ## Everyday commands
 

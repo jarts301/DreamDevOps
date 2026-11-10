@@ -40,8 +40,26 @@ import { PipelineController } from './builds/http/pipeline.controller.ts';
 import { ForgejoPipelineHost } from './builds/infrastructure/forgejo-pipeline-host.ts';
 import { OciRegistry } from './builds/infrastructure/oci-registry.ts';
 import { DemoCompany } from './demo/demo-company.ts';
+import { Deployments } from './deployments/application/deployments.ts';
+import { DeploymentsController } from './deployments/http/deployments.controller.ts';
 import { Environments } from './environments/application/environments.ts';
+import {
+  ENVIRONMENT_REPOSITORIES,
+  type EnvironmentRepositories,
+  PULL_ACCOUNTS,
+  type PullAccounts,
+  SECRET_STORE,
+  type SecretStore,
+} from './environments/application/ports.ts';
+import { EnvironmentConfig } from './environments/application/environment-config.ts';
+import { TargetConfigurations } from './environments/application/target-configuration.ts';
 import { TargetAgents } from './environments/application/target-agents.ts';
+import {
+  ForgejoEnvironmentRepositories,
+  ForgejoPullAccounts,
+} from './environments/infrastructure/forgejo-environment-repositories.ts';
+import { OpenBaoSecretStore } from './environments/infrastructure/openbao-secret-store.ts';
+import { SealedBox } from './shared/sealed-box.ts';
 import { AgentController } from './environments/http/agent.controller.ts';
 import { EnvironmentsController } from './environments/http/environments.controller.ts';
 import { Releases } from './releases/application/releases.ts';
@@ -125,6 +143,7 @@ export class AppModule implements OnApplicationShutdown {
         ReleasesController,
         EnvironmentsController,
         AgentController,
+        DeploymentsController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -331,6 +350,74 @@ export class AppModule implements OnApplicationShutdown {
               lostAfterSeconds: config.targetLostAfterSeconds,
             }),
           inject: [TenantDatabase],
+        },
+        {
+          provide: ENVIRONMENT_REPOSITORIES,
+          useFactory: () =>
+            new ForgejoEnvironmentRepositories({
+              url: config.forgejoUrl,
+              bot: { username: config.forgejoUsername, password: config.forgejoPassword },
+            }),
+        },
+        {
+          provide: PULL_ACCOUNTS,
+          useFactory: () =>
+            new ForgejoPullAccounts({
+              url: config.forgejoUrl,
+              bot: { username: config.forgejoUsername, password: config.forgejoPassword },
+              admin: { username: config.forgejoAdminUsername, password: config.forgejoAdminPassword },
+            }),
+        },
+        {
+          provide: SECRET_STORE,
+          useFactory: () => new OpenBaoSecretStore({ url: config.openbaoUrl, token: config.openbaoToken }),
+        },
+        {
+          provide: EnvironmentConfig,
+          useFactory: (database: TenantDatabase, secrets: SecretStore) => new EnvironmentConfig(database, secrets),
+          inject: [TenantDatabase, SECRET_STORE],
+        },
+        {
+          provide: TargetConfigurations,
+          useFactory: (
+            database: TenantDatabase,
+            agents: TargetAgents,
+            repositories: EnvironmentRepositories,
+            pullAccounts: PullAccounts,
+            secrets: SecretStore,
+            signingKeys: SigningKeys,
+          ) =>
+            new TargetConfigurations(
+              database,
+              agents,
+              repositories,
+              pullAccounts,
+              secrets,
+              signingKeys,
+              new SealedBox(config.signingKeySecret, 'pull-accounts'),
+              {
+                registryHost: config.targetRegistryHost,
+                openbaoUrl: config.targetOpenbaoUrl,
+                gitSshUrl: config.targetGitSshUrl,
+                gitKnownHosts: config.targetGitKnownHosts,
+              },
+            ),
+          inject: [TenantDatabase, TargetAgents, ENVIRONMENT_REPOSITORIES, PULL_ACCOUNTS, SECRET_STORE, SigningKeys],
+        },
+        {
+          provide: Deployments,
+          useFactory: (
+            database: TenantDatabase,
+            configurations: TargetConfigurations,
+            repositories: EnvironmentRepositories,
+            environmentConfig: EnvironmentConfig,
+            blueprints: BlueprintLibrary,
+            entitlements: Entitlements,
+          ) =>
+            new Deployments(database, configurations, repositories, environmentConfig, blueprints, entitlements, {
+              targetRegistryHost: config.targetRegistryHost,
+            }),
+          inject: [TenantDatabase, TargetConfigurations, ENVIRONMENT_REPOSITORIES, EnvironmentConfig, BlueprintLibrary, Entitlements],
         },
         {
           provide: SourceAccess,

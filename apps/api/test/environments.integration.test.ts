@@ -299,7 +299,7 @@ describe('a connected agent', () => {
     const agent = await connectTarget(admin, environment.id);
     const first = agent.accessToken;
 
-    expect((await agent.heartbeat().expect(200)).body).toEqual({ heartbeatSeconds: 30 });
+    expect((await agent.heartbeat().expect(200)).body).toEqual({ heartbeatSeconds: 30, commands: [] });
     expect((await admin.get(`/api/v1/company/environments/${environment.id}`).expect(200)).body.target.agentVersion).toBe(
       '0.1.1',
     );

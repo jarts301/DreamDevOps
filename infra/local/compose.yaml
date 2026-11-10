@@ -111,6 +111,27 @@ services:
       retries: 30
       start_period: 20s
 
+  # Keeps each environment's secrets. It starts sealed; openbao-init unseals it.
+  openbao:
+    image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+    restart: unless-stopped
+    command: ["server"]
+    environment:
+      BAO_LOCAL_CONFIG: >-
+        {"storage": {"raft": {"path": "/openbao/file", "node_id": "local"}},
+        "listener": [{"tcp": {"address": "0.0.0.0:8200", "tls_disable": true}}],
+        "api_addr": "http://openbao:8200", "cluster_addr": "http://openbao:8201",
+        "disable_mlock": true, "ui": false}
+    volumes:
+      - openbao-data:/openbao/file
+    ports:
+      - "127.0.0.1:${OPENBAO_PORT:-8200}:8200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/v1/sys/health?uninitcode=200&sealedcode=200"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   # Catches every email the platform sends, and shows it in a web page. Nothing leaves.
   mailpit:
     image: axllent/mailpit:v1.33.0
@@ -254,6 +275,78 @@ services:
       forgejo-init:
         condition: service_completed_successfully
 
+  # Initializes and unseals OpenBao, and gives the platform its token, then exits.
+  openbao-init:
+    image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+    entrypoint: ["/bin/sh", "/ops/openbao-init.sh"]
+    # Root inside this short-lived container only, to own the keys volume.
+    user: "0:0"
+    environment:
+      OPENBAO_PLATFORM_TOKEN: ${OPENBAO_PLATFORM_TOKEN:?copy the new values from .env.example to .env}
+    volumes:
+      - ./ops:/ops:ro
+      - openbao-keys:/keys
+    depends_on:
+      openbao:
+        condition: service_healthy
+
+  # The local target's one door to the platform, at a fixed address. Only with the
+  # target profile.
+  target-gateway:
+    image: nginx:1.31.7-alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d
+    profiles: [target]
+    restart: unless-stopped
+    volumes:
+      - ./target/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./target/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./target/gateway-stream.conf:/etc/nginx/stream.d/git.conf:ro
+    networks:
+      default:
+      target:
+        ipv4_address: 10.213.90.10
+
+  # A Kubernetes cluster to deploy to, like a customer's machine with k3s. Start it with
+  # docker compose --profile target up -d. It only reaches the platform through the gateway.
+  k3s:
+    image: rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb
+    profiles: [target]
+    restart: unless-stopped
+    privileged: true
+    command: ["server", "--disable=traefik", "--disable=metrics-server", "--tls-san=k3s"]
+    environment:
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "644"
+    tmpfs:
+      - /run
+      - /var/run
+    volumes:
+      - k3s-data:/var/lib/rancher/k3s
+      - k3s-config:/output
+      - ./target/registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+      - ./target/coredns-custom.yaml:/var/lib/rancher/k3s/server/manifests/coredns-custom.yaml:ro
+    extra_hosts:
+      - "platform.internal:10.213.90.10"
+    networks:
+      - target
+    ports:
+      - "127.0.0.1:${K3S_PORT:-6443}:6443"
+    depends_on:
+      - target-gateway
+
+  # Runs Helm against the local target, such as the dashboard's connect command:
+  # docker compose --profile target run --rm target-helm upgrade --install ...
+  target-helm:
+    image: alpine/helm:3.22.1@sha256:8191701ad1f82ee3695c87211fcbfe6d7b1bb7df92ac1c8de9ccdb0995a6a2c1
+    profiles: [target]
+    entrypoint: ["/bin/sh", "/ops/target-helm.sh"]
+    volumes:
+      - ./ops:/ops:ro
+      - k3s-config:/k3s:ro
+    extra_hosts:
+      - "platform.internal:10.213.90.10"
+    networks:
+      - target
+
   # Adds the Forgejo login client, the second-factor flow and the demo users to Keycloak,
   # then exits. Safe to run repeatedly.
   keycloak-init:
@@ -315,6 +408,8 @@ services:
       forgejo-init:
         condition: service_completed_successfully
       keycloak-init:
+        condition: service_completed_successfully
+      openbao-init:
         condition: service_completed_successfully
       forgejo-runner:
         condition: service_started
@@ -400,6 +495,10 @@ volumes:
   runner-data:
   image-runner-data:
   runner-docker-data:
+  openbao-data:
+  openbao-keys:
+  k3s-data:
+  k3s-config:
 
 networks:
   default:
@@ -408,3 +507,8 @@ networks:
     ipam:
       config:
         - subnet: 10.213.89.0/24
+  # The local target, which reaches the platform only through the gateway.
+  target:
+    ipam:
+      config:
+        - subnet: 10.213.90.0/24

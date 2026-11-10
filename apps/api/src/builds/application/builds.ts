@@ -18,11 +18,15 @@ import type { SourceHost } from '../../source-governance/application/ports.ts';
 import type { Repositories } from '../../source-governance/application/repositories.ts';
 import {
   type BuildKind,
+  buildProgress,
   type BuildStatus,
   checkTag,
   countComponents,
   evaluate,
   featureTag,
+  type JobProgress,
+  PIPELINE_JOBS,
+  type PipelineJob,
   type Reports,
   signingPurposeFor,
   summarizeScan,
@@ -70,6 +74,8 @@ export interface BuildView {
   readonly status: BuildStatus;
   readonly failureReason: string | null;
   readonly reports: Reports;
+  /** Where each pipeline job stands. */
+  readonly progress: readonly JobProgress[];
   readonly imageRef: string | null;
   readonly digest: string | null;
   readonly signedWith: 'test' | 'release' | null;
@@ -399,12 +405,17 @@ export class Builds {
     const content = await readLimited(body, MAX_REPORT_BYTES[kind]);
     if (kind === 'failure') {
       // Says which jobs failed. It can only fail a build, so it needs no other check.
-      const failed = [...content.toString('utf8').matchAll(/(\w+)=(failure|cancelled)/g)]
-        .map((match) => JOB_NAMES[match[1]!] ?? match[1]!)
-        .join(', ');
-      await runWithCompany(companyId, () =>
-        this.#fail(build.id, `The pipeline stopped: the ${failed || 'pipeline'} step failed.`),
-      );
+      const failedJobs = [...content.toString('utf8').matchAll(/(\w+)=(failure|cancelled)/g)].map((match) => match[1]!);
+      const failed = failedJobs.map((job) => JOB_NAMES[job] ?? job).join(', ');
+      await runWithCompany(companyId, async () => {
+        await this.#database.transaction((tx) =>
+          tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
+            build.id,
+            JSON.stringify({ failedJobs: failedJobs.filter((job) => (PIPELINE_JOBS as readonly string[]).includes(job)) }),
+          ]),
+        );
+        await this.#fail(build.id, `The pipeline stopped: the ${failed || 'pipeline'} step failed.`);
+      });
       return;
     }
     await runWithCompany(companyId, async () => {
@@ -443,6 +454,25 @@ export class Builds {
       });
       await this.#decide(build.id);
     });
+  }
+
+  /** A pipeline job says it started, so people can follow the build. */
+  async jobStarted(buildIdValue: unknown, token: string | undefined, jobValue: unknown): Promise<void> {
+    if (!(PIPELINE_JOBS as readonly unknown[]).includes(jobValue)) {
+      throw new BuildError('not-found', 'There is no such job.');
+    }
+    const job = jobValue as PipelineJob;
+    const { companyId, build } = await this.#authorize(buildIdValue, token);
+    await runWithCompany(companyId, () =>
+      this.#database.transaction((tx) =>
+        tx.query(
+          `UPDATE builds.builds
+           SET reports = jsonb_set(reports, '{started}', coalesce(reports->'started', '{}'::jsonb) || jsonb_build_object($2::text, now()))
+           WHERE id = $1 AND NOT coalesce(reports->'started' ? $2, false)`,
+          [build.id, job],
+        ),
+      ),
+    );
   }
 
   /**
@@ -755,6 +785,7 @@ function toView(row: BuildRow): BuildView {
     status: row.status,
     failureReason: row.failure_reason,
     reports: row.reports,
+    progress: buildProgress(row.kind, row.status, row.reports),
     imageRef: row.image_ref,
     digest: row.digest,
     signedWith: row.status === 'succeeded' ? row.signing_key : null,

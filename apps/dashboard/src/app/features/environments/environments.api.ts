@@ -25,10 +25,19 @@ export interface Environment {
   readonly kind: EnvironmentKind;
   readonly acceptsFeatureImages: boolean;
   readonly acceptedImages: readonly string[];
+  readonly requiresApproval: boolean;
   readonly status: EnvironmentStatus;
   readonly createdAt: string;
   readonly archivedAt: string | null;
   readonly target: Target | null;
+}
+
+export type ConfigScope = 'environment' | 'application';
+
+export interface EnvironmentConfig {
+  readonly variables: readonly { readonly name: string; readonly value: string; readonly scope: ConfigScope; readonly updatedAt: string }[];
+  /** Names only: secret values can be replaced or deleted, never read. */
+  readonly secrets: readonly { readonly name: string; readonly scope: ConfigScope; readonly updatedAt: string }[];
 }
 
 export interface Connection {
@@ -52,7 +61,27 @@ export class EnvironmentsApi {
     return firstValueFrom(this.#http.post<Environment>(BASE, input));
   }
 
-  update(id: string, input: { name?: string; acceptsFeatureImages?: boolean }): Promise<void> {
+  get(id: string): Promise<Environment> {
+    return firstValueFrom(this.#http.get<Environment>(`${BASE}/${id}`));
+  }
+
+  config(id: string, application?: string): Promise<EnvironmentConfig> {
+    const params: Record<string, string> = application === undefined ? {} : { application };
+    return firstValueFrom(this.#http.get<EnvironmentConfig>(`${BASE}/${id}/config`, { params }));
+  }
+
+  setValue(id: string, kind: 'variables' | 'secrets', name: string, value: string, application?: string): Promise<void> {
+    return firstValueFrom(
+      this.#http.put<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, { value, ...(application && { application }) }),
+    );
+  }
+
+  removeValue(id: string, kind: 'variables' | 'secrets', name: string, application?: string): Promise<void> {
+    const params: Record<string, string> = application === undefined ? {} : { application };
+    return firstValueFrom(this.#http.delete<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, { params }));
+  }
+
+  update(id: string, input: { name?: string; acceptsFeatureImages?: boolean; requiresApproval?: boolean }): Promise<void> {
     return firstValueFrom(this.#http.patch<void>(`${BASE}/${id}`, input));
   }
 

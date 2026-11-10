@@ -1,0 +1,20 @@
+{
+  "name": "@dreamdevops/agent",
+  "version": "0.1.3",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Runs in each deployment target: proves itself to the platform, sets up the cluster and reports deployments. It only makes outbound calls.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "start": "node src/main.ts",
+    "publish:local": "node --env-file=../../infra/local/.env scripts/publish-local.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

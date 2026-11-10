@@ -311,7 +311,7 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByText('No releases yet.')).toBeVisible();
     await expect(adminPage.getByText('No versions yet.')).toBeVisible();
     // Company Admins don't build images or start releases; Developers and Tech Leads do.
-    await expect(adminPage.getByRole('heading', { name: 'Build a feature image' })).toHaveCount(0);
+    await expect(adminPage.getByRole('heading', { name: 'Build a test image' })).toHaveCount(0);
     await expect(adminPage.getByRole('button', { name: 'Start' })).toHaveCount(0);
     await adminPage.getByRole('link', { name: '← Applications' }).click();
     await expect(adminPage).toHaveURL(/\/applications$/);
@@ -347,6 +347,15 @@ test('from starting a company to managing its team', async ({ browser, page }) =
 
     await expect(adminPage.getByText('The target of Production is connected.')).toBeVisible({ timeout: 15_000 });
     await expect(adminPage.getByText('Kubernetes v1.31.2+k3s1, agent 0.1.0')).toBeVisible();
+  });
+
+  await test.step("production's values belong to Tech Leads and Operators, and it can require approval", async () => {
+    await adminPage.getByRole('link', { name: 'Production', exact: true }).click();
+    await expect(adminPage.getByRole('heading', { name: 'Production', level: 1 })).toBeVisible();
+    await expect(adminPage.getByText('Tech Leads and Operators manage these.')).toBeVisible();
+    await adminPage.getByLabel('A second person approves each deployment').check();
+    await expect(adminPage.getByText('Each deployment now needs a second person to approve it.')).toBeVisible();
+    await adminPage.getByRole('link', { name: '← Environments' }).click();
   });
 
   await test.step('the platform admin sees each company’s edition, and only Community is installed', async () => {

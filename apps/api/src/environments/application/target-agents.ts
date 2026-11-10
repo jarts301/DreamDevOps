@@ -188,6 +188,38 @@ export class TargetAgents {
     );
   }
 
+  /** Checks an agent's access token, and says which target and environment it belongs to. */
+  async authenticate(
+    accessToken: string | undefined,
+  ): Promise<{ companyId: CompanyId; targetId: string; environmentId: string }> {
+    const refused = () => new EnvironmentError('unauthorized', 'This access token is not valid.');
+    const token = parseToken(accessToken);
+    if (token === null) {
+      throw refused();
+    }
+    const companyId = await this.#companyOf(token.targetId, refused);
+    const target = await runWithCompany(companyId, () =>
+      this.#database.transaction(async (tx) => {
+        const { rows } = await tx.query<TargetRow>(
+          `SELECT id, environment_id, status, access_token_hash, access_token_expires_at
+           FROM environments.targets WHERE id = $1`,
+          [token.targetId],
+        );
+        return rows[0] ?? null;
+      }),
+    );
+    if (
+      target === null ||
+      (target.status !== 'connected' && target.status !== 'lost') ||
+      target.access_token_expires_at === null ||
+      target.access_token_expires_at.getTime() < Date.now() ||
+      !secretMatches(token.secret, target.access_token_hash)
+    ) {
+      throw refused();
+    }
+    return { companyId, targetId: target.id, environmentId: target.environment_id };
+  }
+
   /** The agent reports in. A lost target that reports in is connected again. */
   async heartbeat(
     accessToken: string | undefined,

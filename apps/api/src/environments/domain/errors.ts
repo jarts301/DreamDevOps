@@ -1,4 +1,4 @@
-export type EnvironmentErrorKind = 'invalid' | 'unauthorized' | 'not-found' | 'conflict';
+export type EnvironmentErrorKind = 'invalid' | 'unauthorized' | 'forbidden' | 'not-found' | 'conflict';
 
 /** A rule of this module refused the request. The message is safe to show to the user. */
 export class EnvironmentError extends Error {

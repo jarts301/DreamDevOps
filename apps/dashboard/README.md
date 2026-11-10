@@ -34,8 +34,9 @@ To see the whole flow:
 2. To see how a company starts, sign in as `demo-platform-admin`, open **Companies**, and enter a company name and a new address such as `someone@example.com`. Then sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, register as that person and accept.
 3. Open **Applications** to register the company's applications and follow their repositories into Forgejo, **Team** to invite others and manage roles, **Audit log** to see every change, **Notifications** to post events to a chat tool, and **Edition** to see what the company's edition includes. Platform admins set each company's edition under **Editions**. **Blueprints** shows what each application type starts with.
 4. To use Git, choose **Sign in to Forgejo** on the **Applications** page, then **Check again** to join your team.
-5. Open an application to see its versions and builds, build a feature image from a `feature/*` branch, and start releases and hotfixes. Feature images need the Developer or Tech Lead role, and releases need Tech Lead.
-6. Open **Environments** to create test and production environments and connect their targets. This needs the Company Admin or Operator role.
+5. Open an application to see its versions and builds, and start releases and hotfixes. Developers and Tech Leads build test images from `feature/*` branches with **Build a test image**, also linked from each row of **Applications**, and follow each job of the pipeline as it runs. Releases need Tech Lead.
+6. Open **Environments** to create test and production environments and connect their targets. This needs the Company Admin or Operator role. Open an environment to set its variables and secrets, for every application or one, and to require approval for production.
+7. On an application's page, **Deploy** a version to an environment and follow each step: saved to Git, applied by the target, rolling out, and for blue/green, the traffic switch. Approve, promote, abort and roll back from there. To try it on your machine, start the [local target](../../infra/local/README.md#the-local-target).
 
 ## Layout
 

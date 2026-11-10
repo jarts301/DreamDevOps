@@ -1,0 +1,2 @@
+# Dependencies are downloaded when the chart is packaged, pinned by Chart.lock.
+charts/

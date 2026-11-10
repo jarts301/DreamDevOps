@@ -58,6 +58,20 @@ export interface AppConfig {
   readonly targetLostAfterSeconds: number;
   /** Sets up the demo company and its users at startup. Local use only. */
   readonly demoData: boolean;
+  /** A Forgejo administrator, used only to create each company's read-only pull account. */
+  readonly forgejoAdminUsername: string;
+  readonly forgejoAdminPassword: string;
+  /** Where the API reaches OpenBao, which keeps each environment's secrets. */
+  readonly openbaoUrl: string;
+  /** The platform's OpenBao token. It writes secrets but can't read them. */
+  readonly openbaoToken: string;
+  /** How targets reach OpenBao, the registry and Git. Default: the platform's own addresses. */
+  readonly targetOpenbaoUrl: string;
+  readonly targetRegistryHost: string;
+  /** The SSH address targets clone their environment repository from, such as ssh://git@git.example.com:22. */
+  readonly targetGitSshUrl: string;
+  /** Forgejo's SSH host keys as targets see them, in known_hosts format. */
+  readonly targetGitKnownHosts: string;
   /** Attempts before a company's provisioning is marked as failed. */
   readonly provisioningMaxAttempts: number;
   readonly provisioningRetrySeconds: number;
@@ -112,6 +126,9 @@ export function loadConfig(env: Environment): AppConfig {
       'SMTP_SECURITY=none, WEBHOOK_ALLOW_INSECURE and WEBHOOK_ALLOW_PRIVATE_NETWORKS are for local testing only.',
     );
   }
+  const forgejoPublicUrl = env.FORGEJO_PUBLIC_URL ? url(env, 'FORGEJO_PUBLIC_URL') : url(env, 'FORGEJO_URL');
+  const openbaoUrl = url(env, 'OPENBAO_URL');
+  const openbaoToken = secret(env, 'OPENBAO_TOKEN');
   const webhookSecretKey = secret(env, 'WEBHOOK_SECRET_KEY');
   const signingKeySecret = secret(env, 'SIGNING_KEY_SECRET');
   const imageRunnerLabel = required(env, 'IMAGE_RUNNER_LABEL');
@@ -120,10 +137,10 @@ export function loadConfig(env: Environment): AppConfig {
   }
   if (
     isProduction &&
-    [webhookSecretKey, signingKeySecret, imageRunnerLabel].some((value) => value.startsWith(SAMPLE_SECRET_PREFIX))
+    [webhookSecretKey, signingKeySecret, imageRunnerLabel, openbaoToken].some((value) => value.startsWith(SAMPLE_SECRET_PREFIX))
   ) {
     throw new InvalidConfigError(
-      'WEBHOOK_SECRET_KEY, SIGNING_KEY_SECRET and IMAGE_RUNNER_LABEL must not be the sample values in production.',
+      'WEBHOOK_SECRET_KEY, SIGNING_KEY_SECRET, IMAGE_RUNNER_LABEL and OPENBAO_TOKEN must not be the sample values in production.',
     );
   }
   const agentApiUrl = env.AGENT_API_URL ? url(env, 'AGENT_API_URL') : url(env, 'API_PUBLIC_URL');
@@ -170,7 +187,7 @@ export function loadConfig(env: Environment): AppConfig {
     forgejoUrl: url(env, 'FORGEJO_URL'),
     forgejoUsername: required(env, 'FORGEJO_BOT_USERNAME'),
     forgejoPassword: required(env, 'FORGEJO_BOT_PASSWORD'),
-    forgejoPublicUrl: env.FORGEJO_PUBLIC_URL ? url(env, 'FORGEJO_PUBLIC_URL') : url(env, 'FORGEJO_URL'),
+    forgejoPublicUrl,
     blueprintsDir: env.BLUEPRINTS_DIR || DEFAULT_BLUEPRINTS_DIR,
     pipelinesDir: env.PIPELINES_DIR || DEFAULT_PIPELINES_DIR,
     toolsApiUrl: env.TOOLS_API_URL ? url(env, 'TOOLS_API_URL') : url(env, 'API_PUBLIC_URL'),
@@ -183,6 +200,14 @@ export function loadConfig(env: Environment): AppConfig {
     agentChart,
     targetLostAfterSeconds: integer(env, 'TARGET_LOST_AFTER_SECONDS', 180),
     demoData,
+    forgejoAdminUsername: required(env, 'FORGEJO_ADMIN_USERNAME'),
+    forgejoAdminPassword: required(env, 'FORGEJO_ADMIN_PASSWORD'),
+    openbaoUrl,
+    openbaoToken,
+    targetOpenbaoUrl: env.TARGET_OPENBAO_URL ? url(env, 'TARGET_OPENBAO_URL') : openbaoUrl,
+    targetRegistryHost: env.TARGET_REGISTRY_HOST || new URL(forgejoPublicUrl).host,
+    targetGitSshUrl: env.TARGET_GIT_SSH_URL || `ssh://git@${new URL(forgejoPublicUrl).hostname}:22`,
+    targetGitKnownHosts: env.TARGET_GIT_KNOWN_HOSTS ?? '',
     provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),
     provisioningRetrySeconds: integer(env, 'PROVISIONING_RETRY_SECONDS', 30),
     smtpHost: required(env, 'SMTP_HOST'),

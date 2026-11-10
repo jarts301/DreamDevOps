@@ -91,6 +91,36 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return payload['wasConnected'] === true
         ? `Disconnected the target of "${String(payload['environmentName'])}"`
         : `Cancelled connecting a target to "${String(payload['environmentName'])}"`;
+    case 'EnvironmentVariableSet':
+      return `Set the variable ${String(payload['name'])} in "${String(payload['environmentName'])}"${payload['applicationId'] ? ' for one application' : ''}`;
+    case 'EnvironmentVariableRemoved':
+      return `Removed the variable ${String(payload['name'])} from "${String(payload['environmentName'])}"`;
+    case 'EnvironmentSecretSet':
+      return `Set the secret ${String(payload['name'])} in "${String(payload['environmentName'])}"${payload['applicationId'] ? ' for one application' : ''}`;
+    case 'EnvironmentSecretRemoved':
+      return `Removed the secret ${String(payload['name'])} from "${String(payload['environmentName'])}"`;
+    case 'DeploymentRequested':
+      return payload['rollbackOf']
+        ? `Asked to roll back in "${String(payload['environmentName'])}"`
+        : `Asked for a ${String(payload['strategy'])} deployment to "${String(payload['environmentName'])}"${payload['needsApproval'] ? ', which needs approval' : ''}`;
+    case 'DeploymentApproved':
+      return `Approved a deployment to "${String(payload['environmentName'])}"`;
+    case 'DeploymentRejected':
+      return `Rejected a deployment to "${String(payload['environmentName'])}"`;
+    case 'DeploymentQueued':
+      return 'Queued a deployment';
+    case 'DeploymentStarted':
+      return `Committed a deployment to "${String(payload['environmentName'])}"`;
+    case 'DeploymentPromoted':
+      return `Switched traffic to the new version in "${String(payload['environmentName'])}"`;
+    case 'DeploymentAbortRequested':
+      return `Asked to abort a deployment to "${String(payload['environmentName'])}"`;
+    case 'DeploymentSucceeded':
+      return `Deployed ${String(payload['applicationName'])} ${String(payload['version'])} to "${String(payload['environmentName'])}"`;
+    case 'DeploymentFailed':
+      return `Deploying ${String(payload['applicationName'])} ${String(payload['version'])} to "${String(payload['environmentName'])}" failed: ${String(payload['reason'] ?? 'unknown reason')}`;
+    case 'DeploymentAborted':
+      return `Aborted deploying ${String(payload['applicationName'])} ${String(payload['version'])} to "${String(payload['environmentName'])}"`;
     case 'CompanyEditionChanged':
       return `Moved the company from the ${editionName(payload['previousEdition'])} to the ${editionName(payload['edition'])} Edition`;
     case 'UserInvited':

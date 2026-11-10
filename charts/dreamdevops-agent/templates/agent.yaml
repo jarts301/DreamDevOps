@@ -1,0 +1,127 @@
+{{- if ne .Release.Namespace "dreamdevops-system" }}
+{{- fail "Install the agent into the dreamdevops-system namespace." }}
+{{- end }}
+{{- if not .Values.platformUrl }}
+{{- fail "Set platformUrl. The dashboard's connect command sets it." }}
+{{- end }}
+{{- if not .Values.image.repository }}
+{{- fail "Set image.repository. A published chart sets it." }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dreamdevops-agent
+  labels:
+    app.kubernetes.io/name: dreamdevops-agent
+---
+# The agent sets up Flux, Kyverno and the External Secrets Operator, copies the registry
+# login into the namespaces the environment makes, and reads and steers rollouts.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dreamdevops-agent
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, patch, update]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [gitrepositories]
+    verbs: [get, list, create, patch]
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    verbs: [get, list, create, patch]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [helmrepositories]
+    verbs: [get, list, create, patch]
+  - apiGroups: [helm.toolkit.fluxcd.io]
+    resources: [helmreleases]
+    verbs: [get, list, create, patch]
+  - apiGroups: [kyverno.io]
+    resources: [clusterpolicies]
+    verbs: [get, create, patch]
+  - apiGroups: [external-secrets.io]
+    resources: [clustersecretstores]
+    verbs: [get, create, patch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts/status]
+    verbs: [patch, update]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dreamdevops-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dreamdevops-agent
+subjects:
+  - kind: ServiceAccount
+    name: dreamdevops-agent
+    namespace: {{ .Release.Namespace }}
+---
+# Works once, within an hour. After registering, the agent proves itself with its own key.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dreamdevops-agent-registration
+type: Opaque
+stringData:
+  token: {{ .Values.registrationToken | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dreamdevops-agent
+  labels:
+    app.kubernetes.io/name: dreamdevops-agent
+spec:
+  # One agent per target: its identity lives in a single Secret.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dreamdevops-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dreamdevops-agent
+    spec:
+      serviceAccountName: dreamdevops-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "src/main.ts"]
+          env:
+            - name: PLATFORM_URL
+              value: {{ .Values.platformUrl | quote }}
+            - name: INSECURE_REGISTRY
+              value: {{ .Values.insecureRegistry | quote }}
+            - name: REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dreamdevops-agent-registration
+                  key: token
+                  optional: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

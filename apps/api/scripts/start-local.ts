@@ -1,4 +1,25 @@
 // Starts the built API against the local stack, using the settings in infra/local/.env.
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Forgejo's SSH host key, as the local target sees it through the gateway. Forgejo makes
+ * its key on first start, so it's read from the running container.
+ */
+function forgejoKnownHosts(): string {
+  try {
+    const key = execFileSync(
+      'docker',
+      ['compose', '-f', fileURLToPath(new URL('../../../infra/local/compose.yaml', import.meta.url)), 'exec', '-T', 'forgejo', 'cat', '/data/ssh/ssh_host_ed25519_key.pub'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    const [type, value] = key.split(/\s+/);
+    return `[platform.internal]:2222 ${type} ${value}`;
+  } catch {
+    return '';
+  }
+}
+
 const password = process.env.DREAMDEVOPS_DB_APP_PASSWORD;
 if (password === undefined) {
   throw new Error('DREAMDEVOPS_DB_APP_PASSWORD is not set. See infra/local/README.md.');
@@ -29,6 +50,17 @@ process.env.DASHBOARD_URL ??= 'http://localhost:4200/';
 process.env.TOOLS_API_URL ??= `http://host.docker.internal:${apiPort}`;
 // Browsers won't send Secure cookies over plain HTTP, which is all the local stack has.
 process.env.SECURE_COOKIES ??= 'false';
+// OpenBao keeps each environment's secrets; the platform's token is fixed by openbao-init.
+process.env.OPENBAO_URL ??= `http://localhost:${process.env.OPENBAO_PORT ?? '8200'}`;
+process.env.OPENBAO_TOKEN ??= process.env.OPENBAO_PLATFORM_TOKEN;
+// The local target reaches the platform through its gateway, at platform.internal.
+process.env.AGENT_API_URL ??= 'http://platform.internal:4000';
+process.env.AGENT_CHART ??= 'oci://platform.internal:3000/dreamdevops-bot/charts/dreamdevops-agent';
+process.env.TARGET_OPENBAO_URL ??= 'http://platform.internal:8200';
+// By address: Kyverno checks signatures over plain HTTP only at private addresses.
+process.env.TARGET_REGISTRY_HOST ??= '10.213.90.10:3000';
+process.env.TARGET_GIT_SSH_URL ??= 'ssh://git@platform.internal:2222';
+process.env.TARGET_GIT_KNOWN_HOSTS ??= forgejoKnownHosts();
 // The demo company and its users, one for each role. See infra/local/README.md.
 process.env.DEMO_DATA ??= 'true';
 

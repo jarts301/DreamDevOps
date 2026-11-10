@@ -7,6 +7,9 @@ import { AuditLog } from '../audit/application/audit-log.ts';
 import type { AppConfig } from '../config/app-config.ts';
 import { DELIVERY_QUEUE, type DeliveryJob, NotificationRules } from '../notifications/application/notification-rules.ts';
 import { Builds } from '../builds/application/builds.ts';
+import { Deployments } from '../deployments/application/deployments.ts';
+import { SECRET_STORE, type SecretStore } from '../environments/application/ports.ts';
+import { TargetConfigurations } from '../environments/application/target-configuration.ts';
 import { TargetAgents } from '../environments/application/target-agents.ts';
 import { type FinishedBuild, Releases } from '../releases/application/releases.ts';
 import { POLICY_VERSION, REPOSITORY_TRIGGERS, Repositories } from '../source-governance/application/repositories.ts';
@@ -32,6 +35,10 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
   readonly #builds: Builds;
   readonly #releases: Releases;
   readonly #targets: TargetAgents;
+  readonly #configurations: TargetConfigurations;
+  readonly #secrets: SecretStore;
+  readonly #deployments: Deployments;
+  #renewal: ReturnType<typeof setInterval> | undefined;
   readonly #database: TenantDatabase;
   #sweep: ReturnType<typeof setInterval> | undefined;
   #queue: PgBossJobQueue | undefined;
@@ -48,6 +55,9 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     @Inject(Builds) builds: Builds,
     @Inject(Releases) releases: Releases,
     @Inject(TargetAgents) targets: TargetAgents,
+    @Inject(TargetConfigurations) configurations: TargetConfigurations,
+    @Inject(SECRET_STORE) secrets: SecretStore,
+    @Inject(Deployments) deployments: Deployments,
     @Inject(TenantDatabase) database: TenantDatabase,
   ) {
     this.#config = config;
@@ -59,6 +69,9 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     this.#builds = builds;
     this.#releases = releases;
     this.#targets = targets;
+    this.#configurations = configurations;
+    this.#secrets = secrets;
+    this.#deployments = deployments;
     this.#database = database;
   }
 
@@ -175,6 +188,22 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
         retries,
       );
     }
+    await bus.subscribe(
+      'TargetRevoked',
+      'target-deploy-keys',
+      (event) => {
+        const { environmentId, targetId, wasConnected } = payloadOf(event);
+        return wasConnected === true
+          ? this.#configurations.removeDeployKey(String(environmentId), String(targetId))
+          : Promise.resolve();
+      },
+      retries,
+    );
+    await bus.subscribe('DeploymentQueued', 'deployments', (event) => this.#deployments.commit(String(payloadOf(event).deploymentId)), retries);
+    for (const eventType of ['DeploymentFailed', 'DeploymentAborted']) {
+      // Git goes back to the last version that ran well, so Flux keeps running it.
+      await bus.subscribe(eventType, 'deployment-restores', (event) => this.#deployments.restorePrevious(String(payloadOf(event).deploymentId)), retries);
+    }
     await bus.subscribeToAll('audit', (event) => this.#audit.record(event), { retryLimit: 10, retryDelaySeconds: 5 });
     await bus.subscribeToAll('notifications', (event) => this.#notifications.fanOut(event, queue), {
       retryLimit: 5,
@@ -195,8 +224,12 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     this.#sweep = setInterval(() => {
       this.#builds.expireStale().catch(onError);
       this.#targets.markSilentTargetsLost().catch(onError);
+      this.#deployments.failStalled().catch(onError);
     }, 30_000);
     await this.#upgradeRepositories().catch(onError);
+    // The platform's OpenBao token is periodic: it stays valid while it's renewed.
+    await this.#secrets.renew().catch(onError);
+    this.#renewal = setInterval(() => this.#secrets.renew().catch(onError), 12 * 3_600_000);
   }
 
   /** Brings repositories made under older rules up to date, company by company. */
@@ -219,6 +252,7 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
 
   async onApplicationShutdown(): Promise<void> {
     clearInterval(this.#sweep);
+    clearInterval(this.#renewal);
     await this.#relay?.stop();
     await this.#queue?.stop();
     await this.#relayPool?.end();

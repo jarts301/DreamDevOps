@@ -41,6 +41,13 @@ export const routes: Routes = [
         loadComponent: () => import('./features/environments/environments').then((module) => module.Environments),
       },
       {
+        path: 'environments/:id',
+        title: 'Environment · DreamDevOps',
+        canActivate: [companyGuard],
+        loadComponent: () =>
+          import('./features/environments/environment-detail').then((module) => module.EnvironmentDetail),
+      },
+      {
         path: 'blueprints',
         title: 'Blueprints · DreamDevOps',
         loadComponent: () => import('./features/catalog/blueprints').then((module) => module.Blueprints),

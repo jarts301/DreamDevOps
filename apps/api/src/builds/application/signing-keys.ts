@@ -48,6 +48,12 @@ export class SigningKeys {
     return this.privateKey(tx, purpose);
   }
 
+  /** One public key, made with its private key if missing. Call inside the company's transaction. */
+  async publicKey(tx: TenantTransaction, purpose: SigningPurpose): Promise<string> {
+    await this.privateKey(tx, purpose);
+    return (await this.publicKeys(tx)).find((key) => key.purpose === purpose)!.publicKey;
+  }
+
   /** The company's public keys, which targets use to check images. */
   async publicKeys(tx: TenantTransaction): Promise<PublicKey[]> {
     const { rows } = await tx.query<{ purpose: SigningPurpose; public_key: string }>(

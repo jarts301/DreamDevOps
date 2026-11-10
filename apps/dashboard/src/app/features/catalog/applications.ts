@@ -165,6 +165,16 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
                       @if (repository.blueprint; as blueprint) {
                         <p class="cell-note">From {{ blueprint.key }} {{ blueprint.version }}</p>
                       }
+                      @if (canBuildTestImages() && application.status === 'active') {
+                        <p class="cell-note">
+                          <a
+                            [routerLink]="['/applications', application.id]"
+                            [queryParams]="{ build: 'test' }"
+                            [attr.aria-label]="'Build a test image of ' + application.name"
+                            >Build a test image</a
+                          >
+                        </p>
+                      }
                     } @else if (repository.status === 'creating') {
                       <span class="status">Being created…</span>
                     } @else {
@@ -273,6 +283,10 @@ export class Applications implements OnInit, OnDestroy {
   protected readonly notice = signal<string | null>(null);
   protected readonly editing = signal<Editing>(null);
   protected readonly chosenTypeKey = signal('');
+  protected readonly canBuildTestImages = computed(() => {
+    this.#session.user();
+    return this.#session.can('feature-images:build');
+  });
   protected readonly canManage = computed(() => {
     this.#session.user();
     return this.#session.can('applications:create');

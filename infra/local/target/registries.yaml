@@ -1,0 +1,10 @@
+# The local target pulls images through the gateway, which speaks plain HTTP. Application
+# images are named by the gateway's address: Kyverno's registry client uses plain HTTP
+# for private addresses, and HTTPS for every name.
+mirrors:
+  "platform.internal:3000":
+    endpoint:
+      - "http://platform.internal:3000"
+  "10.213.90.10:3000":
+    endpoint:
+      - "http://10.213.90.10:3000"

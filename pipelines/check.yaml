@@ -33,6 +33,8 @@ jobs:
       - name: Look for secrets in the code
         run: |
           set -u
+          # Tells the platform this job started, so people can follow the build.
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/secrets/started" || true
           mkdir -p /tmp/source && cd /tmp/source
           wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
           gitleaks dir . --no-banner --redact --exit-code 0 --report-format json --report-path /tmp/secrets.json
@@ -48,6 +50,8 @@ jobs:
       - name: Run the tests
         run: |
           set -u
+          # Tells the platform this job started, so people can follow the build.
+          wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/test/started" || true
           mkdir -p /tmp/source && cd /tmp/source
           wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
           if [ -f package.json ]; then

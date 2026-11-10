@@ -1,0 +1,31 @@
+# Where the agent reaches the platform, and its one-time registration token. The
+# dashboard's connect command sets both.
+platformUrl: ""
+registrationToken: ""
+
+image:
+  # Set when the chart is published, to where the agent's image is.
+  repository: ""
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    memory: 192Mi
+
+# Only on a local machine: lets Kyverno check signatures in a plain-HTTP registry.
+insecureRegistry: false
+
+# Flux applies the environment repository, and installs the other tools with its Helm
+# controller, each as its own release.
+flux2:
+  imageAutomationController:
+    create: false
+  imageReflectionController:
+    create: false
+  notificationController:
+    create: false

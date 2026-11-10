@@ -28,7 +28,7 @@ The pipeline is defined once, in [`pipelines/build.yaml`](../../../../pipelines/
 | `sbom` | Syft lists the stored image's contents as a CycloneDX SBOM |
 | `failed` | Runs only when a job failed, and tells the platform which, so the build doesn't wait for the timeout |
 
-Every tool image is pinned by digest.
+Every tool image is pinned by digest. Each job tells the platform when it starts, at `/pipeline/builds/:id/jobs/:job/started`, so the dashboard shows every job waiting, running, passed, failed or skipped while the build runs.
 
 ## What jobs can and can't do
 

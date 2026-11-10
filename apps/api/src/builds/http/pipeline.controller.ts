@@ -50,6 +50,12 @@ export class PipelineController {
     await this.#builds.report(id, bearer(request), kind as ReportKind, request, passed);
   }
 
+  @Post(':id/jobs/:job/started')
+  @HttpCode(204)
+  async jobStarted(@Req() request: ApiRequest, @Param('id') id: string, @Param('job') job: string): Promise<void> {
+    await this.#builds.jobStarted(id, bearer(request), job);
+  }
+
   @Post(':id/image/parts/:part')
   @HttpCode(204)
   async receiveImagePart(

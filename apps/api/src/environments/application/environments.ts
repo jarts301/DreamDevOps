@@ -37,6 +37,8 @@ export interface EnvironmentView {
   readonly kind: EnvironmentKind;
   readonly acceptsFeatureImages: boolean;
   readonly acceptedImages: readonly string[];
+  /** Production only: a second person approves each deployment. */
+  readonly requiresApproval: boolean;
   readonly status: EnvironmentStatus;
   readonly createdAt: string;
   readonly archivedAt: string | null;
@@ -66,6 +68,7 @@ interface EnvironmentRow {
   slug: string;
   kind: EnvironmentKind;
   accepts_feature_images: boolean;
+  requires_approval: boolean;
   status: EnvironmentStatus;
   created_at: Date;
   archived_at: Date | null;
@@ -157,8 +160,15 @@ export class Environments {
     });
   }
 
-  /** Changes the name, or whether a test environment accepts feature images. The kind stays fixed. */
-  update(actor: Principal, idValue: unknown, input: { name?: unknown; acceptsFeatureImages?: unknown }): Promise<void> {
+  /**
+   * Changes the name, whether a test environment accepts feature images, or whether
+   * production deployments need a second person's approval. The kind stays fixed.
+   */
+  update(
+    actor: Principal,
+    idValue: unknown,
+    input: { name?: unknown; acceptsFeatureImages?: unknown; requiresApproval?: unknown },
+  ): Promise<void> {
     const id = parseId(idValue, 'environment');
     const name = input.name === undefined ? undefined : normalizeEnvironmentName(input.name);
     return this.#database.transaction(async (tx) => {
@@ -170,7 +180,17 @@ export class Environments {
         input.acceptsFeatureImages === undefined
           ? current.accepts_feature_images
           : acceptsFeatureImages(current.kind, input.acceptsFeatureImages);
+      const requiresApproval = input.requiresApproval === undefined ? current.requires_approval : input.requiresApproval;
+      if (typeof requiresApproval !== 'boolean') {
+        throw new EnvironmentError('invalid', 'Say whether deployments need approval.');
+      }
+      if (requiresApproval && current.kind !== 'production') {
+        throw new EnvironmentError('invalid', 'Only production deployments can need approval.');
+      }
       const changes: Record<string, unknown> = {};
+      if (requiresApproval !== current.requires_approval) {
+        changes.requiresApproval = requiresApproval;
+      }
       if (name !== undefined && name !== current.name) {
         await assertNameFree(tx, name, id);
         changes.name = name;
@@ -183,8 +203,10 @@ export class Environments {
         return;
       }
       await tx.query(
-        `UPDATE environments.environments SET name = $2, accepts_feature_images = $3, updated_at = now() WHERE id = $1`,
-        [id, name ?? current.name, featureImages],
+        `UPDATE environments.environments
+         SET name = $2, accepts_feature_images = $3, requires_approval = $4, updated_at = now()
+         WHERE id = $1`,
+        [id, name ?? current.name, featureImages, requiresApproval],
       );
       await appendToOutbox(tx, [
         createDomainEvent({
@@ -391,6 +413,7 @@ function toView(row: EnvironmentRow, target: TargetRow | null): EnvironmentView 
     kind: row.kind,
     acceptsFeatureImages: row.accepts_feature_images,
     acceptedImages: acceptedImageKinds({ kind: row.kind, acceptsFeatureImages: row.accepts_feature_images }),
+    requiresApproval: row.requires_approval,
     status: row.status,
     createdAt: row.created_at.toISOString(),
     archivedAt: row.archived_at?.toISOString() ?? null,

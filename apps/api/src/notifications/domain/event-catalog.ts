@@ -28,6 +28,12 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   TargetConnected: 'A target connects, or reconnects after being lost',
   TargetLost: 'A target stops reporting',
   TargetRevoked: 'A target is disconnected',
+  DeploymentRequested: 'A deployment is asked for, or waits for approval',
+  DeploymentRejected: 'A production deployment is rejected',
+  DeploymentSucceeded: 'A deployment finishes',
+  DeploymentFailed: 'A deployment fails',
+  DeploymentAborted: 'A deployment is aborted',
+  EnvironmentSecretSet: "An environment's secret is set",
 };
 
 const EDITION_NAMES: Readonly<Record<string, string>> = {
@@ -114,6 +120,20 @@ export function summarize(event: DomainEvent, companyName: string): string {
         return `The target of ${String(payload.environmentName)} stopped reporting.`;
       case 'TargetRevoked':
         return `The target of ${String(payload.environmentName)} was disconnected.`;
+      case 'DeploymentRequested':
+        return payload.needsApproval === true
+          ? `A deployment to ${String(payload.environmentName)} waits for approval.`
+          : `A deployment to ${String(payload.environmentName)} started.`;
+      case 'DeploymentRejected':
+        return `A deployment to ${String(payload.environmentName)} was rejected.`;
+      case 'DeploymentSucceeded':
+        return `${String(payload.applicationName)} ${String(payload.version)} runs in ${String(payload.environmentName)}.`;
+      case 'DeploymentFailed':
+        return `Deploying ${String(payload.applicationName)} ${String(payload.version)} to ${String(payload.environmentName)} failed.`;
+      case 'DeploymentAborted':
+        return `Deploying ${String(payload.applicationName)} ${String(payload.version)} to ${String(payload.environmentName)} was aborted.`;
+      case 'EnvironmentSecretSet':
+        return `The secret ${String(payload.name)} was set in ${String(payload.environmentName)}.`;
       default:
         return `${event.eventType} happened.`;
     }

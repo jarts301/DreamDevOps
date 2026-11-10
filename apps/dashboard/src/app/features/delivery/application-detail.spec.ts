@@ -38,6 +38,7 @@ const build = (overrides: object) => ({
   status: 'succeeded',
   failureReason: null,
   reports: { scan: { critical: 0, high: 2, medium: 1, low: 0, unknown: 0 } },
+  progress: [],
   imageRef: 'localhost:3000/acme/billing:feature-login-aaaaaaa',
   digest: `sha256:${'d'.repeat(64)}`,
   signedWith: 'test',
@@ -99,7 +100,14 @@ describe('ApplicationDetail', () => {
   };
   const open = async (
     permissions: string[],
-    data: { builds?: object[]; versions?: object[]; releases?: object[]; branches?: string[] } = {},
+    data: {
+      builds?: object[];
+      versions?: object[];
+      releases?: object[];
+      branches?: string[];
+      environments?: object[];
+      deployments?: object[];
+    } = {},
   ) => {
     setUp(permissions);
     const fixture = TestBed.createComponent(ApplicationDetail);
@@ -113,6 +121,11 @@ describe('ApplicationDetail', () => {
       http.expectOne('/api/v1/company/applications/a-1/branches').flush(data.branches ?? ['develop', 'feature/login', 'main']);
     }
     await answerRefresh(data);
+    // The deployments panel loads the environments to deploy to, then the deployments.
+    await settle();
+    http.expectOne((request) => request.url === '/api/v1/company/environments').flush(data.environments ?? []);
+    await settle();
+    http.expectOne((request) => request.url === '/api/v1/company/deployments').flush(data.deployments ?? []);
     await render(fixture);
     return fixture;
   };
@@ -132,7 +145,7 @@ describe('ApplicationDetail', () => {
   it('shows members without the permissions no build or release controls', async () => {
     const fixture = await open(['dashboards:view']);
 
-    expect(text(fixture)).not.toContain('Build a feature image');
+    expect(text(fixture)).not.toContain('Build a test image');
     expect(button(fixture, 'Start')).toBeUndefined();
   });
 
@@ -141,7 +154,7 @@ describe('ApplicationDetail', () => {
     const options = [...element(fixture).querySelectorAll<HTMLOptionElement>('select[formcontrolname="branch"] option')];
     expect(options.map((option) => option.value)).toEqual(['feature/login']);
 
-    button(fixture, 'Build image').click();
+    button(fixture, 'Build test image').click();
     const request = http.expectOne('/api/v1/company/applications/a-1/feature-builds');
     expect(request.request.body).toEqual({ branch: 'feature/login' });
     request.flush(build({ status: 'queued' }));
@@ -150,6 +163,37 @@ describe('ApplicationDetail', () => {
 
     expect(text(fixture)).toContain('Building feature-login-aaaaaaa.');
     expect(text(fixture)).toContain('Building');
+    fixture.destroy();
+  });
+
+  it('shows where each step of a running build stands', async () => {
+    const fixture = await open(['dashboards:view'], {
+      builds: [
+        build({
+          status: 'running',
+          reports: { secrets: { found: 0 }, tests: { passed: true, log: '' } },
+          progress: [
+            { job: 'secrets', state: 'passed', startedAt: '2026-11-02T10:00:10Z' },
+            { job: 'test', state: 'passed', startedAt: '2026-11-02T10:00:10Z' },
+            { job: 'image', state: 'running', startedAt: '2026-11-02T10:01:00Z' },
+            { job: 'scan', state: 'waiting', startedAt: null },
+            { job: 'sbom', state: 'waiting', startedAt: null },
+          ],
+        }),
+      ],
+    });
+    const steps = [...element(fixture).querySelectorAll<HTMLElement>('.step')].map((step) => [
+      step.dataset['state'],
+      step.textContent?.replace(/\s+/g, ' ').trim(),
+    ]);
+
+    expect(steps).toEqual([
+      ['passed', '✓Secret scan: done, none found'],
+      ['passed', '✓Tests: done'],
+      ['running', '◐Image: in progress'],
+      ['waiting', '○Vulnerability scan: waiting'],
+      ['waiting', '○SBOM: waiting'],
+    ]);
     fixture.destroy();
   });
 

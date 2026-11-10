@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
+import { EnvironmentConfig, type EnvironmentConfigView } from '../application/environment-config.ts';
 import { type Connection, Environments, type EnvironmentView } from '../application/environments.ts';
 
 /** Creating environments and connecting their targets use this permission, which Company Admins and Operators have. */
@@ -10,9 +11,67 @@ const MANAGE_TARGETS = 'targets:connect';
 @Controller('company/environments')
 export class EnvironmentsController {
   readonly #environments: Environments;
+  readonly #config: EnvironmentConfig;
 
-  constructor(@Inject(Environments) environments: Environments) {
+  constructor(@Inject(Environments) environments: Environments, @Inject(EnvironmentConfig) config: EnvironmentConfig) {
     this.#environments = environments;
+    this.#config = config;
+  }
+
+  /** Variables with their values, and secrets by name only. With ?application=, that application's too. */
+  @Authenticated()
+  @Get(':id/config')
+  config(@Param('id') id: string, @Query('application') application: unknown): Promise<EnvironmentConfigView> {
+    return this.#config.view(id, application);
+  }
+
+  // Who may change values depends on the environment's kind, so the service checks it.
+  @Authenticated()
+  @Put(':id/variables/:name')
+  @HttpCode(204)
+  setVariable(
+    @Req() request: ApiRequest,
+    @Param('id') id: string,
+    @Param('name') name: string,
+    @Body() body: { value?: unknown; application?: unknown },
+  ): Promise<void> {
+    return this.#config.setVariable(request.principal!, id, name, body ?? {});
+  }
+
+  @Authenticated()
+  @Delete(':id/variables/:name')
+  @HttpCode(204)
+  removeVariable(
+    @Req() request: ApiRequest,
+    @Param('id') id: string,
+    @Param('name') name: string,
+    @Query('application') application: unknown,
+  ): Promise<void> {
+    return this.#config.removeVariable(request.principal!, id, name, application);
+  }
+
+  @Authenticated()
+  @Put(':id/secrets/:name')
+  @HttpCode(204)
+  setSecret(
+    @Req() request: ApiRequest,
+    @Param('id') id: string,
+    @Param('name') name: string,
+    @Body() body: { value?: unknown; application?: unknown },
+  ): Promise<void> {
+    return this.#config.setSecret(request.principal!, id, name, body ?? {});
+  }
+
+  @Authenticated()
+  @Delete(':id/secrets/:name')
+  @HttpCode(204)
+  removeSecret(
+    @Req() request: ApiRequest,
+    @Param('id') id: string,
+    @Param('name') name: string,
+    @Query('application') application: unknown,
+  ): Promise<void> {
+    return this.#config.removeSecret(request.principal!, id, name, application);
   }
 
   @Authenticated()
@@ -42,7 +101,7 @@ export class EnvironmentsController {
   update(
     @Req() request: ApiRequest,
     @Param('id') id: string,
-    @Body() body: { name?: unknown; acceptsFeatureImages?: unknown },
+    @Body() body: { name?: unknown; acceptsFeatureImages?: unknown; requiresApproval?: unknown },
   ): Promise<void> {
     return this.#environments.update(request.principal!, id, body ?? {});
   }

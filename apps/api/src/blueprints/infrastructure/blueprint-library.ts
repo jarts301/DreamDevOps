@@ -88,6 +88,11 @@ export class BlueprintLibrary {
     );
   }
 
+  /** One version's manifest, or null if this platform doesn't have it. */
+  manifest(key: string, version: string): BlueprintManifest | null {
+    return this.#blueprints.find(({ manifest }) => manifest.key === key && manifest.version === version)?.manifest ?? null;
+  }
+
   /** The scaffold of one version, filled in for an application. */
   render(key: string, version: string, values: ScaffoldValues): BlueprintFile[] {
     const blueprint = this.#blueprints.find(

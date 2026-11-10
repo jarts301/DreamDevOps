@@ -120,6 +120,7 @@ const job = (buildId: string, token = pipelines.tokenOf(buildId)) => {
   const server = app.getHttpServer();
   return {
     source: () => request(server).get(`${base}/source`).set(auth),
+    started: (name: string) => request(server).post(`${base}/jobs/${name}/started`).set(auth),
     report: (kind: string, body: string, query = '') =>
       request(server).post(`${base}/reports/${kind}${query}`).set(auth).set('Content-Type', 'application/octet-stream').send(body),
     /** Uploads the image as the pipeline does: base64 parts, then the hash of the whole. */
@@ -188,6 +189,7 @@ const buildsOf = async (agent: Agent, applicationId: string) =>
     digest: string | null;
     signedWith: string | null;
     releaseId: string | null;
+    progress: { job: string; state: string }[];
   }[];
 
 /** Waits for a build to be asked for, which happens in the background. */
@@ -375,6 +377,33 @@ describe('feature images', () => {
     await runPipeline(body.id, { testsPass: false });
     await eventually(async () => expect((await buildsOf(setup.developer, setup.applicationId))[0]?.status).toBe('failed'));
     await job(body.id).source().expect(401);
+  });
+
+  it('show where each pipeline job stands while the build runs', async () => {
+    const setup = await setUp();
+    source.push(setup.organization, setup.name, 'feature/progress');
+    const { body } = await setup.developer
+      .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+      .send({ branch: 'feature/progress' })
+      .expect(201);
+    await eventually(() => expect(pipelines.tokenOf(body.id)).toBeDefined());
+    const steps = job(body.id);
+    const states = async () =>
+      (await buildsOf(setup.developer, setup.applicationId))[0]!.progress.map(
+        (step) => `${step.job}:${step.state}`,
+      );
+    expect(await states()).toEqual(['secrets:waiting', 'test:waiting', 'image:waiting', 'scan:waiting', 'sbom:waiting']);
+
+    await steps.started('secrets').expect(204);
+    await steps.started('test').expect(204);
+    await steps.started('test').expect(204);
+    await steps.report('secrets', '[]').expect(204);
+    expect(await states()).toEqual(['secrets:passed', 'test:running', 'image:waiting', 'scan:waiting', 'sbom:waiting']);
+
+    await steps.started('deploy').expect(404);
+    await job(body.id, 'wrong-token-of-the-right-length-0000').started('image').expect(401);
+    await steps.report('failure', 'secrets=success test=failure').expect(204);
+    expect(await states()).toEqual(['secrets:passed', 'test:failed', 'image:skipped', 'scan:skipped', 'sbom:skipped']);
   });
 
   it('fail at once when a pipeline job dies without its report', async () => {
