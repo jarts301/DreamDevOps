@@ -2,8 +2,10 @@ import { createHmac } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Controller, Get, type INestApplication } from '@nestjs/common';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
+import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEMO_USERS } from '../src/demo/demo-company.ts';
 import { RequirePermissions } from '../src/http/access.decorators.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
@@ -152,6 +154,7 @@ describe('login through a real Keycloak', () => {
         KEYCLOAK_ADMIN_PASSWORD: ADMIN.password,
         FORGEJO_KEYCLOAK_CLIENT_SECRET: 'fake-dummy-forgejo-client-secret',
         FORGEJO_PUBLIC_URL: 'http://localhost:3000',
+        KEYCLOAK_DEV_USER_PASSWORD: USER_PASSWORD,
       },
     });
     if (setup.exitCode !== 0) {
@@ -177,7 +180,7 @@ describe('login through a real Keycloak', () => {
   });
 
   it('signs a user in and creates their session', async () => {
-    const { agent, submitted } = await logIn('dev-developer', USER_PASSWORD);
+    const { agent, submitted } = await logIn('demo-developer', USER_PASSWORD);
 
     const finished = await finish(agent, submitted);
 
@@ -185,16 +188,28 @@ describe('login through a real Keycloak', () => {
     expect(finished.headers.location).toBe('http://localhost:4200/');
     const { body } = await agent.get('/api/v1/auth/me').expect(200);
     expect(body).toMatchObject({
-      email: 'dev-developer@example.com',
-      displayName: 'Dev Developer',
+      email: 'demo-developer@example.com',
+      displayName: 'Demo Developer',
       companyId: null,
       permissions: [],
       memberships: [],
     });
   });
 
+  it('signs demo users in with the IDs the demo company setup expects', async () => {
+    const { agent, submitted } = await logIn('demo-operator', USER_PASSWORD);
+    await finish(agent, submitted);
+
+    const superuser = new pg.Pool({ connectionString: database.superuserUrl() });
+    const { rows } = await superuser.query<{ subject: string }>('SELECT subject FROM identity.users WHERE email = $1', [
+      'demo-operator@example.com',
+    ]);
+    await superuser.end();
+    expect(rows[0]?.subject).toBe(DEMO_USERS.find((user) => user.username === 'demo-operator')!.subject);
+  });
+
   it('refuses a wrong password', async () => {
-    const { agent, submitted } = await logIn('dev-company-admin', 'wrong-password');
+    const { agent, submitted } = await logIn('demo-company-admin', 'wrong-password');
 
     expect(submitted.status).toBe(200);
     await expect(submitted.text()).resolves.toContain('Invalid username or password');
@@ -230,7 +245,7 @@ describe('login through a real Keycloak', () => {
   });
 
   it('asks a developer for nothing more than the password', async () => {
-    const { agent, submitted } = await logIn('dev-developer', USER_PASSWORD);
+    const { agent, submitted } = await logIn('demo-developer', USER_PASSWORD);
 
     const finished = await finish(agent, submitted);
 
@@ -239,14 +254,14 @@ describe('login through a real Keycloak', () => {
   });
 
   it('refuses platform permissions without the Keycloak role', async () => {
-    const { agent, submitted } = await logIn('dev-company-admin', USER_PASSWORD);
+    const { agent, submitted } = await logIn('demo-company-admin', USER_PASSWORD);
     await finish(agent, submitted);
 
     await agent.get('/api/v1/sample/platform-only').expect(403);
   });
 
   it('refuses a code from Keycloak replayed in a new login', async () => {
-    const first = await logIn('dev-developer', USER_PASSWORD);
+    const first = await logIn('demo-developer', USER_PASSWORD);
     const callback = new URL(first.submitted.headers.get('location')!);
     await first.agent.get(callback.pathname + callback.search).expect(302);
 
@@ -260,7 +275,7 @@ describe('login through a real Keycloak', () => {
   });
 
   it('rejects a callback whose state does not match', async () => {
-    const { agent, submitted } = await logIn('dev-developer', USER_PASSWORD);
+    const { agent, submitted } = await logIn('demo-developer', USER_PASSWORD);
     const callback = new URL(submitted.headers.get('location')!);
     callback.searchParams.set('state', 'forged');
 
@@ -269,7 +284,7 @@ describe('login through a real Keycloak', () => {
   });
 
   it('ends the Keycloak session too, so the next login asks for the password', async () => {
-    const { agent, browser, submitted } = await logIn('dev-developer', USER_PASSWORD);
+    const { agent, browser, submitted } = await logIn('demo-developer', USER_PASSWORD);
     await finish(agent, submitted);
 
     const { body } = await agent.post('/api/v1/auth/logout').expect(200);

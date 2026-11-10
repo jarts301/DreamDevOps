@@ -23,6 +23,11 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   ReleaseStarted: 'A release or hotfix starts',
   ReleaseMerged: 'A release or hotfix merges into main',
   ReleasePublished: "A release's final image is published",
+  EnvironmentCreated: 'An environment is created',
+  EnvironmentArchived: 'An environment is archived',
+  TargetConnected: 'A target connects, or reconnects after being lost',
+  TargetLost: 'A target stops reporting',
+  TargetRevoked: 'A target is disconnected',
 };
 
 const EDITION_NAMES: Readonly<Record<string, string>> = {
@@ -97,6 +102,18 @@ export function summarize(event: DomainEvent, companyName: string): string {
         return `Version ${String(payload.version)} is published.`;
       case 'CompanyEditionChanged':
         return `The company moved to the ${editionName(payload.edition)} Edition.`;
+      case 'EnvironmentCreated':
+        return `The ${String(payload.kind)} environment ${String(payload.name)} was created.`;
+      case 'EnvironmentArchived':
+        return `The environment ${String(payload.name)} was archived.`;
+      case 'TargetConnected':
+        return payload.reconnected === true
+          ? `The target of ${String(payload.environmentName)} is reporting again.`
+          : `A target connected to ${String(payload.environmentName)}.`;
+      case 'TargetLost':
+        return `The target of ${String(payload.environmentName)} stopped reporting.`;
+      case 'TargetRevoked':
+        return `The target of ${String(payload.environmentName)} was disconnected.`;
       default:
         return `${event.eventType} happened.`;
     }

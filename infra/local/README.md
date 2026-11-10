@@ -44,6 +44,8 @@ Forgejo signs people in through Keycloak, and creates their account on first sig
 
 The `start` command sets this up and is safe to repeat: `keycloak-init` adds the `dreamdevops-forgejo` client to the realm, and `forgejo-init` adds Keycloak as Forgejo's login source. Keycloak always calls itself `http://localhost:8081`, so browsers and Forgejo agree on its address, while Forgejo reaches it inside Docker.
 
+Forgejo reads Keycloak's settings when it starts, so it waits for Keycloak. When Docker restarts every container at once, Forgejo can still start first; its first Keycloak sign-in then goes without PKCE and fails. `forgejo-init` makes that first request itself, so running `start` after a restart repairs it, and the smoke test checks that PKCE is sent.
+
 ## The CI runners
 
 Two runners share one Docker engine and run every company's pipeline jobs. On servers, each company should get its own runners and engine.
@@ -70,7 +72,11 @@ Forgejo's webhooks reach the API at the same address. The first pipeline run dow
 
 ## Second factor
 
-Platform admins, Company Admins and Tech Leads must sign in with a one-time code. `keycloak-init` adds a `browser-mfa` login flow: the password is level 1, and a one-time code is level 2. When the platform asks for level 2, Keycloak asks for a code, or asks the person to set up an authenticator app the first time. The sample users have no authenticator yet, so the first sign-in as `dev-platform-admin` asks to set one up.
+Platform admins, Company Admins and Tech Leads must sign in with a one-time code. `keycloak-init` adds a `browser-mfa` login flow: the password is level 1, and a one-time code is level 2. When the platform asks for level 2, Keycloak asks for a code, or asks the person to set up an authenticator app the first time. The sample users have no authenticator yet, so the first sign-in as `demo-platform-admin`, `demo-company-admin`, `demo-tech-lead` or `dev-platform-admin` asks to set one up.
+
+## Demo users
+
+`keycloak-init` also adds one demo user for each role, `demo-platform-admin`, `demo-company-admin`, `demo-tech-lead`, `demo-developer`, `demo-operator` and `demo-viewer`, all with the password in `KEYCLOAK_DEV_USER_PASSWORD`. Users that already exist are left alone, so authenticators survive restarts. It also removes the earlier `dev-company-admin` and `dev-developer`. The local API adds the demo users to Demo Company when it starts.
 
 ## Everyday commands
 

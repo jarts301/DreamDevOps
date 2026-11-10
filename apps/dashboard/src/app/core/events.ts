@@ -66,6 +66,31 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return `Merged the ${String(payload['kind'])} ${String(payload['version'])} into main`;
     case 'ReleasePublished':
       return `Published version ${String(payload['version'])}`;
+    case 'EnvironmentCreated':
+      return `Created the ${payload['kind'] === 'production' ? 'production' : 'test'} environment "${String(payload['name'])}"`;
+    case 'EnvironmentUpdated':
+      if (payload['name'] !== undefined) {
+        return `Renamed the environment "${String(payload['previousName'])}" to "${String(payload['name'])}"`;
+      }
+      return payload['acceptsFeatureImages'] === true
+        ? 'Let an environment accept feature images'
+        : 'Stopped an environment from accepting feature images';
+    case 'EnvironmentArchived':
+      return `Archived the environment "${String(payload['name'])}"`;
+    case 'EnvironmentRestored':
+      return `Restored the environment "${String(payload['name'])}"`;
+    case 'TargetRegistrationStarted':
+      return `Created a command to connect a target to "${String(payload['environmentName'])}"`;
+    case 'TargetConnected':
+      return payload['reconnected'] === true
+        ? `The target of "${String(payload['environmentName'])}" is reporting again`
+        : `Connected a target to "${String(payload['environmentName'])}", key ${String(payload['keyFingerprint'])}`;
+    case 'TargetLost':
+      return `The target of "${String(payload['environmentName'])}" stopped reporting`;
+    case 'TargetRevoked':
+      return payload['wasConnected'] === true
+        ? `Disconnected the target of "${String(payload['environmentName'])}"`
+        : `Cancelled connecting a target to "${String(payload['environmentName'])}"`;
     case 'CompanyEditionChanged':
       return `Moved the company from the ${editionName(payload['previousEdition'])} to the ${editionName(payload['edition'])} Edition`;
     case 'UserInvited':

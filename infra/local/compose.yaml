@@ -98,6 +98,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # Forgejo reads Keycloak's settings at startup, so Keycloak must be up first.
+      keycloak:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${FORGEJO_HTTP_PORT:-3000}:3000"
       - "127.0.0.1:${FORGEJO_SSH_PORT:-2222}:22"
@@ -251,7 +254,8 @@ services:
       forgejo-init:
         condition: service_completed_successfully
 
-  # Adds the Forgejo login client to Keycloak, then exits. Safe to run repeatedly.
+  # Adds the Forgejo login client, the second-factor flow and the demo users to Keycloak,
+  # then exits. Safe to run repeatedly.
   keycloak-init:
     image: quay.io/keycloak/keycloak:26.8.1
     entrypoint: ["/bin/bash", "/ops/keycloak-init.sh"]
@@ -260,6 +264,7 @@ services:
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
       FORGEJO_KEYCLOAK_CLIENT_SECRET: ${FORGEJO_KEYCLOAK_CLIENT_SECRET:?copy the new values from .env.example to .env}
       FORGEJO_PUBLIC_URL: http://localhost:${FORGEJO_HTTP_PORT:-3000}
+      KEYCLOAK_DEV_USER_PASSWORD: ${KEYCLOAK_DEV_USER_PASSWORD:?copy the new values from .env.example to .env}
     volumes:
       - ./ops:/ops:ro
     depends_on:

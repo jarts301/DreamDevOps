@@ -60,6 +60,19 @@ else
   echo "Forgejo now signs in through Keycloak."
 fi
 
+# Forgejo reads Keycloak's settings when it starts. If Keycloak wasn't up yet, such as
+# after Docker restarts every container at once, it reads them again on the first
+# sign-in, and that one sign-in goes without PKCE, which Keycloak refuses. A first
+# request here takes that hit, so people's sign-ins work.
+pkce_sent() {
+  curl -s -o /dev/null -w '%{redirect_url}' http://forgejo:3000/user/oauth2/keycloak | grep -q 'code_challenge_method=S256'
+}
+if ! pkce_sent && ! pkce_sent; then
+  echo "Forgejo doesn't send PKCE to Keycloak, so sign-ins would fail. Restart Forgejo." >&2
+  exit 1
+fi
+echo "Forgejo's Keycloak sign-in is ready."
+
 # The local CI runner connects with a shared secret, made by runner-secret-init.
 forgejo forgejo-cli actions register \
   --config "$config" \

@@ -48,9 +48,12 @@ platform_roles_are_restricted() {
   [ "$(psql -Atc "select count(*) from pg_roles where rolname like 'dreamdevops\_%' and not rolsuper and not rolbypassrls" postgres)" = "4" ]
 }
 
-# Forgejo hands sign-ins to Keycloak at its public address, with its own client.
+# Forgejo hands sign-ins to Keycloak at its public address, with its own client and
+# PKCE, which Keycloak requires.
 forgejo_signs_in_through_keycloak() {
-  wget -S -O /dev/null http://forgejo:3000/user/oauth2/keycloak 2>&1     | grep -q 'Location: http://localhost:[0-9]*/realms/dreamdevops/protocol/openid-connect/auth?client_id=dreamdevops-forgejo'
+  location=$(wget -S -O /dev/null http://forgejo:3000/user/oauth2/keycloak 2>&1 | grep 'Location:')
+  echo "$location" | grep -q 'Location: http://localhost:[0-9]*/realms/dreamdevops/protocol/openid-connect/auth?client_id=dreamdevops-forgejo' &&
+    echo "$location" | grep -q 'code_challenge_method=S256'
 }
 
 platform_database_exists() {

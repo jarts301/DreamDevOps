@@ -27,6 +27,7 @@ const production = {
   WEBHOOK_SECRET_KEY: 'a-real-webhook-secret-key-that-is-long-enough',
   SIGNING_KEY_SECRET: 'a-real-signing-key-secret-that-is-long-enough',
   IMAGE_RUNNER_LABEL: 'image-runner-3f9a2c7d41e6',
+  AGENT_API_URL: 'https://api.example.com',
 };
 
 describe('loadConfig', () => {
@@ -79,6 +80,24 @@ describe('loadConfig', () => {
     ['WEBHOOK_ALLOW_PRIVATE_NETWORKS', 'true'],
   ])('refuses %s=%s in production', (name, value) => {
     expect(() => loadConfig({ ...production, [name]: value })).toThrow(InvalidConfigError);
+  });
+
+  it('gives agents the public address by default, and refuses http for agents in production', () => {
+    const config = loadConfig(valid);
+    expect(config.agentApiUrl).toBe(config.publicUrl);
+    expect(config.agentChart).toMatch(/^oci:\/\//);
+    expect(config.targetLostAfterSeconds).toBe(180);
+
+    expect(() => loadConfig({ ...production, AGENT_API_URL: 'http://api.example.com' })).toThrow(
+      'AGENT_API_URL must use https in production.',
+    );
+    expect(() => loadConfig({ ...valid, AGENT_CHART: 'charts; rm -rf /' })).toThrow(InvalidConfigError);
+  });
+
+  it('sets up demo data only when asked, and never in production', () => {
+    expect(loadConfig(valid).demoData).toBe(false);
+    expect(loadConfig({ ...valid, DEMO_DATA: 'true' }).demoData).toBe(true);
+    expect(() => loadConfig({ ...production, DEMO_DATA: 'true' })).toThrow('DEMO_DATA is for local use only.');
   });
 
   it('defaults to secure email and webhooks', () => {

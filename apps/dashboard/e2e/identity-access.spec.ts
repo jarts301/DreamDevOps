@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { type Browser, expect, type Page, test } from '@playwright/test';
 
 process.loadEnvFile('../../infra/local/.env');
@@ -315,6 +315,38 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByRole('button', { name: 'Start' })).toHaveCount(0);
     await adminPage.getByRole('link', { name: '← Applications' }).click();
     await expect(adminPage).toHaveURL(/\/applications$/);
+  });
+
+  await test.step('the company admin creates a production environment and connects its target', async () => {
+    await adminPage.getByRole('link', { name: 'Environments' }).click();
+    await expect(adminPage.getByText('No environments yet.')).toBeVisible();
+    await adminPage.getByLabel('Name', { exact: true }).fill('Production');
+    await adminPage.getByLabel('Kind').selectOption('production');
+    await adminPage.getByRole('button', { name: 'Create environment' }).click();
+    await expect(adminPage.getByText('Production is created.', { exact: false })).toBeVisible();
+    await expect(adminPage.getByRole('cell', { name: 'Final images' })).toBeVisible();
+
+    await adminPage.getByRole('button', { name: 'Connect a target to Production' }).click();
+    const command = await adminPage.getByRole('textbox', { name: 'Connect command' }).inputValue();
+    const registrationToken = /registrationToken=(\S+)/.exec(command)![1]!;
+    await expect(adminPage.getByText('Waiting for the agent')).toBeVisible();
+
+    // The agent in the cluster makes its own key pair and registers only the public key.
+    const { publicKey } = generateKeyPairSync('ed25519');
+    const registered = await fetch('http://localhost:4000/api/v1/agent/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        registrationToken,
+        publicKey: publicKey.export({ format: 'jwk' }),
+        agentVersion: '0.1.0',
+        kubernetesVersion: 'v1.31.2+k3s1',
+      }),
+    });
+    expect(registered.status).toBe(201);
+
+    await expect(adminPage.getByText('The target of Production is connected.')).toBeVisible({ timeout: 15_000 });
+    await expect(adminPage.getByText('Kubernetes v1.31.2+k3s1, agent 0.1.0')).toBeVisible();
   });
 
   await test.step('the platform admin sees each company’s edition, and only Community is installed', async () => {

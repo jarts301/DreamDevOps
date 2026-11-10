@@ -50,6 +50,14 @@ export interface AppConfig {
   readonly buildTimeoutMinutes: number;
   /** The secret label of the runner that builds images, put in the platform's pipeline. */
   readonly imageRunnerLabel: string;
+  /** The API's address as agents in targets reach it. Defaults to API_PUBLIC_URL. */
+  readonly agentApiUrl: string;
+  /** The Helm chart that installs the agent, shown in the connect command. */
+  readonly agentChart: string;
+  /** A connected target not heard from for this long counts as lost. */
+  readonly targetLostAfterSeconds: number;
+  /** Sets up the demo company and its users at startup. Local use only. */
+  readonly demoData: boolean;
   /** Attempts before a company's provisioning is marked as failed. */
   readonly provisioningMaxAttempts: number;
   readonly provisioningRetrySeconds: number;
@@ -81,6 +89,8 @@ const MINUTE_MS = 60_000;
 const DEFAULT_BLUEPRINTS_DIR = fileURLToPath(new URL('../../../../blueprints', import.meta.url));
 const DEFAULT_PIPELINES_DIR = fileURLToPath(new URL('../../../../pipelines', import.meta.url));
 /** The local stack's sample secrets start with this, and must never reach a server. */
+/** Where module 15, the Deployment agent, publishes the agent's chart. */
+const DEFAULT_AGENT_CHART = 'oci://ghcr.io/dreamdevops/charts/dreamdevops-agent';
 const SAMPLE_SECRET_PREFIX = 'fake-dummy-';
 
 /** Reads settings once at startup and refuses to start if any are unsafe or missing. */
@@ -116,7 +126,19 @@ export function loadConfig(env: Environment): AppConfig {
       'WEBHOOK_SECRET_KEY, SIGNING_KEY_SECRET and IMAGE_RUNNER_LABEL must not be the sample values in production.',
     );
   }
+  const agentApiUrl = env.AGENT_API_URL ? url(env, 'AGENT_API_URL') : url(env, 'API_PUBLIC_URL');
+  const agentChart = env.AGENT_CHART || DEFAULT_AGENT_CHART;
+  if (!/^(oci:\/\/|https:\/\/)?[A-Za-z0-9][A-Za-z0-9.:/_-]{0,250}$/.test(agentChart)) {
+    throw new InvalidConfigError('AGENT_CHART must be a chart reference, such as oci://registry.example.com/charts/agent.');
+  }
+  const demoData = env.DEMO_DATA === 'true';
+  if (isProduction && demoData) {
+    throw new InvalidConfigError('DEMO_DATA is for local use only.');
+  }
   if (isProduction) {
+    if (!agentApiUrl.startsWith('https://')) {
+      throw new InvalidConfigError('AGENT_API_URL must use https in production.');
+    }
     if (!keycloakIssuerUrl.startsWith('https://')) {
       throw new InvalidConfigError('KEYCLOAK_ISSUER_URL must use https in production.');
     }
@@ -157,6 +179,10 @@ export function loadConfig(env: Environment): AppConfig {
     buildWorkDir: env.BUILD_WORK_DIR || join(tmpdir(), 'dreamdevops-builds'),
     buildTimeoutMinutes: integer(env, 'BUILD_TIMEOUT_MINUTES', 60),
     imageRunnerLabel,
+    agentApiUrl,
+    agentChart,
+    targetLostAfterSeconds: integer(env, 'TARGET_LOST_AFTER_SECONDS', 180),
+    demoData,
     provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),
     provisioningRetrySeconds: integer(env, 'PROVISIONING_RETRY_SECONDS', 30),
     smtpHost: required(env, 'SMTP_HOST'),

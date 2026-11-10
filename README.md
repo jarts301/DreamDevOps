@@ -37,10 +37,11 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Webhooks | Signed Forgejo events, checked per repository and handled once |
 | Builds | Feature, release candidate and final images, built in a platform-owned pipeline with tests, secret and vulnerability scans and an SBOM, then signed with Cosign. Each application has a version list. |
 | Releases | Git Flow releases and hotfixes: the branch, RC tags and images, the checks on the pull request into main, the version tag, the final image and the merge back |
+| Environments | Test and production environments, each run by one target cluster that connects with a one-time token and then proves itself with its own key, with health shown as connected or lost |
 | Editions | Every company on the free Community Edition, with a per-company setting and an extension point for the Commercial Edition |
 | Dashboard | Screens for all of the above, in light and dark themes |
 
-Deploying and monitoring aren't available yet. Companies can't be deleted.
+Deploying, the agent that runs in targets, and monitoring aren't available yet. Companies can't be deleted.
 
 ## Prerequisites
 
@@ -101,13 +102,19 @@ Run these commands from the repository root. They work in Bash and PowerShell.
    npm run start:dashboard
    ```
 
-7. Open <http://localhost:4200> and sign in with a sample account. The password for all of them is the value of `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`.
+7. Open <http://localhost:4200> and sign in with a demo account. The password for all of them is the value of `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`.
 
-   | Username | Starts as |
+   | Username | Role |
    |---|---|
-   | `dev-platform-admin` | Platform Admin, who can start companies |
-   | `dev-company-admin` | A user with no company, until invited |
-   | `dev-developer` | A user with no company, until invited |
+   | `demo-platform-admin` | Platform Admin, who manages companies |
+   | `demo-company-admin` | Company Admin of Demo Company |
+   | `demo-tech-lead` | Tech Lead of Demo Company |
+   | `demo-developer` | Developer in Demo Company |
+   | `demo-operator` | Operator in Demo Company |
+   | `demo-viewer` | Viewer in Demo Company |
+   | `dev-platform-admin` | Platform Admin, used by the automated tests |
+
+   Platform admins, Company Admins and Tech Leads set up an authenticator app the first time they sign in. The local API creates Demo Company and adds its members when it starts, if they're missing.
 
 To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally). Invitation emails don't leave your machine: open them in Mailpit at <http://localhost:8025>.
 
@@ -226,6 +233,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Webhook gateway](apps/api/src/webhooks/README.md) | How Forgejo's events are checked and turned into domain events |
 | [Build and artifacts](apps/api/src/builds/README.md) | The image pipeline, its checks, signing and the version list |
 | [Release management](apps/api/src/releases/README.md) | Releases and hotfixes, step by step |
+| [Environments and targets](apps/api/src/environments/README.md) | Environments, connecting targets, agent identity and health |
 | [Editions and entitlements](apps/api/src/editions/README.md) | Editions, the feature catalog, and how commercial features plug in |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |

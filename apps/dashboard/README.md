@@ -14,21 +14,28 @@ npm run start:api
 npm run start:dashboard
 ```
 
-Open <http://localhost:4200> and sign in as a sample user. Their password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`.
+Open <http://localhost:4200> and sign in as a demo user. Their password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`.
 
-| Sample user | Starts as |
+| Username | Role |
 |---|---|
-| `dev-platform-admin` | Platform Admin, who manages companies |
-| `dev-company-admin` | No company until invited |
-| `dev-developer` | No company until invited |
+| `demo-platform-admin` | Platform Admin, who manages companies |
+| `demo-company-admin` | Company Admin of Demo Company |
+| `demo-tech-lead` | Tech Lead of Demo Company |
+| `demo-developer` | Developer in Demo Company |
+| `demo-operator` | Operator in Demo Company |
+| `demo-viewer` | Viewer in Demo Company |
+| `dev-platform-admin` | Platform Admin, used by the automated tests |
+
+Platform admins, Company Admins and Tech Leads set up an authenticator app the first time they sign in. The local API creates Demo Company and adds its members when it starts, if they're missing. Sign in as each role to see what it can do.
 
 To see the whole flow:
 
-1. Sign in as `dev-platform-admin`, open **Companies**, and enter a company name and `dev-company-admin@example.com`. The company shows **Active** once its Git organization is set up.
-2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, sign in as `dev-company-admin` and accept.
+1. Sign in as `demo-company-admin` to work in Demo Company right away.
+2. To see how a company starts, sign in as `demo-platform-admin`, open **Companies**, and enter a company name and a new address such as `someone@example.com`. Then sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, register as that person and accept.
 3. Open **Applications** to register the company's applications and follow their repositories into Forgejo, **Team** to invite others and manage roles, **Audit log** to see every change, **Notifications** to post events to a chat tool, and **Edition** to see what the company's edition includes. Platform admins set each company's edition under **Editions**. **Blueprints** shows what each application type starts with.
 4. To use Git, choose **Sign in to Forgejo** on the **Applications** page, then **Check again** to join your team.
 5. Open an application to see its versions and builds, build a feature image from a `feature/*` branch, and start releases and hotfixes. Feature images need the Developer or Tech Lead role, and releases need Tech Lead.
+6. Open **Environments** to create test and production environments and connect their targets. This needs the Company Admin or Operator role.
 
 ## Layout
 

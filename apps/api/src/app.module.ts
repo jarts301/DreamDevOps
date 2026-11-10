@@ -9,7 +9,7 @@ import { AuthorizationGuard, OriginGuard, SessionGuard } from './http/guards.ts'
 import { ProblemDetailsFilter } from './http/problem-details.filter.ts';
 import { TenantContextInterceptor } from './http/tenant-context.interceptor.ts';
 import { CompanyAccessService } from './identity-access/application/company-access.service.ts';
-import { IDENTITY_PROVIDER, USER_DIRECTORY } from './identity-access/application/ports.ts';
+import { IDENTITY_PROVIDER, USER_DIRECTORY, type UserDirectory } from './identity-access/application/ports.ts';
 import { AuthController } from './identity-access/http/auth.controller.ts';
 import { CompanyAccessController, InvitationsController } from './identity-access/http/company-access.controller.ts';
 import { KeycloakIdentityProvider } from './identity-access/infrastructure/keycloak-identity-provider.ts';
@@ -39,6 +39,11 @@ import { BuildsController } from './builds/http/builds.controller.ts';
 import { PipelineController } from './builds/http/pipeline.controller.ts';
 import { ForgejoPipelineHost } from './builds/infrastructure/forgejo-pipeline-host.ts';
 import { OciRegistry } from './builds/infrastructure/oci-registry.ts';
+import { DemoCompany } from './demo/demo-company.ts';
+import { Environments } from './environments/application/environments.ts';
+import { TargetAgents } from './environments/application/target-agents.ts';
+import { AgentController } from './environments/http/agent.controller.ts';
+import { EnvironmentsController } from './environments/http/environments.controller.ts';
 import { Releases } from './releases/application/releases.ts';
 import { ReleasesController } from './releases/http/releases.controller.ts';
 import { WebhookGateway } from './webhooks/application/webhook-gateway.ts';
@@ -97,7 +102,7 @@ export class AppModule implements OnApplicationShutdown {
               limit: config.authRateLimitPerMinute,
               skipIf: (context) => {
                 const controller = context.getClass();
-                return controller !== AuthController && controller !== InvitationsController;
+                return controller !== AuthController && controller !== InvitationsController && controller !== AgentController;
               },
             },
           ],
@@ -118,6 +123,8 @@ export class AppModule implements OnApplicationShutdown {
         BuildsController,
         PipelineController,
         ReleasesController,
+        EnvironmentsController,
+        AgentController,
         HealthController,
         ...(options.controllers ?? []),
       ],
@@ -311,12 +318,37 @@ export class AppModule implements OnApplicationShutdown {
           inject: [TenantDatabase, ApplicationCatalog, Repositories, SOURCE_HOST, Builds],
         },
         {
+          provide: Environments,
+          useFactory: (database: TenantDatabase) =>
+            new Environments(database, { agentApiUrl: config.agentApiUrl, agentChart: config.agentChart }),
+          inject: [TenantDatabase],
+        },
+        {
+          provide: TargetAgents,
+          useFactory: (database: TenantDatabase) =>
+            new TargetAgents(database, {
+              agentApiUrl: config.agentApiUrl,
+              lostAfterSeconds: config.targetLostAfterSeconds,
+            }),
+          inject: [TenantDatabase],
+        },
+        {
           provide: SourceAccess,
           useFactory: (database: TenantDatabase, host: SourceHost) =>
             new SourceAccess(database, host, config.forgejoPublicUrl),
           inject: [TenantDatabase, SOURCE_HOST],
         },
         { provide: BACKGROUND_PROCESSING, useClass: BackgroundProcessing },
+        ...(config.demoData
+          ? [
+              {
+                provide: DemoCompany,
+                useFactory: (directory: UserDirectory, companies: CompaniesService, access: CompanyAccessService) =>
+                  new DemoCompany(directory, companies, access),
+                inject: [USER_DIRECTORY, CompaniesService, CompanyAccessService],
+              },
+            ]
+          : []),
         // Guards run in this order, so rate limits apply before any database work.
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: OriginGuard },

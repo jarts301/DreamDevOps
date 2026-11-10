@@ -17,6 +17,7 @@ interface NavigationItem {
 const NAVIGATION: readonly NavigationItem[] = [
   { path: '/', label: 'Overview' },
   { path: '/applications', label: 'Applications', needsCompany: true },
+  { path: '/environments', label: 'Environments', needsCompany: true },
   { path: '/blueprints', label: 'Blueprints' },
   { path: '/team', label: 'Team', permission: 'company-users:manage' },
   { path: '/audit', label: 'Audit log', permission: 'audit:read' },

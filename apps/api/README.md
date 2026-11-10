@@ -20,13 +20,19 @@ The API listens on <http://localhost:4000>, and only accepts connections from yo
 
 The API uses the `dreamdevops` realm in the local Keycloak. Open <http://localhost:4000/api/v1/auth/login> and sign in as a sample user, or use **Register** to create a user. You land on the [dashboard](../dashboard/README.md), so start it too. Without it, open `/api/v1/auth/me` to see who you are.
 
-| Sample user | Starts as |
+| Username | Role |
 |---|---|
-| `dev-platform-admin` | Platform Admin |
-| `dev-company-admin` | No company until invited |
-| `dev-developer` | No company until invited |
+| `demo-platform-admin` | Platform Admin, who manages companies |
+| `demo-company-admin` | Company Admin of Demo Company |
+| `demo-tech-lead` | Tech Lead of Demo Company |
+| `demo-developer` | Developer in Demo Company |
+| `demo-operator` | Operator in Demo Company |
+| `demo-viewer` | Viewer in Demo Company |
+| `dev-platform-admin` | Platform Admin, used by the automated tests |
 
-Their password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`. To see how they join a company, read the [Identity and Access guide](src/identity-access/README.md).
+Their password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`. Platform admins, Company Admins and Tech Leads set up an authenticator app the first time they sign in. The local API creates Demo Company and adds its members when it starts, if they're missing.
+
+`npm run start:api` sets `DEMO_DATA=true` for this. Demo Company is made through the usual company and invitation services, so its history, Git organization and teams are made as for any company. The demo users have fixed Keycloak IDs, set in `infra/local/ops/keycloak-init.sh` and `src/demo/demo-company.ts`. The API refuses to start in production with `DEMO_DATA` on. To see how people join a company, read the [Identity and Access guide](src/identity-access/README.md).
 
 The realm only accepts logins from port 4000, so changing `API_PORT` also needs a change in `infra/local/keycloak/dreamdevops-realm.json`.
 

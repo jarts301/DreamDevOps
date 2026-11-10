@@ -93,3 +93,42 @@ fi
 # The level map is stored as a JSON string, so its quotes are escaped.
 "$kcadm" update "realms/$realm" -s "browserFlow=$flow" -s 'attributes."acr.loa.map"="{\"password\":1,\"mfa\":2}"'
 echo "Keycloak asks for a second factor when the platform requests it."
+
+# Demo users, one for each role, all with the sample password. Their IDs are fixed, so
+# the local API can add them to the demo company before they first sign in; keep them in
+# step with apps/api/src/demo/demo-company.ts. Users that already exist are left alone,
+# so an authenticator someone set up survives restarts.
+case "$KEYCLOAK_DEV_USER_PASSWORD" in
+  *[\"\\]*) echo "KEYCLOAK_DEV_USER_PASSWORD can't contain quotes or backslashes." >&2; exit 1 ;;
+esac
+demo_users=(
+  "d3d00000-0000-4000-8000-000000000001|demo-platform-admin|Platform Admin|platform-admin"
+  "d3d00000-0000-4000-8000-000000000002|demo-company-admin|Company Admin|"
+  "d3d00000-0000-4000-8000-000000000003|demo-tech-lead|Tech Lead|"
+  "d3d00000-0000-4000-8000-000000000004|demo-developer|Developer|"
+  "d3d00000-0000-4000-8000-000000000005|demo-operator|Operator|"
+  "d3d00000-0000-4000-8000-000000000006|demo-viewer|Viewer|"
+)
+users_json=""
+for entry in "${demo_users[@]}"; do
+  IFS='|' read -r id username last_name realm_role <<< "$entry"
+  roles='[]'
+  [ -n "$realm_role" ] && roles="[\"$realm_role\"]"
+  users_json+="${users_json:+,}{\"id\":\"$id\",\"username\":\"$username\",\"email\":\"$username@example.com\","
+  users_json+="\"firstName\":\"Demo\",\"lastName\":\"$last_name\",\"enabled\":true,\"emailVerified\":true,"
+  users_json+="\"realmRoles\":$roles,\"credentials\":[{\"type\":\"password\",\"value\":\"$KEYCLOAK_DEV_USER_PASSWORD\",\"temporary\":false}]}"
+done
+demo_file=$(mktemp)
+trap 'rm -f "$demo_file"' EXIT
+printf '{"ifResourceExists":"SKIP","users":[%s]}' "$users_json" > "$demo_file"
+"$kcadm" create partialImport -r "$realm" -f "$demo_file" >/dev/null
+echo "Keycloak has the demo users."
+
+# Earlier sample users, replaced by the demo users.
+for username in dev-company-admin dev-developer; do
+  old=$("$kcadm" get users -r "$realm" -q "username=$username" -q exact=true --fields id --format csv --noquotes)
+  if [ -n "$old" ]; then
+    "$kcadm" delete "users/$old" -r "$realm"
+    echo "Removed the old sample user $username."
+  fi
+done

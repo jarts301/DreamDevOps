@@ -29,5 +29,7 @@ process.env.DASHBOARD_URL ??= 'http://localhost:4200/';
 process.env.TOOLS_API_URL ??= `http://host.docker.internal:${apiPort}`;
 // Browsers won't send Secure cookies over plain HTTP, which is all the local stack has.
 process.env.SECURE_COOKIES ??= 'false';
+// The demo company and its users, one for each role. See infra/local/README.md.
+process.env.DEMO_DATA ??= 'true';
 
 await import(new URL('../dist/main.js', import.meta.url).href);

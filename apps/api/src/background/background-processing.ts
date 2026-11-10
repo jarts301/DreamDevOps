@@ -7,6 +7,7 @@ import { AuditLog } from '../audit/application/audit-log.ts';
 import type { AppConfig } from '../config/app-config.ts';
 import { DELIVERY_QUEUE, type DeliveryJob, NotificationRules } from '../notifications/application/notification-rules.ts';
 import { Builds } from '../builds/application/builds.ts';
+import { TargetAgents } from '../environments/application/target-agents.ts';
 import { type FinishedBuild, Releases } from '../releases/application/releases.ts';
 import { POLICY_VERSION, REPOSITORY_TRIGGERS, Repositories } from '../source-governance/application/repositories.ts';
 import { ACCESS_TRIGGERS, SourceAccess } from '../source-governance/application/source-access.ts';
@@ -30,6 +31,7 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
   readonly #access: SourceAccess;
   readonly #builds: Builds;
   readonly #releases: Releases;
+  readonly #targets: TargetAgents;
   readonly #database: TenantDatabase;
   #sweep: ReturnType<typeof setInterval> | undefined;
   #queue: PgBossJobQueue | undefined;
@@ -45,6 +47,7 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     @Inject(SourceAccess) access: SourceAccess,
     @Inject(Builds) builds: Builds,
     @Inject(Releases) releases: Releases,
+    @Inject(TargetAgents) targets: TargetAgents,
     @Inject(TenantDatabase) database: TenantDatabase,
   ) {
     this.#config = config;
@@ -55,6 +58,7 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     this.#access = access;
     this.#builds = builds;
     this.#releases = releases;
+    this.#targets = targets;
     this.#database = database;
   }
 
@@ -186,10 +190,12 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     this.#relay = new OutboxRelay(this.#relayPool, bus, { pollIntervalMs: this.#config.relayPollMs, onError });
     this.#relay.start();
 
-    // Builds whose jobs died without reporting are failed once they pass the timeout.
+    // Builds whose jobs died without reporting are failed once they pass the timeout, and
+    // targets that stopped reporting are marked as lost.
     this.#sweep = setInterval(() => {
       this.#builds.expireStale().catch(onError);
-    }, 60_000);
+      this.#targets.markSilentTargetsLost().catch(onError);
+    }, 30_000);
     await this.#upgradeRepositories().catch(onError);
   }
 

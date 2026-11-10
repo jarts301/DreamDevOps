@@ -372,8 +372,13 @@ th {
 }
 
 .status[data-status='provisioning-failed'],
-.status[data-status='suspended'] {
+.status[data-status='suspended'],
+.status[data-status='target-lost'] {
   background: var(--color-error-surface);
+}
+
+.status[data-status='target-connected'] {
+  background: var(--color-success-surface);
 }
 
 .cell-actions {
