@@ -52,3 +52,5 @@ e2e-results/
 # System files
 .DS_Store
 Thumbs.db
+/infra/local/secrets/
+/infra/local/signing/
