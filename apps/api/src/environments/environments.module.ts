@@ -12,7 +12,9 @@ import { Deployments } from './application/deployments.ts';
 import { EnvironmentVariables } from './application/environment-variables.ts';
 import { Environments } from './application/environments.ts';
 import { HostingTargets } from './application/hosting-targets.ts';
+import { LiveEnvironments } from './application/live-environments.ts';
 import { HOST_RUNTIMES, type HostRuntime, HostRuntimes, SECRET_BOX } from './application/ports.ts';
+import { RUNNING_ENVIRONMENTS } from './application/running-environments.ts';
 import type { SecretBox } from './domain/secret-box.ts';
 import { DeploymentsController } from './http/deployments.controller.ts';
 import { EnvironmentsController } from './http/environments.controller.ts';
@@ -24,7 +26,8 @@ import { EnvironmentsSubscriptions } from './messaging/environments-subscription
 
 /**
  * Each application's environments, the hosting targets they run on, their variables and
- * secrets, and deployments of the images Builds publishes to them.
+ * secrets, and deployments of the images Builds publishes to them. It offers other
+ * contexts what runs where, through RUNNING_ENVIRONMENTS.
  */
 @Module({})
 export class EnvironmentsModule {
@@ -105,8 +108,14 @@ export class EnvironmentsModule {
                 new DeploymentPipeline(database, pool, catalog, images, runtimes, variables, {
                   maxAttempts: config.deployMaxAttempts,
                   healthTimeoutMs: config.deployHealthTimeoutMs,
+                  metricsEndpoint: config.appMetricsEndpoint,
                 }),
               inject: [TenantDatabase, DATABASE_POOL, ApplicationCatalog, DEPLOYABLE_IMAGES, HostRuntimes, EnvironmentVariables],
+            },
+            {
+              provide: RUNNING_ENVIRONMENTS,
+              useFactory: (database: TenantDatabase) => new LiveEnvironments(database),
+              inject: [TenantDatabase],
             },
             {
               provide: EnvironmentsSubscriptions,
@@ -116,7 +125,8 @@ export class EnvironmentsModule {
           ],
           settings.overrides,
         ),
-        exports: [EnvironmentsSubscriptions],
+        // Other contexts see only what runs where.
+        exports: [EnvironmentsSubscriptions, RUNNING_ENVIRONMENTS],
       };
     });
   }

@@ -6,6 +6,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SecretBox, SecretUnreadableError } from '../src/environments/domain/secret-box.ts';
+import { ENVIRONMENT_ATTRIBUTE, withTelemetry } from '../src/environments/domain/telemetry.ts';
 import {
   assertWithinLimits,
   MAX_TOTAL_BYTES,
@@ -80,6 +81,37 @@ describe('variable values', () => {
       DREAMDEVOPS_ENVIRONMENT: 'staging',
       DREAMDEVOPS_PRODUCTION: 'false',
       DREAMDEVOPS_VERSION: '1.5.0-rc.2',
+    });
+  });
+
+  it('tell the container where to send its metrics, and which environment it is, when the platform keeps metrics', () => {
+    const endpoint = 'http://host.docker.internal:9090/api/v1/otlp/v1/metrics';
+
+    expect(withTelemetry({ LOG_LEVEL: 'debug' }, 'env-1', endpoint)).toEqual({
+      LOG_LEVEL: 'debug',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: endpoint,
+      OTEL_METRIC_EXPORT_INTERVAL: '15000',
+      OTEL_RESOURCE_ATTRIBUTES: 'dreamdevops.environment.id=env-1',
+    });
+    expect(ENVIRONMENT_ATTRIBUTE).toBe('dreamdevops.environment.id');
+  });
+
+  it('add nothing when the platform keeps no metrics', () => {
+    expect(withTelemetry({ LOG_LEVEL: 'debug' }, 'env-1', null)).toEqual({ LOG_LEVEL: 'debug' });
+  });
+
+  it('let the environment send its metrics elsewhere, but always say which environment it is', () => {
+    const own = {
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://metrics.example.com/v1/metrics',
+      OTEL_METRIC_EXPORT_INTERVAL: '60000',
+      OTEL_RESOURCE_ATTRIBUTES: ' team=billing,dreamdevops.environment.id=someone-else ',
+    };
+
+    expect(withTelemetry(own, 'env-1', 'http://metrics.test/v1/metrics')).toEqual({
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://metrics.example.com/v1/metrics',
+      OTEL_METRIC_EXPORT_INTERVAL: '60000',
+      // The last one counts, so the environment's own ID wins.
+      OTEL_RESOURCE_ATTRIBUTES: 'team=billing,dreamdevops.environment.id=someone-else,dreamdevops.environment.id=env-1',
     });
   });
 

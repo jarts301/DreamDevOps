@@ -17,6 +17,7 @@ import {
 import type { DeploymentFailedPayload, DeploymentSucceededPayload } from '../domain/events.ts';
 import { findProvider, type HostingSettings } from '../domain/hosting-providers.ts';
 import { SecretUnreadableError } from '../domain/secret-box.ts';
+import { withTelemetry } from '../domain/telemetry.ts';
 import { platformVariables } from '../domain/variables.ts';
 import { type DeploymentRow, findDeployment, imageReference, payloadOf } from './deployment-records.ts';
 import type { EnvironmentVariables } from './environment-variables.ts';
@@ -42,6 +43,8 @@ export interface DeploymentPipelineOptions {
   readonly maxAttempts: number;
   /** How long a new version has to become healthy before it's rolled back. */
   readonly healthTimeoutMs: number;
+  /** Where containers send their metrics, over OTLP, or null to tell them nowhere. */
+  readonly metricsEndpoint: string | null;
 }
 
 interface TargetRow {
@@ -355,7 +358,10 @@ export class DeploymentPipeline {
     }
     context.settingsRevision = settings.revision;
     // The platform's own variables come last, so nothing replaces them.
-    const variables = { ...settings.values, ...platformVariables(environment, deployment.version!) };
+    const variables = {
+      ...withTelemetry(settings.values, environment.id, this.#options.metricsEndpoint),
+      ...platformVariables(environment, deployment.version!),
+    };
     // The environment keeps its port on the same host, so its address stays the same.
     const samePlace = environment.live_deployment_id !== null && environment.live_target_id === deployment.target_id;
     context.started = await context.runtime!.start(hostTarget(context.target), {

@@ -1,0 +1,28 @@
+{
+  "key": "node-service",
+  "version": "1.2.0",
+  "applicationType": "restful-service",
+  "name": "Node.js service",
+  "description": "A TypeScript HTTP API on Fastify, with health checks, OpenTelemetry, tests and linting.",
+  "language": "TypeScript",
+  "framework": "Fastify on Node.js 24",
+  "runtime": {
+    "port": 8080,
+    "livenessPath": "/health/live",
+    "readinessPath": "/health/ready",
+    "resources": {
+      "cpu": "250m",
+      "memory": "256Mi"
+    },
+    "configuration": "Environment variables"
+  },
+  "telemetry": "OpenTelemetry metrics over OTLP: CPU, memory and HTTP response times, and traces when asked",
+  "pipeline": ".forgejo/workflows/ci.yaml",
+  "strategies": [
+    "recreate",
+    "rolling",
+    "blue-green",
+    "canary",
+    "a-b"
+  ]
+}

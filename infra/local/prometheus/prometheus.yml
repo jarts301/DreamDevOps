@@ -1,0 +1,15 @@
+# Prometheus keeps the metrics applications send over OTLP, to
+# http://<host>:9090/api/v1/otlp/v1/metrics. Nothing is scraped: applications push.
+# The API reads them back for the dashboard's Monitoring page.
+
+otlp:
+  # Every metric an environment sends carries its ID in this attribute, which the
+  # platform gives each container. As a label, the API can ask for one environment's
+  # metrics. Prometheus names the label dreamdevops_environment_id.
+  promote_resource_attributes:
+    - dreamdevops.environment.id
+
+storage:
+  tsdb:
+    # Applications send when they can, so some samples arrive late.
+    out_of_order_time_window: 30m

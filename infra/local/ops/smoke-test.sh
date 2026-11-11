@@ -53,6 +53,15 @@ forgejo_signs_in_through_keycloak() {
   wget -S -O /dev/null http://forgejo:3000/user/oauth2/keycloak 2>&1     | grep -q 'Location: http://localhost:[0-9]*/realms/dreamdevops/protocol/openid-connect/auth?client_id=dreamdevops-forgejo'
 }
 
+# Applications send metrics as OTLP in JSON, which Prometheus must accept and keep.
+prometheus_accepts_metrics() {
+  now="$(date +%s)000000000"
+  wget -qO- \
+    --header 'Content-Type: application/json' \
+    --post-data "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"smoke-test\"}}]},\"scopeMetrics\":[{\"metrics\":[{\"name\":\"dreamdevops.smoke_test\",\"gauge\":{\"dataPoints\":[{\"timeUnixNano\":\"$now\",\"asDouble\":1}]}}]}]}]}" \
+    http://prometheus:9090/api/v1/otlp/v1/metrics
+}
+
 platform_database_exists() {
   psql -Atc 'select 1' dreamdevops
 }
@@ -68,6 +77,8 @@ check "Keycloak is ready" wget -qO- http://keycloak:9000/health/ready
 check "Keycloak accepts the administrator login" keycloak_login
 check "Keycloak rejects a bad login" keycloak_rejects_bad_login
 check "Forgejo signs people in through Keycloak" forgejo_signs_in_through_keycloak
+check "Prometheus is ready" wget -qO- http://prometheus:9090/-/ready
+check "Prometheus accepts metrics over OTLP" prometheus_accepts_metrics
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed."

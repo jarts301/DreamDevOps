@@ -120,11 +120,11 @@ describe('application types', () => {
     expect(body).toEqual([
       expect.objectContaining({
         key: 'restful-service',
-        blueprint: expect.objectContaining({ key: 'node-service', version: '1.1.0', language: 'TypeScript' }),
+        blueprint: expect.objectContaining({ key: 'node-service', version: '1.2.0', language: 'TypeScript' }),
       }),
       expect.objectContaining({
         key: 'web-frontend',
-        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.1.0' }),
+        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.2.0' }),
       }),
     ]);
   });
@@ -149,8 +149,10 @@ describe('the blueprint library', () => {
     const { body } = await admin.get('/api/v1/blueprints').expect(200);
 
     expect(body.map((blueprint: { key: string; version: string }) => `${blueprint.key}@${blueprint.version}`)).toEqual([
+      'angular-frontend@1.2.0',
       'angular-frontend@1.1.0',
       'angular-frontend@1.0.0',
+      'node-service@1.2.0',
       'node-service@1.1.0',
       'node-service@1.0.0',
     ]);
@@ -170,7 +172,7 @@ describe('registering an application', () => {
       status: 'ready',
       fullName: `${organization}/billing-api`,
       url: `http://git.test/${organization}/billing-api`,
-      blueprint: { key: 'node-service', version: '1.1.0' },
+      blueprint: { key: 'node-service', version: '1.2.0' },
       lastError: null,
     });
     const stored = host.repositories.get(`${organization}/billing-api`)!;

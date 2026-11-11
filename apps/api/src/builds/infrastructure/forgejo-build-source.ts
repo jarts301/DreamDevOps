@@ -27,6 +27,9 @@ const PAGE_SIZE = 50;
 const DEFAULT_MAX_ARCHIVE_BYTES = 500 * 1024 * 1024;
 /** Files the pipeline reads, such as the Dockerfile, are small. */
 const MAX_READ_BYTES = 1024 * 1024;
+/** The downloaded archive, and the folder it's unpacked into, inside each checkout's own folder. */
+const ARCHIVE_NAME = 'source.tar.gz';
+const SOURCE_FOLDER = 'source';
 
 /** Forgejo's description of a pull request, in both its API and its webhooks. */
 export interface ForgejoPullRequest {
@@ -140,7 +143,7 @@ export class ForgejoBuildSource implements BuildSource {
       throw new PermanentBuildError('The commit to build is not valid.');
     }
     const directory = await mkdtemp(join(tmpdir(), 'dreamdevops-source-'));
-    const source = join(directory, 'source');
+    const source = join(directory, SOURCE_FOLDER);
     try {
       const response = await this.#api.request('GET', `${repoPath(repository)}/archive/${commit}.tar.gz`, undefined, {
         accept: 'application/octet-stream',
@@ -150,7 +153,7 @@ export class ForgejoBuildSource implements BuildSource {
         throw new PermanentBuildError(`The commit ${commit.slice(0, 12)} isn't in the repository.`);
       }
       await expectOk(response, 'download the source');
-      const archive = join(directory, 'source.tar.gz');
+      const archive = join(directory, ARCHIVE_NAME);
       await pipeline(
         Readable.fromWeb(response.body as WebReadableStream<Uint8Array>),
         limitSize(this.#options.maxArchiveBytes ?? DEFAULT_MAX_ARCHIVE_BYTES),
@@ -158,7 +161,12 @@ export class ForgejoBuildSource implements BuildSource {
       );
       await mkdir(source);
       // Forgejo's archives hold one top folder named after the repository, which is left out.
-      const extracted = await runCommand('tar', ['-xzf', archive, '-C', source, '--strip-components=1'], {
+      // tar runs in the folder, with names relative to it: GNU tar, which Git for Windows
+      // brings, reads a name with a colon, such as C:\Users\…\source.tar.gz, as a file on
+      // another machine, called C. GNU's --force-local would stop that, but the bsdtar of
+      // Windows and macOS doesn't know it, so short names are what works with every tar.
+      const extracted = await runCommand('tar', ['-xzf', ARCHIVE_NAME, '-C', SOURCE_FOLDER, '--strip-components=1'], {
+        cwd: directory,
         timeoutMs: 5 * 60_000,
       });
       if (extracted.code !== 0) {

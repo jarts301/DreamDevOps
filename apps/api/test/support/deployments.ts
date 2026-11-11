@@ -9,6 +9,7 @@ import { BUILD_SOURCE, IMAGE_BUILDER, IMAGE_REGISTRY, IMAGE_SCANNER } from '../.
 import { IMAGE_SIGNING_KEY } from '../../src/builds/application/tokens.ts';
 import { SigningKey } from '../../src/builds/domain/signature.ts';
 import { webhookSecret } from '../../src/builds/domain/webhook-signature.ts';
+import type { AppConfig } from '../../src/config/app-config.ts';
 import { HOST_RUNTIMES } from '../../src/environments/application/ports.ts';
 import { IDENTITY_PROVIDER } from '../../src/identity-access/application/ports.ts';
 import { SOURCE_HOST } from '../../src/source-governance/application/ports.ts';
@@ -267,7 +268,12 @@ export const auditTypes = async (admin: Agent) =>
   ((await admin.get('/api/v1/company/audit').expect(200)).body.entries as { eventType: string }[]).map((entry) => entry.eventType);
 
 /** Starts a database and the app, with fake Git, registry and hosts. Call it in beforeAll. */
-export async function startDeploymentWorld(): Promise<void> {
+export function startDeploymentWorld(): Promise<void> {
+  return startDeploymentWorldWith({});
+}
+
+/** The same, with settings of its own, such as where metrics go. */
+export async function startDeploymentWorldWith(settings: Partial<AppConfig>): Promise<void> {
   database = await startTestDatabase();
   ownerPool = new pg.Pool({ connectionString: database.urlFor('owner') });
   app = await buildApp({
@@ -284,6 +290,7 @@ export async function startDeploymentWorld(): Promise<void> {
       deployMaxAttempts: 2,
       deployRetrySeconds: 1,
       forgejoWebhookSecret: WEBHOOK_SECRET,
+      ...settings,
     },
     overrides: [
       { provide: IDENTITY_PROVIDER, useValue: new FakeIdentityProvider() },

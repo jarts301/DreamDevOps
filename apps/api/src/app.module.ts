@@ -18,6 +18,7 @@ import { TenantContextInterceptor } from './http/tenant-context.interceptor.ts';
 import { AuthController } from './identity-access/http/auth.controller.ts';
 import { InvitationsController } from './identity-access/http/company-access.controller.ts';
 import { IdentityAccessModule } from './identity-access/identity-access.module.ts';
+import { MonitoringModule } from './monitoring/monitoring.module.ts';
 import { NotificationsModule } from './notifications/notifications.module.ts';
 import type { ModuleSettings } from './platform/module-settings.ts';
 import { tokenOf } from './platform/module-settings.ts';
@@ -64,6 +65,7 @@ export class AppModule {
       SourceGovernanceModule.register(settings),
       BuildsModule.register(settings),
       EnvironmentsModule.register(settings),
+      MonitoringModule.register(settings),
       BackgroundModule.register(settings),
     ];
     // Replacements for tokens no module provides are added here, as they always were.

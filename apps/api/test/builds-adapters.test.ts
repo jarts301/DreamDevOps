@@ -380,6 +380,39 @@ describe('the Forgejo build source', () => {
     await expect(source.checkout(repository, 'not-a-commit')).rejects.toThrow(PermanentBuildError);
   });
 
+  // GNU tar, which Git for Windows puts on the PATH, reads an archive named C:\Users\…\source.tar.gz
+  // as the file \Users\… on a machine called C, and fails with "Cannot connect to C". A
+  // temporary folder under a relative folder named C: does the same on any system. Windows
+  // can't name a folder C:, but there every checkout above already unpacks from C:\.
+  it.skipIf(process.platform === 'win32')(
+    'unpacks the source when its folder looks like a remote address to tar, as C:\\… does on Windows',
+    async () => {
+      const folder = temporary();
+      mkdirSync(join(folder, 'billing-abc'));
+      writeFileSync(join(folder, 'billing-abc', 'Dockerfile'), 'FROM scratch\n');
+      forgejo.archive = execFileSync('tar', ['-czf', '-', '-C', folder, 'billing-abc']);
+      mkdirSync(join(folder, 'C:'));
+      const cwd = process.cwd();
+      const tmpdir = process.env.TMPDIR;
+      process.chdir(folder);
+      process.env.TMPDIR = 'C:';
+      try {
+        const workspace = await source.checkout(repository, 'e'.repeat(40));
+
+        expect(workspace.directory.startsWith('C:')).toBe(true);
+        expect(await workspace.readFile('Dockerfile')).toBe('FROM scratch\n');
+        await workspace.dispose();
+      } finally {
+        process.chdir(cwd);
+        if (tmpdir === undefined) {
+          delete process.env.TMPDIR;
+        } else {
+          process.env.TMPDIR = tmpdir;
+        }
+      }
+    },
+  );
+
   it('refuses an archive larger than allowed', async () => {
     const small = new ForgejoBuildSource({ url: forgejo.url, username: 'bot', password: 'x', maxArchiveBytes: 10 });
     forgejo.archive = Buffer.alloc(1_000);

@@ -4,10 +4,21 @@ A blueprint is the starting point of every new application of one type. It holds
 
 | Blueprint | Application type | What it starts with |
 |---|---|---|
-| `node-service` | RESTful Service | TypeScript on Fastify and Node.js 24, with health checks and OpenTelemetry |
-| `angular-frontend` | Web Frontend | Angular 22 served by nginx, with settings read at runtime |
+| `node-service` | RESTful Service | TypeScript on Fastify and Node.js 24, with health checks and OpenTelemetry metrics |
+| `angular-frontend` | Web Frontend | Angular 22 served by nginx, with settings read at runtime, and CPU and memory metrics |
 
 Both scaffolds pin their base images by digest, install from a lockfile, and run as a non-root user with a read-only file system. From version 1.1.0, their images also apply the security fixes Alpine released after the base image, with `apk upgrade`, so building again fixes vulnerabilities a newer package fixes. Applications started from 1.0.0 can add the same lines to their `Dockerfile`.
+
+## Metrics
+
+From version 1.2.0, applications send their metrics over OTLP, which the dashboard shows under [Monitoring](../apps/api/src/monitoring/README.md). They use OpenTelemetry's standard names and settings, so nothing in them is tied to DreamDevOps:
+
+| Blueprint | Sends | With |
+|---|---|---|
+| `node-service` | CPU, memory, and each HTTP request's duration and status, which give requests, response times and server errors. Health checks aren't counted. | The OpenTelemetry SDK, in `src/telemetry.ts` and `src/metrics.ts` |
+| `angular-frontend` | The container's CPU and memory | `nginx/send-metrics.sh`, a small script nginx starts, which reads them from the container's cgroup |
+
+Both send nothing unless told where, with `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, which the platform sets when it deploys them, along with the environment's ID in `OTEL_RESOURCE_ATTRIBUTES`. Each scaffold's README lists the settings. Applications started from earlier versions send no metrics until they copy those files.
 
 ## Layout
 
@@ -41,7 +52,7 @@ To change a blueprint, copy its newest folder to a new version number, change th
 npm run blueprints:publish
 ```
 
-Then check that every version still produces a working project. This installs, lints, tests and builds each scaffold, and runs its image until the health check passes. It needs Docker and the internet, and takes a few minutes:
+Then check that every version still produces a working project. This installs, lints, tests and builds each scaffold, runs its image until the health check passes, and, from 1.2.0, checks the container sends its metrics. It needs Docker and the internet, and takes a few minutes:
 
 ```bash
 npm run test:scaffolds

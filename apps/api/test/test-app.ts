@@ -91,6 +91,8 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   deployHealthTimeoutMs: 5_000,
   // Tests supply their own key, so this file is never read or created.
   secretsKeyFile: '/nonexistent/environment-secrets.key',
+  prometheusUrl: null,
+  appMetricsEndpoint: null,
   sampleData: null,
   ...overrides,
 });

@@ -80,6 +80,16 @@ export interface AppConfig {
   /** The key, 32 bytes in base64, that seals environments' secrets. */
   readonly secretsKeyFile: string;
   /**
+   * The Prometheus server the API reads applications' metrics from, such as
+   * http://localhost:9090. Without it, the dashboard shows no metrics.
+   */
+  readonly prometheusUrl: string | null;
+  /**
+   * Where applications send their metrics over OTLP, as their containers reach it, such as
+   * http://host.docker.internal:9090/api/v1/otlp/v1/metrics. Without it, they're told nowhere.
+   */
+  readonly appMetricsEndpoint: string | null;
+  /**
    * Sample data for local development: a sample company with a sample account in each
    * role. Never in production.
    */
@@ -225,6 +235,8 @@ export function loadConfig(env: Environment): AppConfig {
     deployRetrySeconds: integer(env, 'DEPLOY_RETRY_SECONDS', 15),
     deployHealthTimeoutMs: Math.max(1, integer(env, 'DEPLOY_HEALTH_TIMEOUT_SECONDS', 120)) * 1000,
     secretsKeyFile: env.SECRETS_KEY_FILE || DEFAULT_SECRETS_KEY_FILE,
+    prometheusUrl: optionalHttpUrl(env, 'PROMETHEUS_URL'),
+    appMetricsEndpoint: optionalHttpUrl(env, 'APP_METRICS_OTLP_ENDPOINT'),
     sampleData:
       sampleData === 'on'
         ? {
@@ -250,6 +262,18 @@ function url(env: Environment, name: string): string {
     throw new InvalidConfigError(`${name} must be a full URL.`);
   }
   return value.replace(/\/$/, '');
+}
+
+/** An http or https address, or null when the setting is left out. */
+function optionalHttpUrl(env: Environment, name: string): string | null {
+  if (!env[name]) {
+    return null;
+  }
+  const value = url(env, name);
+  if (!/^https?:\/\//i.test(value)) {
+    throw new InvalidConfigError(`${name} must be an http or https address.`);
+  }
+  return value;
 }
 
 function integer(env: Environment, name: string, fallback: number): number {

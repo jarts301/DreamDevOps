@@ -46,6 +46,12 @@ export const routes: Routes = [
         loadComponent: () => import('./features/environments/hosting-targets').then((module) => module.HostingTargets),
       },
       {
+        path: 'monitoring',
+        title: 'Monitoring · DreamDevOps',
+        canActivate: [permissionGuard('dashboards:view')],
+        loadComponent: () => import('./features/monitoring/monitoring').then((module) => module.Monitoring),
+      },
+      {
         path: 'blueprints',
         title: 'Blueprints · DreamDevOps',
         loadComponent: () => import('./features/catalog/blueprints').then((module) => module.Blueprints),

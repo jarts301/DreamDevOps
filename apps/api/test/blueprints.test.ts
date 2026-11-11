@@ -57,6 +57,35 @@ describe('the published blueprints', () => {
     }
   });
 
+  it('send the metrics Monitoring shows, by their standard names, when the platform says where', () => {
+    for (const manifest of library.latest()) {
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      const text = files.map((candidate) => candidate.content.toString()).join('\n');
+      for (const expected of ['OTEL_EXPORTER_OTLP_METRICS_ENDPOINT', 'process.cpu.time', 'process.memory.usage']) {
+        expect(text, `${manifest.key} ${expected}`).toContain(expected);
+      }
+      expect(manifest.telemetry, manifest.key).toMatch(/CPU.* memory/);
+    }
+    // Services also measure every request, which gives requests, response times and errors.
+    const service = library.latestForType('restful-service')!;
+    const telemetry = library
+      .render(service.key, service.version, { name: 'Probe', slug: 'probe' })
+      .find((candidate) => candidate.path === 'src/telemetry.ts')!
+      .content.toString();
+    expect(telemetry).toContain('new HttpInstrumentation(');
+  });
+
+  it('start the frontend’s metrics with nginx, which runs every script in its entrypoint folder', () => {
+    const frontend = library.latestForType('web-frontend')!;
+    const files = library.render(frontend.key, frontend.version, { name: 'Probe', slug: 'probe' });
+    const instructions = parseDockerfile(files.find((candidate) => candidate.path === 'Dockerfile')!.content.toString());
+
+    expect(instructions).toContainEqual(
+      expect.objectContaining({ keyword: 'COPY', args: '--chmod=0755 nginx/send-metrics.sh /docker-entrypoint.d/50-send-metrics.sh' }),
+    );
+    expect(files.find((candidate) => candidate.path === 'nginx/send-metrics.sh')!.content.toString()).toMatch(/^#!\/bin\/sh\n/);
+  });
+
   it('leave no placeholder unfilled', () => {
     for (const manifest of library.all()) {
       const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });

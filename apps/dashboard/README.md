@@ -35,6 +35,7 @@ To try a role, sign in as its account: Dummy Company is ready when the API start
 6. Open **Environments** to give each application its environments. They run on **This machine** unless you choose another target, which you can connect on **Hosting**. As a Tech Lead or Operator, mark one as production, and notice that changing it afterwards asks for its name and a reason.
 7. Choose **Deploy** on an environment, pick a version that built, and follow its steps: checking, verifying the signature, pulling, starting and waiting until it's healthy. Open its address once it runs. Production offers only releases, and asks for its name first. This needs Docker, as builds do.
 8. Open **Variables** on an environment to give it settings, such as `LOG_LEVEL`, and secrets, such as `DATABASE_URL`. The environment then shows that what runs has older settings, and **Apply now** starts it again with them.
+9. Open **Monitoring** to see how what runs is doing: each environment's CPU, memory, requests, response times and server errors. Choose **Show charts** to follow one over time. An application registered after the blueprints reached version 1.2.0 sends them on its own, a few seconds after it starts.
 
 ## Layout
 

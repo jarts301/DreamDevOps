@@ -127,6 +127,32 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...valid, [name]: value })).toThrow(InvalidConfigError);
   });
 
+  it('shows and collects no metrics unless told where they go', () => {
+    const config = loadConfig(valid);
+
+    expect(config.prometheusUrl).toBeNull();
+    expect(config.appMetricsEndpoint).toBeNull();
+  });
+
+  it('reads metrics from Prometheus, and tells applications where to send theirs', () => {
+    const config = loadConfig({
+      ...valid,
+      PROMETHEUS_URL: 'http://localhost:9090/',
+      APP_METRICS_OTLP_ENDPOINT: 'http://host.docker.internal:9090/api/v1/otlp/v1/metrics',
+    });
+
+    expect(config.prometheusUrl).toBe('http://localhost:9090');
+    expect(config.appMetricsEndpoint).toBe('http://host.docker.internal:9090/api/v1/otlp/v1/metrics');
+  });
+
+  it.each([
+    ['PROMETHEUS_URL', 'localhost:9090'],
+    ['PROMETHEUS_URL', 'ftp://metrics.example.com'],
+    ['APP_METRICS_OTLP_ENDPOINT', 'not a url'],
+  ])('refuses %s=%s', (name, value) => {
+    expect(() => loadConfig({ ...valid, [name]: value })).toThrow(InvalidConfigError);
+  });
+
   it('refuses an unknown scanner', () => {
     expect(() => loadConfig({ ...valid, IMAGE_SCANNER: 'grype' })).toThrow(InvalidConfigError);
   });
