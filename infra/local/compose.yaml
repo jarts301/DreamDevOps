@@ -149,6 +149,24 @@ services:
       timeout: 3s
       retries: 20
 
+  # Keeps the traces applications send over OTLP: each request as it passes through one
+  # application and on to the others it calls. The dashboard shows them under Monitoring,
+  # through the API. Its own page, at http://localhost:16686, shows every company's, so
+  # it's for whoever runs this machine. Traces are kept in memory, so a restart clears them.
+  jaeger:
+    # The Jaeger project's own registry, where it publishes the same images as on Docker
+    # Hub (jaegertracing/jaeger). JAEGER_IMAGE in .env can point elsewhere, such as a mirror.
+    image: ${JAEGER_IMAGE:-quay.io/jaegertracing/jaeger:2.8.0}
+    restart: unless-stopped
+    environment:
+      # Listens on every interface of its container, so the published ports reach it.
+      JAEGER_LISTEN_HOST: 0.0.0.0
+    ports:
+      # Its page and query API, which the API reads traces from.
+      - "127.0.0.1:${JAEGER_PORT:-16686}:16686"
+      # OTLP over HTTP, where applications send their traces.
+      - "127.0.0.1:${JAEGER_OTLP_PORT:-4318}:4318"
+
   # Creates the first Forgejo administrator, then exits. Safe to run repeatedly.
   forgejo-init:
     image: codeberg.org/forgejo/forgejo:15.0.11
@@ -237,6 +255,8 @@ services:
         condition: service_healthy
       prometheus:
         condition: service_healthy
+      jaeger:
+        condition: service_started
 
   smoke-test:
     image: postgres:17.11-alpine

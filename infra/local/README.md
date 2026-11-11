@@ -9,6 +9,7 @@ Runs the shared tools DreamDevOps needs on your own machine, using Docker Deskto
 | Forgejo | Git hosting, with a `dreamdevops-bot` user that creates each company's organization, and the container registry built images are published to. People sign in through Keycloak. | <http://localhost:3000>, SSH on `localhost:2222` |
 | Mailpit | Catches every email and shows it in a web page. Nothing is sent out. | <http://localhost:8025>, SMTP on `localhost:1025` |
 | Prometheus | Keeps the metrics applications send over OTLP, which the dashboard shows under **Monitoring**. Its own page charts any of them. | <http://localhost:9090> |
+| Jaeger | Keeps the traces applications send over OTLP, which the dashboard shows under **Monitoring**. Its own page searches all of them. | <http://localhost:16686>, OTLP on `localhost:4318` |
 
 All ports bind to `127.0.0.1`, so other machines can't reach them. Every password in `.env.example` is a fake dummy value, starting with `fake-dummy-`, and must never be used on a server. The tools keep the passwords they started with, so changing one in `.env` after the first run means changing it inside the tool too, or resetting with `docker compose down -v`, which deletes all local data.
 
@@ -48,9 +49,9 @@ The `start` command sets this up and is safe to repeat: `keycloak-init` adds the
 
 The API builds images with your Docker, publishes them to Forgejo's container registry at `localhost:3000`, and signs them with a key it creates in `signing/` on first start, which Git ignores. Backups don't include the key, so keep a copy if you need older signatures to keep checking out. Likewise, environments' secrets are sealed with a key the API creates in `secrets/`. Keep a copy with your backups, or restored secrets can't be read and must be set again. Forgejo may send webhooks only to `host.docker.internal`, which is the API on your machine. See [Builds](../../apps/api/src/builds/README.md).
 
-## Metrics
+## Metrics and traces
 
-Applications deployed to This machine send their metrics to Prometheus at `host.docker.internal:9090`, which is this machine as their containers see it. Prometheus keeps them for 15 days, or `METRICS_RETENTION` in `.env`, and its settings are in `prometheus/prometheus.yml`. Its image comes from the Prometheus project's own registry, `quay.io/prometheus/prometheus`, rather than Docker Hub, and `PROMETHEUS_IMAGE` in `.env` can change it. Its page at <http://localhost:9090> shows every company's metrics, so keep it to yourself. Backups don't include metrics. See [Monitoring](../../apps/api/src/monitoring/README.md).
+Applications deployed to This machine send their metrics to Prometheus at `host.docker.internal:9090`, and their traces to Jaeger at `host.docker.internal:4318`, which is this machine as their containers see it. Jaeger keeps traces in memory, so restarting it clears them. Its image comes from the Jaeger project's own registry, `quay.io/jaegertracing/jaeger`, and `JAEGER_IMAGE` in `.env` can change it. The API reads logs from the applications' containers themselves, so they need no tool here. Prometheus keeps them for 15 days, or `METRICS_RETENTION` in `.env`, and its settings are in `prometheus/prometheus.yml`. Its image comes from the Prometheus project's own registry, `quay.io/prometheus/prometheus`, rather than Docker Hub, and `PROMETHEUS_IMAGE` in `.env` can change it. Prometheus's page at <http://localhost:9090> and Jaeger's at <http://localhost:16686> show every company's data, so keep them to yourself. Backups don't include metrics or traces. See [Monitoring](../../apps/api/src/monitoring/README.md).
 
 ## Everyday commands
 

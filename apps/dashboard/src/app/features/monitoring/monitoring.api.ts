@@ -48,12 +48,102 @@ export interface EnvironmentMetrics {
   readonly series: readonly MetricSeries[];
 }
 
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+
+/** One line an application wrote. */
+export interface LogLine {
+  readonly at: string;
+  readonly stream: 'stdout' | 'stderr';
+  /** Its level, when it says, or null. */
+  readonly level: LogLevel | null;
+  readonly message: string;
+  /** The trace it was written in, when it says. */
+  readonly traceId: string | null;
+  readonly spanId: string | null;
+}
+
+export interface EnvironmentLogs {
+  readonly environmentId: string;
+  /** Whether a version runs in it. When none does, there's nothing to read. */
+  readonly running: boolean;
+  readonly range: { readonly key: TimeRangeKey; readonly start: string; readonly end: string };
+  /** Oldest first. */
+  readonly lines: readonly LogLine[];
+}
+
+export interface TraceSummary {
+  readonly traceId: string;
+  readonly name: string;
+  readonly start: string;
+  readonly durationMs: number;
+  readonly spans: number;
+  readonly errors: number;
+  readonly services: readonly string[];
+}
+
+export interface EnvironmentTraces {
+  /** Whether the server keeps traces at all. */
+  readonly enabled: boolean;
+  readonly serviceName: string;
+  readonly range: { readonly key: TimeRangeKey; readonly start: string; readonly end: string };
+  /** Newest first. */
+  readonly traces: readonly TraceSummary[];
+}
+
+export interface Span {
+  readonly spanId: string;
+  readonly parentSpanId: string | null;
+  readonly name: string;
+  readonly serviceName: string;
+  readonly environmentId: string;
+  readonly environmentName: string;
+  readonly applicationName: string;
+  readonly production: boolean;
+  readonly start: string;
+  /** Milliseconds from the start of the trace. */
+  readonly offsetMs: number;
+  readonly durationMs: number;
+  readonly kind: string | null;
+  readonly error: boolean;
+  readonly attributes: Readonly<Record<string, string | number | boolean>>;
+}
+
+export interface Trace {
+  readonly traceId: string;
+  readonly start: string;
+  readonly durationMs: number;
+  /** The company's own spans, in the order they started. */
+  readonly spans: readonly Span[];
+  /** Spans from elsewhere, which aren't shown. */
+  readonly hiddenSpans: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class MonitoringApi {
   readonly #http = inject(HttpClient);
 
   overview(): Promise<MonitoringOverview> {
     return firstValueFrom(this.#http.get<MonitoringOverview>('/api/v1/company/monitoring/environments'));
+  }
+
+  logs(environmentId: string, range: TimeRangeKey): Promise<EnvironmentLogs> {
+    return firstValueFrom(
+      this.#http.get<EnvironmentLogs>(`/api/v1/company/monitoring/environments/${encodeURIComponent(environmentId)}/logs`, {
+        params: { range },
+      }),
+    );
+  }
+
+  traces(environmentId: string, range: TimeRangeKey): Promise<EnvironmentTraces> {
+    return firstValueFrom(
+      this.#http.get<EnvironmentTraces>(`/api/v1/company/monitoring/environments/${encodeURIComponent(environmentId)}/traces`, {
+        params: { range },
+      }),
+    );
+  }
+
+  trace(traceId: string): Promise<Trace> {
+    return firstValueFrom(this.#http.get<Trace>(`/api/v1/company/monitoring/traces/${encodeURIComponent(traceId)}`));
   }
 
   environment(environmentId: string, range: TimeRangeKey): Promise<EnvironmentMetrics> {

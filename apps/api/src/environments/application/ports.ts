@@ -46,6 +46,14 @@ export interface StartedContainer {
   readonly replaced: boolean;
 }
 
+/** One line a container wrote, with when Docker received it. */
+export interface LogEntry {
+  readonly at: Date;
+  /** Where the container wrote it: its standard output or its error output. */
+  readonly stream: 'stdout' | 'stderr';
+  readonly text: string;
+}
+
 export interface Health {
   readonly healthy: boolean;
   /** What the image's health check, or the container, last said. */
@@ -73,6 +81,11 @@ export interface HostRuntime {
   rollBack(target: HostTarget, name: string): Promise<boolean>;
   /** Stops and removes the environment's containers and network, if there are any. */
   remove(target: HostTarget, name: string, network: string): Promise<void>;
+  /**
+   * The container's latest lines since a moment, oldest first, at most `limit` of them.
+   * None when it doesn't exist, such as after it was stopped.
+   */
+  logs(target: HostTarget, name: string, options: { readonly since: Date; readonly limit: number }): Promise<LogEntry[]>;
 }
 
 /** Retrying can't help, such as when an image can't start. The message is shown to people. */

@@ -90,6 +90,16 @@ export interface AppConfig {
    */
   readonly appMetricsEndpoint: string | null;
   /**
+   * The Jaeger server the API reads applications' traces from, such as
+   * http://localhost:16686. Without it, the dashboard shows no traces.
+   */
+  readonly jaegerUrl: string | null;
+  /**
+   * Where applications send their traces over OTLP, as their containers reach it, such as
+   * http://host.docker.internal:4318/v1/traces. Without it, they're told nowhere.
+   */
+  readonly appTracesEndpoint: string | null;
+  /**
    * Sample data for local development: a sample company with a sample account in each
    * role. Never in production.
    */
@@ -237,6 +247,8 @@ export function loadConfig(env: Environment): AppConfig {
     secretsKeyFile: env.SECRETS_KEY_FILE || DEFAULT_SECRETS_KEY_FILE,
     prometheusUrl: optionalHttpUrl(env, 'PROMETHEUS_URL'),
     appMetricsEndpoint: optionalHttpUrl(env, 'APP_METRICS_OTLP_ENDPOINT'),
+    jaegerUrl: optionalHttpUrl(env, 'JAEGER_URL'),
+    appTracesEndpoint: optionalHttpUrl(env, 'APP_TRACES_OTLP_ENDPOINT'),
     sampleData:
       sampleData === 'on'
         ? {

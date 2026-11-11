@@ -8,6 +8,7 @@ import {
   type Health,
   type HostRuntime,
   type HostTarget,
+  type LogEntry,
   PermanentDeploymentError,
   type PulledImage,
   type StartedContainer,
@@ -226,6 +227,26 @@ export class LocalDockerRuntime implements HostRuntime {
     }
   }
 
+  async logs(_target: HostTarget, name: string, options: { readonly since: Date; readonly limit: number }): Promise<LogEntry[]> {
+    this.#assertName(name);
+    const limit = Math.max(1, Math.min(Math.floor(options.limit), MAX_LOG_LINES));
+    const result = await this.#docker(
+      ['logs', '--timestamps', '--since', options.since.toISOString(), '--tail', String(limit), name],
+      30_000,
+    );
+    if (result.code !== 0) {
+      if (/no such container/i.test(result.stderr)) {
+        return [];
+      }
+      throw new Error(`Docker couldn't read the logs: ${lastLines(result.stderr)}`);
+    }
+    // Docker passes on what the container wrote to each stream on its own, so the two are
+    // put back in order by the time Docker gave each line.
+    return [...logEntries(result.stdout, 'stdout'), ...logEntries(result.stderr, 'stderr')]
+      .sort((left, right) => left.at.getTime() - right.at.getTime())
+      .slice(-limit);
+  }
+
   /**
    * Starts the container. Its variables go through an env file only its owner can read,
    * in a folder of its own, removed as soon as Docker has read it, so no value ever
@@ -361,6 +382,29 @@ export function envFileText(environment: Readonly<Record<string, string>>): stri
       return `${name}=${value}\n`;
     })
     .join('');
+}
+
+/** The most lines read at once, so a chatty application can't flood the API. */
+const MAX_LOG_LINES = 1_000;
+/** Longer lines are cut, for the same reason. */
+const MAX_LOG_LINE_LENGTH = 8 * 1024;
+/** Docker's --timestamps prefix, such as 2026-11-10T12:00:00.123456789Z, then a space. */
+const LOG_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2}) ?(.*)$/;
+
+/**
+ * The lines of `docker logs --timestamps`, each with its time. A line without one, such as
+ * the start of output that was cut short, is left out.
+ */
+export function logEntries(output: string, stream: LogEntry['stream']): LogEntry[] {
+  return output.split(/\r?\n/).flatMap((line) => {
+    const match = LOG_TIMESTAMP.exec(line);
+    if (match === null) {
+      return [];
+    }
+    const [, seconds, fraction = '', zone, text = ''] = match;
+    const at = new Date(`${seconds}.${fraction.padEnd(3, '0').slice(0, 3)}${zone}`);
+    return Number.isNaN(at.getTime()) ? [] : [{ at, stream, text: text.slice(0, MAX_LOG_LINE_LENGTH) }];
+  });
 }
 
 function check(result: CommandResult, what: string): void {

@@ -62,6 +62,19 @@ prometheus_accepts_metrics() {
     http://prometheus:9090/api/v1/otlp/v1/metrics
 }
 
+# Applications send traces as OTLP in JSON, which Jaeger must keep, and give back by ID.
+jaeger_keeps_traces() {
+  now="$(date +%s)000000000"
+  trace_id="$(printf 'd00d%s000000000' "$now" | cut -c1-32)"
+  span_id="$(printf 'd00d%s' "$now" | cut -c1-16)"
+  wget -qO- \
+    --header 'Content-Type: application/json' \
+    --post-data "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"dreamdevops-smoke-test\"}}]},\"scopeSpans\":[{\"spans\":[{\"traceId\":\"$trace_id\",\"spanId\":\"$span_id\",\"name\":\"smoke test\",\"kind\":2,\"startTimeUnixNano\":\"$now\",\"endTimeUnixNano\":\"$now\"}]}]}]}" \
+    http://jaeger:4318/v1/traces >/dev/null \
+    && sleep 2 \
+    && wget -qO- "http://jaeger:16686/api/traces/$trace_id" | grep -q "$trace_id"
+}
+
 platform_database_exists() {
   psql -Atc 'select 1' dreamdevops
 }
@@ -79,6 +92,7 @@ check "Keycloak rejects a bad login" keycloak_rejects_bad_login
 check "Forgejo signs people in through Keycloak" forgejo_signs_in_through_keycloak
 check "Prometheus is ready" wget -qO- http://prometheus:9090/-/ready
 check "Prometheus accepts metrics over OTLP" prometheus_accepts_metrics
+check "Jaeger keeps traces sent over OTLP" jaeger_keeps_traces
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed."

@@ -3,6 +3,7 @@ import type {
   Health,
   HostRuntime,
   HostTarget,
+  LogEntry,
   PulledImage,
   StartedContainer,
 } from '../../src/environments/application/ports.ts';
@@ -30,6 +31,10 @@ export class FakeHostRuntime implements HostRuntime {
   readonly unhealthy = new Set<string>();
   /** Errors to throw, one per call, before calls start succeeding. */
   readonly failures: Error[] = [];
+  /** What each container wrote, by target and name, such as "target-id/dreamdevops-billing-staging-…". */
+  readonly written = new Map<string, LogEntry[]>();
+  /** The options of each read of the logs. */
+  readonly logReads: { name: string; since: Date; limit: number }[] = [];
   /** While set, pulling waits for it, so tests can look at a deployment under way. */
   gate: Promise<void> | null = null;
   #nextPort = 20_000;
@@ -128,6 +133,24 @@ export class FakeHostRuntime implements HostRuntime {
     this.#record('remove', target, name);
     this.containers.delete(`${target.id}/${name}`);
     this.containers.delete(`${target.id}/${name}-previous`);
+  }
+
+  async logs(target: HostTarget, name: string, options: { since: Date; limit: number }): Promise<LogEntry[]> {
+    this.logReads.push({ name, since: options.since, limit: options.limit });
+    const key = `${target.id}/${name}`;
+    if (!this.containers.has(key)) {
+      return [];
+    }
+    return (this.written.get(key) ?? []).filter((entry) => entry.at >= options.since).slice(-options.limit);
+  }
+
+  /** Makes what runs on a target write a line, as its application would. */
+  write(targetId: string, entry: LogEntry): void {
+    const key = [...this.containers.entries()].find(([candidate, container]) => candidate.startsWith(`${targetId}/`) && container.running)?.[0];
+    if (key === undefined) {
+      throw new Error(`Nothing runs on ${targetId}.`);
+    }
+    this.written.set(key, [...(this.written.get(key) ?? []), entry]);
   }
 
   #record(call: string, target: HostTarget, detail: string): void {

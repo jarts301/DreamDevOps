@@ -38,11 +38,11 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Environments | Each application's environments, such as staging and production, on the company's hosting targets. Every company starts with **This machine**, the Docker of the machine that runs DreamDevOps, and can plan others: Kubernetes or Docker servers it runs itself, or AWS, Azure or Google Cloud. Switching an environment to another target is one change. Production is protected: only Tech Leads and Operators change it, by typing its name and giving a reason, and it can't be archived. |
 | Deployments | Deploying any version that built to an environment on This machine, with every step on the dashboard: checking, verifying the signature, pulling, starting and waiting until it's healthy. A version that isn't healthy is rolled back. Production runs only releases. Moving an environment to another target moves what runs in it. |
 | Variables and secrets | Each environment's own settings, which its containers get as environment variables when they start. Secrets are encrypted with a key only the API holds, and never shown again. |
-| Monitoring | Each running application's CPU, memory, requests, response times and server errors, now and charted over time, on the dashboard's **Monitoring** page. Applications send them with OpenTelemetry, to Prometheus, which the platform runs. |
+| Monitoring | Each running application's CPU, memory, requests, response times and server errors, now and charted over time, its logs, and traces of its requests across applications, on the dashboard's **Monitoring** page. Applications send metrics and traces with OpenTelemetry, to Prometheus and Jaeger, which the platform runs, and the platform reads their logs from their containers. |
 | Editions | Every company on the free Community Edition, with a per-company setting and an extension point for the Commercial Edition |
 | Dashboard | Screens for all of the above, in light and dark themes |
 
-Deploying to anything but This machine, setting up cloud infrastructure, and logs, traces and alerts aren't available yet. Companies can't be deleted.
+Deploying to anything but This machine, setting up cloud infrastructure, and alerts aren't available yet. Companies can't be deleted.
 
 ## Prerequisites
 
@@ -130,6 +130,7 @@ All of these accept connections only from your own machine.
 | Forgejo (Git) | <http://localhost:3000>, with SSH on port 2222. Its container registry, at `localhost:3000`, holds built images. |
 | Mailpit (caught emails) | <http://localhost:8025> |
 | Prometheus (applications' metrics) | <http://localhost:9090> |
+| Jaeger (applications' traces) | <http://localhost:16686>, with OTLP on port 4318 |
 | PostgreSQL | `localhost:5433` |
 
 The services keep running, and restart with Docker, until you stop them:
@@ -211,7 +212,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 |---|---|
 | Compose reports a required variable is missing | Copy `.env.example` to `.env`. If you already have one, copy the new settings into it. |
 | A service won't start because a port is in use | Stop whatever uses that port, or change the port in `.env`. |
-| Starting reports `failed to resolve reference` for an image | Docker couldn't download it. Run `docker pull` with that image's name to see why: `not found` means the name or tag is wrong, `unauthorized` that Docker Desktop's sign-in expired, `toomanyrequests` Docker Hub's download limit, and `no such host` or a timeout a network or proxy problem. Images already on your machine aren't downloaded again, so only new ones fail. For Prometheus, `PROMETHEUS_IMAGE` in `.env` can name another copy of it, such as on a registry mirror. |
+| Starting reports `failed to resolve reference` for an image | Docker couldn't download it. Run `docker pull` with that image's name to see why: `not found` means the name or tag is wrong, `unauthorized` that Docker Desktop's sign-in expired, `toomanyrequests` Docker Hub's download limit, and `no such host` or a timeout a network or proxy problem. Images already on your machine aren't downloaded again, so only new ones fail. For Prometheus and Jaeger, `PROMETHEUS_IMAGE` and `JAEGER_IMAGE` in `.env` can name another copy, such as on a registry mirror. |
 | The API fails to start | Read its error. It reports any missing or unsafe setting, and the local services must be running. |
 | Keycloak rejects the redirect after changing `API_PORT` | The realm accepts logins only from port 4000, so keep that port, or also change `infra/local/keycloak/dreamdevops-realm.json`. |
 | After login, the browser can't open `localhost:4200` | Start the dashboard. |
@@ -220,7 +221,8 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | Integration tests fail on the first run with an image error | Docker couldn't download a test image. Run them again. |
 | The browser test can't launch a browser | Install Google Chrome. |
 | **Monitoring** shows no metrics for an application | Metrics come from applications started from a blueprint from version 1.2.0, and reach the platform once a version is deployed. Check Prometheus runs, with `docker compose -f infra/local/compose.yaml run --rm smoke-test`. Containers reach it through `host.docker.internal`, as Forgejo reaches the API, which doesn't work with Docker Engine on Linux. |
-| **Monitoring** says metrics aren't set up | Start the API with `npm run start:api`, which sets `PROMETHEUS_URL`, and start the local services again, which adds Prometheus. |
+| **Monitoring** says metrics or traces aren't set up | Start the API with `npm run start:api`, which sets `PROMETHEUS_URL` and `JAEGER_URL`, and start the local services again, which adds Prometheus and Jaeger. |
+| **Monitoring** shows no traces for an application | Traces come from services started from a blueprint from version 1.2.0, and from frontends from 1.3.0, once a version is deployed again. Jaeger keeps them in memory, so restarting it clears them. |
 
 ## Documentation
 
@@ -238,7 +240,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Source governance](apps/api/src/source-governance/README.md) | Repositories, Git Flow rules, teams and Git accounts |
 | [Builds and versions](apps/api/src/builds/README.md) | Development, candidate and release images, their versions, validation, scanning and signing |
 | [Environments](apps/api/src/environments/README.md) | Environments, hosting targets and providers, deploying, variables and secrets, hosting on this machine, production protection, and adding a provider |
-| [Monitoring](apps/api/src/monitoring/README.md) | How applications' metrics reach the platform, what each one means, and how they're kept apart per company |
+| [Monitoring](apps/api/src/monitoring/README.md) | How applications' metrics, logs and traces reach the platform, what each one means, and how they're kept apart per company |
 | [Editions and entitlements](apps/api/src/editions/README.md) | Editions, the feature catalog, and how commercial features plug in |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |

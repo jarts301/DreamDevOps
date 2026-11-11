@@ -75,6 +75,23 @@ describe('the published blueprints', () => {
     expect(telemetry).toContain('new HttpInstrumentation(');
   });
 
+  it('log in JSON with the trace each line belongs to, and pass traces on to the applications they call', () => {
+    const render = (type: string) => {
+      const manifest = library.latestForType(type)!;
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      return (path: string) => files.find((candidate) => candidate.path === path)!.content.toString();
+    };
+    const service = render('restful-service');
+    expect(service('src/app.ts')).toContain('mixin: currentTraceFields');
+    expect(service('src/app.ts')).toContain("'/api/ping'");
+    expect(service('src/telemetry.ts')).toContain('new UndiciInstrumentation()');
+    expect(service('src/config.ts')).toContain('CORS_ORIGINS');
+    const frontend = render('web-frontend');
+    expect(frontend('nginx/default.conf')).toMatch(/log_format json escape=json/);
+    expect(frontend('nginx/default.conf')).toContain('access_log /var/log/nginx/access.log json;');
+    expect(frontend('src/app/app.config.ts')).toContain('withInterceptors([traceContextInterceptor])');
+  });
+
   it('start the frontend’s metrics with nginx, which runs every script in its entrypoint folder', () => {
     const frontend = library.latestForType('web-frontend')!;
     const files = library.render(frontend.key, frontend.version, { name: 'Probe', slug: 'probe' });

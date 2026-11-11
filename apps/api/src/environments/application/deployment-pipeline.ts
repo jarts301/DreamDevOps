@@ -45,6 +45,8 @@ export interface DeploymentPipelineOptions {
   readonly healthTimeoutMs: number;
   /** Where containers send their metrics, over OTLP, or null to tell them nowhere. */
   readonly metricsEndpoint: string | null;
+  /** Where containers send their traces, over OTLP, or null to tell them nowhere. */
+  readonly tracesEndpoint: string | null;
 }
 
 interface TargetRow {
@@ -60,6 +62,8 @@ interface DeploymentContext {
   readonly deployment: DeploymentRow;
   readonly environment: EnvironmentRow;
   readonly applicationName: string;
+  /** The application's short name, which names the service in its telemetry. */
+  readonly applicationSlug: string;
   readonly target: TargetRow;
   readonly runtime: HostRuntime | null;
   readonly previousTarget: TargetRow | null;
@@ -228,6 +232,7 @@ export class DeploymentPipeline {
       deployment,
       environment,
       applicationName: application.name,
+      applicationSlug: application.slug,
       target,
       runtime: this.#runtimes.find(target.provider),
       previousTarget: targets.find((row) => row.id === deployment.previous_target_id) ?? null,
@@ -359,7 +364,12 @@ export class DeploymentPipeline {
     context.settingsRevision = settings.revision;
     // The platform's own variables come last, so nothing replaces them.
     const variables = {
-      ...withTelemetry(settings.values, environment.id, this.#options.metricsEndpoint),
+      ...withTelemetry(settings.values, {
+        environmentId: environment.id,
+        serviceName: context.applicationSlug,
+        metricsEndpoint: this.#options.metricsEndpoint,
+        tracesEndpoint: this.#options.tracesEndpoint,
+      }),
       ...platformVariables(environment, deployment.version!),
     };
     // The environment keeps its port on the same host, so its address stays the same.

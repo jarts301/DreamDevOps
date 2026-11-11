@@ -1,4 +1,5 @@
 import type { MetricKey, MetricValues } from '../domain/metrics.ts';
+import type { StoredTrace } from '../domain/traces.ts';
 
 /** Provides the MetricsStore, or null when this server keeps no metrics. */
 export const METRICS_STORE = Symbol('METRICS_STORE');
@@ -30,5 +31,27 @@ export class MetricsUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MetricsUnavailableError';
+  }
+}
+
+/** Provides the TraceStore, or null when this server keeps no traces. */
+export const TRACE_STORE = Symbol('TRACE_STORE');
+
+/**
+ * Where applications' traces are kept. Traces can cross environments and companies, so
+ * each span says which environment sent it, and the caller shows only its own.
+ */
+export interface TraceStore {
+  /** Traces with spans from a service in a window, newest first, at most `limit`. */
+  recent(serviceName: string, window: { readonly start: Date; readonly end: Date }, limit: number): Promise<StoredTrace[]>;
+  /** One trace, with every span, or null if the store has no such trace. */
+  find(traceId: string): Promise<StoredTrace | null>;
+}
+
+/** The trace store can't be reached, or answered with something it shouldn't. The message is safe to show. */
+export class TracesUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TracesUnavailableError';
   }
 }

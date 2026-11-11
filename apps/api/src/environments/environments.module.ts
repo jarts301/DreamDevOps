@@ -8,7 +8,9 @@ import { CatalogModule } from '../catalog/catalog.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { DATABASE_POOL } from '../tokens.ts';
 import { DeploymentPipeline } from './application/deployment-pipeline.ts';
+import { ContainerLogs } from './application/container-logs.ts';
 import { Deployments } from './application/deployments.ts';
+import { ENVIRONMENT_LOGS } from './application/environment-logs.ts';
 import { EnvironmentVariables } from './application/environment-variables.ts';
 import { Environments } from './application/environments.ts';
 import { HostingTargets } from './application/hosting-targets.ts';
@@ -27,7 +29,8 @@ import { EnvironmentsSubscriptions } from './messaging/environments-subscription
 /**
  * Each application's environments, the hosting targets they run on, their variables and
  * secrets, and deployments of the images Builds publishes to them. It offers other
- * contexts what runs where, through RUNNING_ENVIRONMENTS.
+ * contexts what runs where, through RUNNING_ENVIRONMENTS, and what it writes, through
+ * ENVIRONMENT_LOGS.
  */
 @Module({})
 export class EnvironmentsModule {
@@ -109,6 +112,7 @@ export class EnvironmentsModule {
                   maxAttempts: config.deployMaxAttempts,
                   healthTimeoutMs: config.deployHealthTimeoutMs,
                   metricsEndpoint: config.appMetricsEndpoint,
+                  tracesEndpoint: config.appTracesEndpoint,
                 }),
               inject: [TenantDatabase, DATABASE_POOL, ApplicationCatalog, DEPLOYABLE_IMAGES, HostRuntimes, EnvironmentVariables],
             },
@@ -118,6 +122,12 @@ export class EnvironmentsModule {
               inject: [TenantDatabase],
             },
             {
+              provide: ENVIRONMENT_LOGS,
+              useFactory: (database: TenantDatabase, catalog: ApplicationCatalog, runtimes: HostRuntimes) =>
+                new ContainerLogs(database, catalog, runtimes),
+              inject: [TenantDatabase, ApplicationCatalog, HostRuntimes],
+            },
+            {
               provide: EnvironmentsSubscriptions,
               useFactory: (pipeline: DeploymentPipeline) => new EnvironmentsSubscriptions(pipeline, config),
               inject: [DeploymentPipeline],
@@ -125,8 +135,8 @@ export class EnvironmentsModule {
           ],
           settings.overrides,
         ),
-        // Other contexts see only what runs where.
-        exports: [EnvironmentsSubscriptions, RUNNING_ENVIRONMENTS],
+        // Other contexts see only what runs where, and what it writes.
+        exports: [EnvironmentsSubscriptions, RUNNING_ENVIRONMENTS, ENVIRONMENT_LOGS],
       };
     });
   }

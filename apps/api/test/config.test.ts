@@ -127,11 +127,13 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...valid, [name]: value })).toThrow(InvalidConfigError);
   });
 
-  it('shows and collects no metrics unless told where they go', () => {
+  it('shows and collects no metrics or traces unless told where they go', () => {
     const config = loadConfig(valid);
 
     expect(config.prometheusUrl).toBeNull();
     expect(config.appMetricsEndpoint).toBeNull();
+    expect(config.jaegerUrl).toBeNull();
+    expect(config.appTracesEndpoint).toBeNull();
   });
 
   it('reads metrics from Prometheus, and tells applications where to send theirs', () => {
@@ -145,7 +147,20 @@ describe('loadConfig', () => {
     expect(config.appMetricsEndpoint).toBe('http://host.docker.internal:9090/api/v1/otlp/v1/metrics');
   });
 
+  it('reads traces from Jaeger, and tells applications where to send theirs', () => {
+    const config = loadConfig({
+      ...valid,
+      JAEGER_URL: 'http://localhost:16686/',
+      APP_TRACES_OTLP_ENDPOINT: 'http://host.docker.internal:4318/v1/traces',
+    });
+
+    expect(config.jaegerUrl).toBe('http://localhost:16686');
+    expect(config.appTracesEndpoint).toBe('http://host.docker.internal:4318/v1/traces');
+  });
+
   it.each([
+    ['JAEGER_URL', 'jaeger:16686'],
+    ['APP_TRACES_OTLP_ENDPOINT', 'not a url'],
     ['PROMETHEUS_URL', 'localhost:9090'],
     ['PROMETHEUS_URL', 'ftp://metrics.example.com'],
     ['APP_METRICS_OTLP_ENDPOINT', 'not a url'],

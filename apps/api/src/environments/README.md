@@ -112,7 +112,13 @@ Each environment has its own variables and secrets, such as `LOG_LEVEL` or `DATA
 - **Secrets** are sealed as soon as they arrive, and their values are never shown again, only replaced or removed. A secret can't become a plain variable, nor the other way round. Mark passwords, tokens and keys as secret.
 - **Never in the clear elsewhere:** events, the audit log, chat notifications and deployment steps name variables, never their values, not even plain ones. Steps list which variables and secrets a container started with.
 - **From the platform:** every container also gets `DREAMDEVOPS_ENVIRONMENT`, the environment's short name, `DREAMDEVOPS_PRODUCTION`, `true` or `false`, and `DREAMDEVOPS_VERSION`. Names starting with `DREAMDEVOPS_` are kept for them.
-- **Metrics:** when the platform keeps metrics, every container also gets the standard OpenTelemetry settings for sending them, which [Monitoring](../monitoring/README.md) shows: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, where to send them, `OTEL_METRIC_EXPORT_INTERVAL`, 15000 milliseconds, and `OTEL_RESOURCE_ATTRIBUTES` with `dreamdevops.environment.id`, the environment's ID. The environment's own variables can change the first two, to send metrics elsewhere. If it has its own `OTEL_RESOURCE_ATTRIBUTES`, the platform adds the environment's ID at the end of them, so it counts. The rules are in `domain/telemetry.ts`.
+- **Metrics and traces:** when the platform keeps them, every container also gets the standard OpenTelemetry settings for sending them, which [Monitoring](../monitoring/README.md) shows:
+  - `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, where to send them
+  - `OTEL_METRIC_EXPORT_INTERVAL`, 15000 milliseconds
+  - `OTEL_SERVICE_NAME`, the application's short name
+  - `OTEL_RESOURCE_ATTRIBUTES` with `dreamdevops.environment.id`, the environment's ID
+
+  The environment's own variables can change all but the last, to send them elsewhere, or under another name. If it has its own `OTEL_RESOURCE_ATTRIBUTES`, the platform adds the environment's ID at the end of them, so it counts. The rules are in `domain/telemetry.ts`.
 - **Names** are letters, digits and underscores, starting with a letter or underscore, such as `DATABASE_URL`. They're case-sensitive, as in any container, but one environment can't have two that differ only in case. `PATH` and `HOSTNAME` belong to the container.
 - **Values** are kept exactly, spaces included, and fit on one line, which is what every container runtime passes on safely. Encode multi-line values, such as keys, in base64. Each is up to 32 KB, and an environment has up to 100, totalling 256 KB.
 - **Production:** changing production's variables is protected like any change to it: it needs `environments-production:manage`, its name typed exactly, and a reason.
@@ -137,7 +143,7 @@ Each environment gets:
 
 Containers run hardened: with no Linux capabilities, no privilege escalation, 512 MB of memory, one CPU and 256 processes at most, and they restart with Docker. Images already run as a user other than root, and have a health check, as [Builds](../builds/README.md#the-steps) requires. Pulling uses the platform's registry account in a throwaway Docker configuration, never the person's own.
 
-This machine is for trying things out and for small teams. Every company's applications share the machine that runs DreamDevOps, and, as with builds, they run code from the company's own developers: an application can reach services this machine offers to its containers, such as Docker Desktop's `host.docker.internal`. That includes Prometheus, which applications must reach to send their metrics, and which answers questions about every company's. So on a server shared by several companies, or one that holds data applications mustn't reach, set `LOCAL_HOSTING=off`. Companies then can't connect it, and existing targets for it can't be deployed to.
+This machine is for trying things out and for small teams. Every company's applications share the machine that runs DreamDevOps, and, as with builds, they run code from the company's own developers: an application can reach services this machine offers to its containers, such as Docker Desktop's `host.docker.internal`. That includes Prometheus and Jaeger, which applications must reach to send their metrics and traces, and which answer questions about every company's. So on a server shared by several companies, or one that holds data applications mustn't reach, set `LOCAL_HOSTING=off`. Companies then can't connect it, and existing targets for it can't be deployed to.
 
 ## Production protection
 
@@ -230,7 +236,14 @@ These events, in `domain/events.ts`, are the module's contract with the modules 
 
 ## For other modules
 
-[Monitoring](../monitoring/README.md) asks what runs where through `RunningEnvironments`, in `application/running-environments.ts`: the active environments a version runs in, or one environment, in the current company only. `domain/telemetry.ts` holds the attribute metrics carry, `dreamdevops.environment.id`, which both modules use.
+[Monitoring](../monitoring/README.md) uses two published queries, both in the current company only:
+
+| Query | In | Answers |
+|---|---|---|
+| `RunningEnvironments` | `application/running-environments.ts` | The active environments a version runs in, or one environment |
+| `EnvironmentLogs` | `application/environment-logs.ts` | The lines the version in an environment wrote since a moment, read from its container on the host it runs on, through the runtime's `logs` |
+
+`domain/telemetry.ts` holds the attribute metrics and traces carry, `dreamdevops.environment.id`, which both modules use.
 
 ## Settings
 
@@ -242,6 +255,7 @@ These events, in `domain/events.ts`, are the module's contract with the modules 
 | `DEPLOY_MAX_ATTEMPTS`, `DEPLOY_RETRY_SECONDS` | Runs before a deployment that keeps hitting temporary problems fails, and the wait between them. 2 and 15 by default. |
 | `SECRETS_KEY_FILE` | The key that seals secrets: 32 random bytes, in base64. Required in production. Create one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`, readable only by the API's user. |
 | `APP_METRICS_OTLP_ENDPOINT` | Where containers send their metrics, as they reach it, such as `http://host.docker.internal:9090/api/v1/otlp/v1/metrics`, which `npm run start:api` sets. Unset, containers aren't told to send any. |
+| `APP_TRACES_OTLP_ENDPOINT` | Where containers send their traces, as they reach it, such as `http://host.docker.internal:4318/v1/traces`, which `npm run start:api` sets. Unset, containers aren't told to send any. |
 
 Pulling can take up to `BUILD_TIMEOUT_MINUTES`, as pushing does. Up to two deployments run at once in each API process, each in its own environment.
 

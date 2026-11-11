@@ -3,10 +3,22 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { settle } from '../../testing';
+import { LogView } from './log-view';
 import { MetricChart } from './metric-chart';
-import { formatMetric } from './metric-format';
-import type { EnvironmentMetrics, MetricDefinition, MetricSeries, MonitoringOverview } from './monitoring.api';
+import { formatDuration, formatMetric } from './metric-format';
+import type {
+  EnvironmentLogs,
+  EnvironmentMetrics,
+  EnvironmentTraces,
+  LogLine,
+  MetricDefinition,
+  MetricSeries,
+  MonitoringOverview,
+  Span,
+  Trace,
+} from './monitoring.api';
 import { Monitoring, REFRESH_MS } from './monitoring';
+import { TraceView } from './trace-view';
 
 const OVERVIEW_URL = '/api/v1/company/monitoring/environments';
 
@@ -72,6 +84,88 @@ const charts = (range: EnvironmentMetrics['range']['key'] = '1h'): EnvironmentMe
   ],
 });
 
+const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
+
+const logLine = (overrides: Partial<LogLine> = {}): LogLine => ({
+  at: '2026-11-10T11:59:00.000Z',
+  stream: 'stdout',
+  level: 'info',
+  message: 'Ping received',
+  traceId: TRACE_ID,
+  spanId: '00f067aa0ba902b7',
+  ...overrides,
+});
+
+const logs = (overrides: Partial<EnvironmentLogs> = {}): EnvironmentLogs => ({
+  environmentId: 'e-1',
+  running: true,
+  range: { key: '1h', start: '2026-11-10T11:00:00.000Z', end: '2026-11-10T12:00:00.000Z' },
+  lines: [
+    logLine({ at: '2026-11-10T11:58:00.000Z', level: null, stream: 'stderr', message: 'nginx started', traceId: null, spanId: null }),
+    logLine(),
+    logLine({ at: '2026-11-10T11:59:30.000Z', level: 'error', message: 'Payment failed', traceId: null, spanId: null }),
+  ],
+  ...overrides,
+});
+
+const traces = (overrides: Partial<EnvironmentTraces> = {}): EnvironmentTraces => ({
+  enabled: true,
+  serviceName: 'billing-api',
+  range: { key: '1h', start: '2026-11-10T11:00:00.000Z', end: '2026-11-10T12:00:00.000Z' },
+  traces: [
+    {
+      traceId: TRACE_ID,
+      name: 'GET',
+      start: '2026-11-10T11:59:00.000Z',
+      durationMs: 12.5,
+      spans: 2,
+      errors: 1,
+      services: ['billing-api'],
+    },
+  ],
+  ...overrides,
+});
+
+const spanOf = (overrides: Partial<Span> = {}): Span => ({
+  spanId: 'a000000000000001',
+  parentSpanId: null,
+  name: 'GET /',
+  serviceName: 'website',
+  environmentId: 'e-3',
+  environmentName: 'Staging',
+  applicationName: 'Website',
+  production: false,
+  start: '2026-11-10T11:59:00.000Z',
+  offsetMs: 0,
+  durationMs: 40,
+  kind: 'server',
+  error: false,
+  attributes: { 'http.request.method': 'GET', 'url.path': '/', 'http.response.status_code': 200 },
+  ...overrides,
+});
+
+const TRACE: Trace = {
+  traceId: TRACE_ID,
+  start: '2026-11-10T11:59:00.000Z',
+  durationMs: 40,
+  spans: [
+    spanOf(),
+    spanOf({
+      spanId: 'a000000000000002',
+      parentSpanId: 'a000000000000001',
+      name: 'GET',
+      serviceName: 'billing-api',
+      environmentId: 'e-1',
+      applicationName: 'Billing API',
+      offsetMs: 10,
+      durationMs: 20,
+      error: true,
+      attributes: { 'http.request.method': 'GET', 'http.route': '/api/ping', 'http.response.status_code': 500 },
+    }),
+  ],
+  hiddenSpans: 1,
+};
+
 describe('monitoring', () => {
   let http: HttpTestingController;
 
@@ -91,12 +185,14 @@ describe('monitoring', () => {
     await settle();
     await fixture.whenStable();
   };
-  const rows = (fixture: ComponentFixture<unknown>) =>
-    [...element(fixture).querySelectorAll('tbody tr')].map((tableRow) =>
+  const rows = (fixture: ComponentFixture<unknown>, selector = '.monitoring-table tbody tr') =>
+    [...element(fixture).querySelectorAll(selector)].map((tableRow) =>
       [...tableRow.querySelectorAll('td')].map((cell) => (cell.textContent ?? '').replace(/\s+/g, ' ').trim()),
     );
   const button = (fixture: ComponentFixture<unknown>, label: string) =>
-    [...element(fixture).querySelectorAll('button')].find((candidate) => candidate.getAttribute('aria-label') === label)!;
+    [...element(fixture).querySelectorAll('button')].find(
+      (candidate) => candidate.getAttribute('aria-label') === label || candidate.textContent?.trim() === label,
+    )!;
 
   const open = async (answer: MonitoringOverview = overview()) => {
     const fixture = TestBed.createComponent(Monitoring);
@@ -104,6 +200,24 @@ describe('monitoring', () => {
     http.expectOne(OVERVIEW_URL).flush(answer);
     await render(fixture);
     return fixture;
+  };
+
+  /** Opens an environment's details, and answers for its metrics, unless the server keeps none, logs and traces. */
+  const details = async (
+    fixture: ComponentFixture<unknown>,
+    label = 'Show details of Billing API in Staging',
+    answers: { charts?: EnvironmentMetrics | null; logs?: EnvironmentLogs; traces?: EnvironmentTraces; range?: string } = {},
+  ) => {
+    const id = label.includes('Production') ? 'e-2' : label.includes('Website') ? 'e-3' : 'e-1';
+    const range = answers.range ?? '1h';
+    button(fixture, label).click();
+    await render(fixture);
+    if (answers.charts !== null) {
+      http.expectOne(`${OVERVIEW_URL}/${id}?range=${range}`).flush(answers.charts ?? charts());
+    }
+    http.expectOne(`${OVERVIEW_URL}/${id}/logs?range=${range}`).flush(answers.logs ?? logs());
+    http.expectOne(`${OVERVIEW_URL}/${id}/traces?range=${range}`).flush(answers.traces ?? traces());
+    await render(fixture);
   };
 
   it('lists what runs in each environment, with its latest metrics in their units', async () => {
@@ -120,8 +234,8 @@ describe('monitoring', () => {
       'Actions',
     ]);
     expect(rows(fixture)).toEqual([
-      ['Billing API', 'Staging 1.4.0-rc.1 on This machine', '13%', '52.4 MB', '3.3/s', '84 ms', '0%', 'Show charts'],
-      ['Billing API', 'Production Production 1.3.0 on This machine', '40%', '80.0 MB', '12/s', '1.50 s', '2.5%', 'Show charts'],
+      ['Billing API', 'Staging 1.4.0-rc.1 on This machine', '13%', '52.4 MB', '3.3/s', '84 ms', '0%', 'Show details'],
+      ['Billing API', 'Production Production 1.3.0 on This machine', '40%', '80.0 MB', '12/s', '1.50 s', '2.5%', 'Show details'],
       [
         'Website',
         'Staging 2.0.0 on This machine No metrics received yet.',
@@ -130,22 +244,23 @@ describe('monitoring', () => {
         'No data',
         'No data',
         'No data',
-        'Show charts',
+        'Show details',
       ],
     ]);
     expect(element(fixture).querySelector('tr[data-production="true"] .status')?.textContent?.trim()).toBe('Production');
   });
 
-  it('says when the server keeps no metrics, and offers no charts', async () => {
-    const fixture = await open(
-      overview({ enabled: false, environments: [row({ latest: NOTHING })] }),
-    );
+  it('says when the server keeps no metrics, and still shows logs and traces', async () => {
+    const fixture = await open(overview({ enabled: false, environments: [row({ latest: NOTHING })] }));
 
     expect(element(fixture).querySelector('[role="status"]')?.textContent).toContain(
       "This server doesn't keep applications' metrics yet",
     );
     expect(text(fixture)).not.toContain('No metrics received yet.');
-    expect(element(fixture).querySelectorAll('tbody button')).toHaveLength(0);
+    await details(fixture, 'Show details of Billing API in Staging', { charts: null });
+
+    expect(text(fixture)).toContain("This server doesn't keep metrics yet.");
+    expect(element(fixture).querySelectorAll('.log-line')).toHaveLength(3);
   });
 
   it('still lists what runs when the metrics can’t be read, and says why', async () => {
@@ -178,16 +293,17 @@ describe('monitoring', () => {
     );
   });
 
-  it('charts one environment on request, over the range chosen, and hides them again', async () => {
+  it('shows one environment’s charts, logs and traces on request, over the range chosen, and hides them again', async () => {
     const fixture = await open();
 
-    button(fixture, 'Show charts of Billing API in Staging').click();
-    await render(fixture);
-    expect(text(fixture)).toContain('Loading…');
-    http.expectOne(`${OVERVIEW_URL}/e-1?range=1h`).flush(charts());
-    await render(fixture);
+    await details(fixture);
 
-    expect(element(fixture).querySelector('#charts-heading')?.textContent).toBe('Billing API in Staging');
+    expect(element(fixture).querySelector('#details-heading')?.textContent).toBe('Billing API in Staging');
+    expect([...element(fixture).querySelectorAll('[aria-labelledby="details-heading"] h3')].map((heading) => heading.textContent)).toEqual([
+      'Metrics',
+      'Logs',
+      'Traces',
+    ]);
     expect([...element(fixture).querySelectorAll('.metric-chart-name')].map((name) => name.textContent)).toEqual([
       'CPU',
       'Memory',
@@ -195,59 +311,219 @@ describe('monitoring', () => {
       'Response time',
       'Server errors',
     ]);
-    expect(button(fixture, 'Hide charts of Billing API in Staging').getAttribute('aria-expanded')).toBe('true');
+    expect(element(fixture).querySelectorAll('.log-line')).toHaveLength(3);
+    expect(rows(fixture, 'app-trace-list tbody tr')).toEqual([
+      [expect.stringMatching(/^Nov 10, /), `GET 1 error ${TRACE_ID}`, '13 ms', '2', 'Show trace'],
+    ]);
+    expect(button(fixture, 'Hide details of Billing API in Staging').getAttribute('aria-expanded')).toBe('true');
 
     const select = element(fixture).querySelector<HTMLSelectElement>('.monitoring-charts-header select')!;
     select.value = '24h';
     select.dispatchEvent(new Event('change'));
     await render(fixture);
     http.expectOne(`${OVERVIEW_URL}/e-1?range=24h`).flush(charts('24h'));
+    http.expectOne(`${OVERVIEW_URL}/e-1/logs?range=24h`).flush(logs());
+    http.expectOne(`${OVERVIEW_URL}/e-1/traces?range=24h`).flush(traces());
     await render(fixture);
     expect(element(fixture).querySelectorAll('app-metric-chart')).toHaveLength(5);
 
-    button(fixture, 'Hide charts of Billing API in Staging').click();
+    button(fixture, 'Hide details of Billing API in Staging').click();
     await render(fixture);
-    expect(element(fixture).querySelector('#charts-heading')).toBeNull();
+    expect(element(fixture).querySelector('#details-heading')).toBeNull();
   });
 
-  it('explains when the charts can’t be read', async () => {
+  it('explains what can’t be read, and shows the rest', async () => {
     const fixture = await open();
 
-    button(fixture, 'Show charts of Billing API in Production').click();
+    button(fixture, 'Show details of Billing API in Production').click();
     await render(fixture);
     http
       .expectOne(`${OVERVIEW_URL}/e-2?range=1h`)
       .flush({ detail: 'The metrics store couldn’t answer (HTTP 503). Try again shortly.' }, { status: 503, statusText: 'Unavailable' });
+    http
+      .expectOne(`${OVERVIEW_URL}/e-2/logs?range=1h`)
+      .flush({ detail: 'The logs can’t be read from This machine right now.' }, { status: 503, statusText: 'Unavailable' });
+    http.expectOne(`${OVERVIEW_URL}/e-2/traces?range=1h`).flush(traces({ enabled: false, traces: [] }));
     await render(fixture);
 
-    expect(element(fixture).querySelector('section [role="alert"]')?.textContent).toContain(
+    const alerts = [...element(fixture).querySelectorAll('section [role="alert"]')].map((alert) => alert.textContent?.trim());
+    expect(alerts).toEqual([
       'The metrics store couldn’t answer (HTTP 503). Try again shortly.',
+      'The logs can’t be read from This machine right now.',
+    ]);
+    expect(text(fixture)).toContain("This server doesn't keep traces yet.");
+  });
+
+  it('says when nothing runs to write logs', async () => {
+    const fixture = await open();
+
+    await details(fixture, 'Show details of Billing API in Staging', { logs: logs({ running: false, lines: [] }) });
+
+    expect(text(fixture)).toContain('Nothing runs here, so nothing is written.');
+  });
+
+  it('opens the trace a log line was written in, with the company’s spans as a timeline, and closes it', async () => {
+    const fixture = await open();
+    await details(fixture);
+
+    button(fixture, `Show trace ${TRACE_ID}`).click();
+    await render(fixture);
+    http.expectOne(`/api/v1/company/monitoring/traces/${TRACE_ID}`).flush(TRACE);
+    await render(fixture);
+
+    expect(element(fixture).querySelector('#trace-heading')?.textContent).toBe(`Trace ${TRACE_ID}`);
+    expect(element(fixture).querySelectorAll('.trace-span')).toHaveLength(2);
+    expect(text(fixture)).toContain("1 span from outside your company's applications aren't shown.");
+
+    button(fixture, 'Close trace').click();
+    await render(fixture);
+    expect(element(fixture).querySelector('#trace-heading')).toBeNull();
+  });
+
+  it('opens a trace from the list of traces, and says when it can’t be shown', async () => {
+    const fixture = await open();
+    await details(fixture);
+
+    [...element(fixture).querySelectorAll<HTMLButtonElement>('app-trace-list button')][0]!.click();
+    await render(fixture);
+    http
+      .expectOne(`/api/v1/company/monitoring/traces/${TRACE_ID}`)
+      .flush({ detail: 'There’s no such trace, or none of it comes from your applications.' }, { status: 404, statusText: 'Not Found' });
+    await render(fixture);
+
+    expect(element(fixture).querySelector('[aria-labelledby="trace-heading"] [role="alert"]')?.textContent).toContain(
+      'There’s no such trace, or none of it comes from your applications.',
     );
   });
 
-  it('reads the metrics, and the charts on screen, again every 30 seconds', async () => {
+  it('reads the metrics, and the details on screen, again every 30 seconds', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const fixture = TestBed.createComponent(Monitoring);
     fixture.detectChanges();
     http.expectOne(OVERVIEW_URL).flush(overview());
     await vi.advanceTimersByTimeAsync(0);
     fixture.detectChanges();
-    button(fixture, 'Show charts of Billing API in Staging').click();
+    button(fixture, 'Show details of Billing API in Staging').click();
     await vi.advanceTimersByTimeAsync(0);
-    http.expectOne(`${OVERVIEW_URL}/e-1?range=1h`).flush(charts());
-    await vi.advanceTimersByTimeAsync(0);
+    const answerDetails = async () => {
+      http.expectOne(`${OVERVIEW_URL}/e-1?range=1h`).flush(charts());
+      http.expectOne(`${OVERVIEW_URL}/e-1/logs?range=1h`).flush(logs());
+      http.expectOne(`${OVERVIEW_URL}/e-1/traces?range=1h`).flush(traces());
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    await answerDetails();
 
     await vi.advanceTimersByTimeAsync(REFRESH_MS);
     http.expectOne(OVERVIEW_URL).flush(overview({ environments: [row({ latest: { ...NOTHING, cpu: 99 } })] }));
     await vi.advanceTimersByTimeAsync(0);
-    http.expectOne(`${OVERVIEW_URL}/e-1?range=1h`).flush(charts());
-    await vi.advanceTimersByTimeAsync(0);
+    await answerDetails();
     fixture.detectChanges();
 
     expect(rows(fixture)[0]![2]).toBe('99%');
     fixture.destroy();
     await vi.advanceTimersByTimeAsync(REFRESH_MS);
     http.expectNone(OVERVIEW_URL);
+  });
+});
+
+describe('the log view', () => {
+  const show = async (lines: readonly LogLine[]) => {
+    const fixture = TestBed.createComponent(LogView);
+    fixture.componentRef.setInput('lines', lines);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    return fixture;
+  };
+  const shown = (fixture: ComponentFixture<LogView>) =>
+    [...(fixture.nativeElement as HTMLElement).querySelectorAll('.log-line')].map((line) => [
+      line.getAttribute('data-level'),
+      line.querySelector('.log-level')?.textContent?.trim(),
+      line.querySelector('.log-message')?.textContent?.trim(),
+    ]);
+
+  it('shows the newest line first, with its level, or the error output it came from', async () => {
+    const fixture = await show(logs().lines);
+
+    expect(shown(fixture)).toEqual([
+      ['error', 'error', 'Payment failed'],
+      ['info', 'info', 'Ping received'],
+      ['stderr', 'stderr', 'nginx started'],
+    ]);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('3 of 3 lines, newest first');
+  });
+
+  it('narrows the lines by text, level or trace ID', async () => {
+    const fixture = await show(logs().lines);
+    const filter = (fixture.nativeElement as HTMLElement).querySelector('input')!;
+
+    for (const [value, expected] of [
+      ['PAYMENT', ['Payment failed']],
+      ['error', ['Payment failed']],
+      [TRACE_ID.slice(0, 8), ['Ping received']],
+      ['nothing like it', []],
+    ] as const) {
+      filter.value = value;
+      filter.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(shown(fixture).map(([, , message]) => message)).toEqual(expected);
+    }
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('No line matches the filter.');
+  });
+
+  it('offers the trace of lines written in one', async () => {
+    const fixture = await show(logs().lines);
+    const opened: string[] = [];
+    fixture.componentInstance.openTrace.subscribe((traceId) => opened.push(traceId));
+
+    const traceButtons = (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.log-trace');
+    expect(traceButtons).toHaveLength(1);
+    traceButtons[0]!.click();
+
+    expect(opened).toEqual([TRACE_ID]);
+  });
+});
+
+describe('the trace view', () => {
+  it('puts each span under the one it’s part of, with a bar for when it ran, and what it did', async () => {
+    const fixture = TestBed.createComponent(TraceView);
+    fixture.componentRef.setInput('trace', TRACE);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const element = fixture.nativeElement as HTMLElement;
+
+    const spans = [...element.querySelectorAll<HTMLElement>('.trace-span')].map((span) => ({
+      label: span.querySelector('.trace-span-label')!.textContent!.replace(/\s+/g, ' ').trim(),
+      indent: span.querySelector<HTMLElement>('.trace-span-label')!.style.paddingLeft,
+      left: span.querySelector<HTMLElement>('.trace-span-bar')!.style.left,
+      width: span.querySelector<HTMLElement>('.trace-span-bar')!.style.width,
+      error: span.getAttribute('data-error'),
+      took: span.querySelector('.trace-span-duration')!.textContent,
+    }));
+
+    expect(spans).toEqual([
+      { label: 'GET / Website in Staging server GET / 200', indent: '0rem', left: '0%', width: '100%', error: 'false', took: '40 ms' },
+      {
+        label: 'GET Billing API in Staging Error server GET /api/ping 500',
+        indent: '1rem',
+        left: '25%',
+        width: '50%',
+        error: 'true',
+        took: '20 ms',
+      },
+    ]);
+    expect(element.textContent).toContain('Took 40 ms, in 2 spans.');
+  });
+
+  it('starts a branch for a span whose parent isn’t shown, such as a browser’s', async () => {
+    const fixture = TestBed.createComponent(TraceView);
+    fixture.componentRef.setInput('trace', { ...TRACE, spans: [spanOf({ parentSpanId: 'ffffffffffffffff' })], hiddenSpans: 0 });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const element = fixture.nativeElement as HTMLElement;
+
+    expect(element.querySelector<HTMLElement>('.trace-span-label')!.style.paddingLeft).toBe('0rem');
+    expect(element.textContent).not.toContain("aren't shown");
   });
 });
 
@@ -311,5 +587,13 @@ describe('metric values', () => {
     expect(formatMetric(0.2, 'per-second')).toBe('0.20/s');
     expect(formatMetric(0.084, 'seconds')).toBe('84 ms');
     expect(formatMetric(2.345, 'seconds')).toBe('2.35 s');
+  });
+
+  it('give lengths of time in milliseconds, or seconds once they’re long', () => {
+    expect(formatDuration(0.42)).toBe('0.4 ms');
+    expect(formatDuration(8.24)).toBe('8.2 ms');
+    expect(formatDuration(12.5)).toBe('13 ms');
+    expect(formatDuration(84.4)).toBe('84 ms');
+    expect(formatDuration(1_250)).toBe('1.25 s');
   });
 });

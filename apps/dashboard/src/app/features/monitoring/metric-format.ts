@@ -27,3 +27,11 @@ function round(value: number): string {
   }
   return Math.abs(value) >= 1 ? value.toFixed(1) : value.toFixed(2);
 }
+
+/** A span's or trace's length, such as 0.4 ms, 84 ms or 1.25 s. */
+export function formatDuration(ms: number): string {
+  if (ms >= 1000) {
+    return `${(ms / 1000).toFixed(2)} s`;
+  }
+  return ms < 10 ? `${ms.toFixed(1)} ms` : `${Math.round(ms)} ms`;
+}

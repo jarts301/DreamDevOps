@@ -44,6 +44,8 @@ async function waitForHealth(url: string): Promise<number> {
 
 /** Versions from this one on send metrics when the platform says where. */
 const FIRST_WITH_METRICS = '1.2.0';
+/** Versions from this one on log in JSON, with the trace a request brings, and services send traces. */
+const FIRST_WITH_TRACES = '1.3.0';
 
 /** What containers send over OTLP, as the platform's metrics store would receive it. */
 const received: string[] = [];
@@ -56,6 +58,37 @@ const metricsSink = createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
   });
 });
+
+/** Whether a container sent a span of this trace, within a minute. */
+async function sentSpanOf(traceId: string): Promise<boolean> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const found = received.some((body) => {
+      const payload = JSON.parse(body) as { resourceSpans?: { scopeSpans?: { spans?: { traceId: string }[] }[] }[] };
+      return (payload.resourceSpans ?? []).some((resource) =>
+        (resource.scopeSpans ?? []).some((scope) => (scope.spans ?? []).some((span) => span.traceId === traceId)),
+      );
+    });
+    if (found) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
+/** The container's log lines that are JSON, as the platform reads them. */
+function jsonLogsOf(container: string, folder: string): Record<string, unknown>[] {
+  return run('docker', ['logs', container], folder)
+    .split('\n')
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
+}
 
 /** The metrics names sent with this environment's attribute, once all the expected ones arrived. */
 async function metricsOf(environmentId: string, expected: readonly string[]): Promise<string[]> {
@@ -114,12 +147,13 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
 
     const image = `dreamdevops-scaffold-check-${manifest.key}:${manifest.version}`;
     run('docker', ['build', '--quiet', '-t', image, '.'], folder);
-    // The settings the platform gives every container, so it sends its metrics.
+    // The settings the platform gives every container, so it sends its metrics and traces.
     const environmentId = `scaffold-check-${manifest.key}-${manifest.version}`;
     const metricsPort = (metricsSink.address() as AddressInfo).port;
     const telemetry = [
       ['--add-host', 'host.docker.internal:host-gateway'],
       ['-e', `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://host.docker.internal:${metricsPort}/v1/metrics`],
+      ['-e', `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://host.docker.internal:${metricsPort}/v1/traces`],
       ['-e', 'OTEL_METRIC_EXPORT_INTERVAL=1000'],
       ['-e', `OTEL_RESOURCE_ATTRIBUTES=dreamdevops.environment.id=${environmentId}`],
     ].flat();
@@ -144,6 +178,22 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
           expected.push('http.server.request.duration');
         }
         expect(await metricsOf(environmentId, expected)).toEqual(expect.arrayContaining(expected));
+      }
+
+      if (compareVersions(manifest.version, FIRST_WITH_TRACES) >= 0) {
+        // A request in a trace a caller started, as another service or a web page would.
+        const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+        const traceparent = `00-${traceId}-00f067aa0ba902b7-01`;
+        const service = manifest.applicationType === 'restful-service';
+        expect((await fetch(`${base}${service ? '/api/ping' : '/'}`, { headers: { traceparent } })).status).toBe(200);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        const logs = jsonLogsOf(container, folder);
+        if (service) {
+          expect(logs).toContainEqual(expect.objectContaining({ msg: 'Ping received', trace_id: traceId }));
+          expect(await sentSpanOf(traceId)).toBe(true);
+        } else {
+          expect(logs).toContainEqual(expect.objectContaining({ msg: 'GET / 200', traceparent }));
+        }
       }
     } finally {
       spawnSync('docker', ['rm', '-f', container]);

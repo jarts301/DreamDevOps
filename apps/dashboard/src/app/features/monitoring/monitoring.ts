@@ -2,19 +2,25 @@ import { ChangeDetectionStrategy, Component, inject, type OnDestroy, type OnInit
 import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { PageActivity } from '../../core/page-activity';
+import { LogView } from './log-view';
 import { MetricChart } from './metric-chart';
 import { formatMetric } from './metric-format';
 import {
+  type EnvironmentLogs,
   type EnvironmentMetrics,
+  type EnvironmentTraces,
   type MetricUnit,
   type MetricValues,
   MonitoringApi,
   type MonitoredEnvironment,
   type MonitoringOverview,
   type TimeRangeKey,
+  type Trace,
 } from './monitoring.api';
+import { TraceList } from './trace-list';
+import { TraceView } from './trace-view';
 
-/** How often the page reads the metrics again while it's open. */
+/** How often the page reads everything on it again while it's open. */
 export const REFRESH_MS = 30_000;
 
 const RANGES: readonly { readonly key: TimeRangeKey; readonly label: string }[] = [
@@ -25,19 +31,52 @@ const RANGES: readonly { readonly key: TimeRangeKey; readonly label: string }[] 
 ];
 
 /**
+ * Something the page reads, with why it couldn't, if it couldn't. Answers are counted, so
+ * an older one that arrives late never replaces a newer one.
+ */
+class Loaded<T> {
+  readonly value = signal<T | null>(null);
+  readonly error = signal<string | null>(null);
+  #request = 0;
+
+  clear(): void {
+    this.#request += 1;
+    this.value.set(null);
+    this.error.set(null);
+  }
+
+  /** Reads it again. What's on screen stays until the new answer arrives. */
+  async load(read: () => Promise<T>): Promise<void> {
+    const request = ++this.#request;
+    try {
+      const value = await read();
+      if (request === this.#request) {
+        this.value.set(value);
+        this.error.set(null);
+      }
+    } catch (error) {
+      if (request === this.#request) {
+        this.error.set(errorMessage(error));
+      }
+    }
+  }
+}
+
+/**
  * How the versions that run in the company's environments are doing: CPU, memory,
- * requests, response times and server errors, as the applications send them. Every
- * member who views dashboards can see it, and nothing here changes anything.
+ * requests, response times and server errors, what they write, and the traces of the
+ * requests they answer. Every member who views dashboards can see it, and nothing here
+ * changes anything.
  */
 @Component({
   selector: 'app-monitoring',
-  imports: [MetricChart, RouterLink],
+  imports: [LogView, MetricChart, RouterLink, TraceList, TraceView],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Monitoring</h1>
     <p class="lead">
       How the versions that run in your environments are doing: their CPU, memory, requests, response times and
-      server errors, as the applications send them.
+      server errors, what they write to their logs, and the traces of the requests they answer.
     </p>
 
     @if (error(); as message) {
@@ -73,13 +112,12 @@ const RANGES: readonly { readonly key: TimeRangeKey; readonly label: string }[] 
                   @for (metric of current.metrics; track metric.key) {
                     <th scope="col" class="metric-value">{{ metric.name }}</th>
                   }
-                  @if (current.enabled) {
-                    <th scope="col"><span class="visually-hidden">Actions</span></th>
-                  }
+                  <th scope="col"><span class="visually-hidden">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
                 @for (row of current.environments; track row.environmentId) {
+                  @let open = selected()?.environmentId === row.environmentId;
                   <tr [attr.data-production]="row.production">
                     <td>{{ row.applicationName }}</td>
                     <td>
@@ -102,24 +140,17 @@ const RANGES: readonly { readonly key: TimeRangeKey; readonly label: string }[] 
                         {{ format(row.latest[metric.key], metric.unit) }}
                       </td>
                     }
-                    @if (current.enabled) {
-                      <td class="cell-actions">
-                        <button
-                          type="button"
-                          class="button"
-                          [attr.aria-expanded]="selected()?.environmentId === row.environmentId"
-                          [attr.aria-label]="
-                            (selected()?.environmentId === row.environmentId ? 'Hide charts of ' : 'Show charts of ') +
-                            row.applicationName +
-                            ' in ' +
-                            row.environmentName
-                          "
-                          (click)="toggle(row)"
-                        >
-                          {{ selected()?.environmentId === row.environmentId ? 'Hide charts' : 'Show charts' }}
-                        </button>
-                      </td>
-                    }
+                    <td class="cell-actions">
+                      <button
+                        type="button"
+                        class="button"
+                        [attr.aria-expanded]="open"
+                        [attr.aria-label]="(open ? 'Hide details of ' : 'Show details of ') + row.applicationName + ' in ' + row.environmentName"
+                        (click)="toggle(row)"
+                      >
+                        {{ open ? 'Hide details' : 'Show details' }}
+                      </button>
+                    </td>
                   </tr>
                 }
               </tbody>
@@ -132,9 +163,9 @@ const RANGES: readonly { readonly key: TimeRangeKey; readonly label: string }[] 
         </section>
 
         @if (selected(); as chosen) {
-          <section class="card" aria-labelledby="charts-heading">
+          <section class="card" aria-labelledby="details-heading">
             <div class="monitoring-charts-header">
-              <h2 id="charts-heading">{{ chosen.applicationName }} in {{ chosen.environmentName }}</h2>
+              <h2 id="details-heading">{{ chosen.applicationName }} in {{ chosen.environmentName }}</h2>
               <label class="field-inline">
                 <span>Range</span>
                 <select [value]="range()" (change)="chooseRange($event)">
@@ -144,9 +175,13 @@ const RANGES: readonly { readonly key: TimeRangeKey; readonly label: string }[] 
                 </select>
               </label>
             </div>
-            @if (chartsError(); as message) {
+
+            <h3 id="metrics-heading">Metrics</h3>
+            @if (!current.enabled) {
+              <p class="muted">This server doesn't keep metrics yet.</p>
+            } @else if (charts.error(); as message) {
               <p class="alert alert-error" role="alert">{{ message }}</p>
-            } @else if (charts(); as metrics) {
+            } @else if (charts.value(); as metrics) {
               <div class="metric-grid">
                 @for (series of metrics.series; track series.key) {
                   <app-metric-chart
@@ -157,6 +192,48 @@ const RANGES: readonly { readonly key: TimeRangeKey; readonly label: string }[] 
                   />
                 }
               </div>
+            } @else {
+              <p class="muted">Loading…</p>
+            }
+
+            <h3 id="logs-heading">Logs</h3>
+            @if (logs.error(); as message) {
+              <p class="alert alert-error" role="alert">{{ message }}</p>
+            } @else if (logs.value(); as written) {
+              <app-log-view
+                [lines]="written.lines"
+                [emptyMessage]="written.running ? 'Nothing was written in this range.' : 'Nothing runs here, so nothing is written.'"
+                (openTrace)="openTrace($event)"
+              />
+            } @else {
+              <p class="muted">Loading…</p>
+            }
+
+            <h3 id="traces-heading">Traces</h3>
+            @if (traces.error(); as message) {
+              <p class="alert alert-error" role="alert">{{ message }}</p>
+            } @else if (traces.value(); as found) {
+              @if (found.enabled) {
+                <app-trace-list [traces]="found.traces" (open)="openTrace($event)" />
+              } @else {
+                <p class="muted">This server doesn't keep traces yet.</p>
+              }
+            } @else {
+              <p class="muted">Loading…</p>
+            }
+          </section>
+        }
+
+        @if (traceId(); as id) {
+          <section class="card" aria-labelledby="trace-heading">
+            <div class="monitoring-charts-header">
+              <h2 id="trace-heading">Trace <code>{{ id }}</code></h2>
+              <button type="button" class="button" (click)="closeTrace()">Close trace</button>
+            </div>
+            @if (trace.error(); as message) {
+              <p class="alert alert-error" role="alert">{{ message }}</p>
+            } @else if (trace.value(); as shown) {
+              <app-trace-view [trace]="shown" />
             } @else {
               <p class="muted">Loading…</p>
             }
@@ -171,8 +248,6 @@ export class Monitoring implements OnInit, OnDestroy {
   readonly #activity = new PageActivity('no-notice');
   #refreshTimer: ReturnType<typeof setTimeout> | undefined;
   #destroyed = false;
-  /** Counts chart requests, so an older answer never replaces a newer one. */
-  #chartRequest = 0;
 
   protected readonly ranges = RANGES;
   protected readonly error = this.#activity.error;
@@ -180,8 +255,12 @@ export class Monitoring implements OnInit, OnDestroy {
   protected readonly overview = signal<MonitoringOverview | null>(null);
   protected readonly selected = signal<MonitoredEnvironment | null>(null);
   protected readonly range = signal<TimeRangeKey>('1h');
-  protected readonly charts = signal<EnvironmentMetrics | null>(null);
-  protected readonly chartsError = signal<string | null>(null);
+  protected readonly charts = new Loaded<EnvironmentMetrics>();
+  protected readonly logs = new Loaded<EnvironmentLogs>();
+  protected readonly traces = new Loaded<EnvironmentTraces>();
+  /** The trace opened from a log line or the list of traces, if one is. */
+  protected readonly traceId = signal<string | null>(null);
+  protected readonly trace = new Loaded<Trace>();
 
   async ngOnInit(): Promise<void> {
     await this.#activity.run(() => this.#loadOverview());
@@ -203,54 +282,63 @@ export class Monitoring implements OnInit, OnDestroy {
   }
 
   protected async toggle(environment: MonitoredEnvironment): Promise<void> {
+    for (const loaded of [this.charts, this.logs, this.traces]) {
+      loaded.clear();
+    }
     if (this.selected()?.environmentId === environment.environmentId) {
       this.selected.set(null);
-      this.charts.set(null);
-      this.chartsError.set(null);
       return;
     }
     this.selected.set(environment);
-    this.charts.set(null);
-    await this.#loadCharts();
+    await this.#loadDetails();
   }
 
   protected async chooseRange(event: Event): Promise<void> {
     this.range.set((event.target as HTMLSelectElement).value as TimeRangeKey);
-    this.charts.set(null);
-    await this.#loadCharts();
+    for (const loaded of [this.charts, this.logs, this.traces]) {
+      loaded.clear();
+    }
+    await this.#loadDetails();
+  }
+
+  protected async openTrace(traceId: string): Promise<void> {
+    this.traceId.set(traceId);
+    this.trace.clear();
+    await this.trace.load(() => this.#api.trace(traceId));
+  }
+
+  protected closeTrace(): void {
+    this.traceId.set(null);
+    this.trace.clear();
   }
 
   async #loadOverview(): Promise<void> {
     this.overview.set(await this.#api.overview());
   }
 
-  async #loadCharts(): Promise<void> {
+  /** The chosen environment's metrics, logs and traces, side by side. */
+  async #loadDetails(): Promise<void> {
     const environment = this.selected();
     if (environment === null) {
       return;
     }
-    const request = ++this.#chartRequest;
-    this.chartsError.set(null);
-    try {
-      const charts = await this.#api.environment(environment.environmentId, this.range());
-      if (request === this.#chartRequest) {
-        this.charts.set(charts);
-      }
-    } catch (error) {
-      if (request === this.#chartRequest) {
-        this.chartsError.set(errorMessage(error));
-      }
-    }
+    const id = environment.environmentId;
+    const range = this.range();
+    await Promise.all([
+      this.overview()?.enabled ? this.charts.load(() => this.#api.environment(id, range)) : Promise.resolve(),
+      this.logs.load(() => this.#api.logs(id, range)),
+      this.traces.load(() => this.#api.traces(id, range)),
+    ]);
   }
 
-  /** Reads everything on the page again every so often, while it's open. */
+  /** Reads everything on the page again every so often, while it's open. An open trace doesn't change, so it stays. */
   #scheduleRefresh(): void {
     if (this.#destroyed) {
       return;
     }
     this.#refreshTimer = setTimeout(async () => {
       await this.#activity.run(() => this.#loadOverview());
-      await this.#loadCharts();
+      await this.#loadDetails();
       this.#scheduleRefresh();
     }, REFRESH_MS);
   }

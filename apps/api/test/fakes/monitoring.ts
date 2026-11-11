@@ -1,9 +1,11 @@
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
 import type { ApplicationView } from '../../src/catalog/application/application-catalog.ts';
 import { CatalogError } from '../../src/catalog/domain/errors.ts';
+import type { EnvironmentLogLine, EnvironmentLogs } from '../../src/environments/application/environment-logs.ts';
 import type { RunningEnvironment, RunningEnvironments } from '../../src/environments/application/running-environments.ts';
 import type { MetricKey, MetricValues } from '../../src/monitoring/domain/metrics.ts';
-import type { MetricsStore, MetricsWindow, Point } from '../../src/monitoring/application/ports.ts';
+import type { MetricsStore, MetricsWindow, Point, TraceStore } from '../../src/monitoring/application/ports.ts';
+import type { StoredTrace } from '../../src/monitoring/domain/traces.ts';
 
 /** Environments by company, answered in the current company only, as the real one does. */
 export class FakeRunningEnvironments implements RunningEnvironments {
@@ -45,7 +47,7 @@ function toView(application: { id: string; name: string; status: 'active' | 'arc
   return {
     id: application.id,
     name: application.name,
-    slug: application.name.toLowerCase(),
+    slug: application.name.toLowerCase().replace(/\s+/g, '-'),
     type: { key: 'restful-service', name: 'RESTful Service' },
     description: '',
     status: application.status,
@@ -85,6 +87,66 @@ export class FakeMetricsStore implements MetricsStore {
 
   #ask(environmentIds: readonly string[]): void {
     this.asked.push([...environmentIds]);
+    const failure = this.failure;
+    this.failure = null;
+    if (failure !== null) {
+      throw failure;
+    }
+  }
+}
+
+/** What each environment's version wrote, read in the current company only, as the real one does. */
+export class FakeEnvironmentLogs implements EnvironmentLogs {
+  readonly #environments: FakeRunningEnvironments;
+  readonly written = new Map<string, EnvironmentLogLine[]>();
+  readonly reads: { environmentId: string; since: Date; limit: number }[] = [];
+  /** Thrown by the next read, then cleared. */
+  failure: Error | null = null;
+
+  constructor(environments: FakeRunningEnvironments) {
+    this.#environments = environments;
+  }
+
+  async read(environmentId: string, options: { since: Date; limit: number }): Promise<EnvironmentLogLine[] | null> {
+    this.reads.push({ environmentId, ...options });
+    const failure = this.failure;
+    this.failure = null;
+    if (failure !== null) {
+      throw failure;
+    }
+    const environment = await this.#environments.find(environmentId);
+    if (environment === null) {
+      return null;
+    }
+    return environment.version === null
+      ? []
+      : (this.written.get(environmentId) ?? []).filter((line) => line.at >= options.since).slice(-options.limit);
+  }
+}
+
+/** A trace store in memory, with traces of every company, as a real one has. */
+export class FakeTraceStore implements TraceStore {
+  readonly traces: StoredTrace[] = [];
+  readonly searches: { serviceName: string; start: Date; end: Date; limit: number }[] = [];
+  /** Thrown by the next question, then cleared. */
+  failure: Error | null = null;
+
+  async recent(serviceName: string, window: { start: Date; end: Date }, limit: number): Promise<StoredTrace[]> {
+    this.#fail();
+    this.searches.push({ serviceName, ...window, limit });
+    return this.traces
+      .filter((trace) =>
+        trace.spans.some((span) => span.serviceName === serviceName && span.start >= window.start && span.start <= window.end),
+      )
+      .slice(0, limit);
+  }
+
+  async find(traceId: string): Promise<StoredTrace | null> {
+    this.#fail();
+    return this.traces.find((trace) => trace.traceId === traceId) ?? null;
+  }
+
+  #fail(): void {
     const failure = this.failure;
     this.failure = null;
     if (failure !== null) {

@@ -133,8 +133,10 @@ class SimulatedDocker {
   readonly calls: string[][] = [];
   readonly containers = new Map<
     string,
-    { image: string; status: string; port: number | null; health: string[]; exitCode: number; logs: string; env?: string }
+    { image: string; status: string; port: number | null; health: string[]; exitCode: number; logs: string; errors?: string; env?: string }
   >();
+  /** While set, Docker itself fails, as when its engine stopped. */
+  down = false;
   readonly networks = new Set<string>();
   readonly takenPorts = new Set<number>();
   /** Images the registry has. */
@@ -241,7 +243,10 @@ class SimulatedDocker {
         return port == null ? error('no public port') : ok(`127.0.0.1:${port}\n`);
       }
       case 'logs':
-        return ok(container?.logs ?? '');
+        if (this.down) return error('Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?');
+        if (container === undefined) return missing(name);
+        // Docker passes on each of the container's outputs on its own.
+        return { code: 0, stdout: container.logs, stderr: container.errors ?? '' };
       default:
         return error(`unknown command ${args.join(' ')}`);
     }
@@ -436,6 +441,54 @@ describe('the local Docker runtime', () => {
     await runtime.start(target, request(1));
 
     expect(await runtime.waitUntilHealthy(target, name, 5_000)).toMatchObject({ healthy: true });
+  });
+
+  it('reads what a container wrote to both its outputs, in order, with when each line came', async () => {
+    const docker = new SimulatedDocker();
+    const runtime = runtimeOn(docker);
+    await runtime.start(target, request(1));
+    const container = docker.containers.get(name)!;
+    container.logs = [
+      '2026-11-10T12:00:01.123456789Z {"level":30,"msg":"Ping received"}',
+      '2026-11-10T12:00:03.5Z plain text, with  spaces ',
+      '',
+    ].join('\n');
+    // The start of a long error output can be cut, so a line can come without its time.
+    container.errors = 'the end of a cut line\n2026-11-10T12:00:02+01:00 a warning\r\n';
+    const since = new Date('2026-11-10T10:00:00.000Z');
+
+    expect(await runtime.logs(target, name, { since, limit: 100 })).toEqual([
+      { at: new Date('2026-11-10T11:00:02.000Z'), stream: 'stderr', text: 'a warning' },
+      { at: new Date('2026-11-10T12:00:01.123Z'), stream: 'stdout', text: '{"level":30,"msg":"Ping received"}' },
+      { at: new Date('2026-11-10T12:00:03.500Z'), stream: 'stdout', text: 'plain text, with  spaces ' },
+    ]);
+    expect(docker.calls.at(-1)).toEqual(['logs', '--timestamps', '--since', '2026-11-10T10:00:00.000Z', '--tail', '100', name]);
+  });
+
+  it('reads only the latest lines, never more than a thousand, and none once the container is gone', async () => {
+    const docker = new SimulatedDocker();
+    const runtime = runtimeOn(docker);
+    await runtime.start(target, request(1));
+    docker.containers.get(name)!.logs = '2026-11-10T12:00:01Z one\n2026-11-10T12:00:02Z two\n2026-11-10T12:00:03Z three\n';
+    const since = new Date(0);
+
+    expect((await runtime.logs(target, name, { since, limit: 2 })).map((entry) => entry.text)).toEqual(['two', 'three']);
+    await runtime.logs(target, name, { since, limit: 50_000 });
+    expect(docker.calls.at(-1)).toContain('1000');
+
+    await runtime.remove(target, name, network);
+    expect(await runtime.logs(target, name, { since, limit: 100 })).toEqual([]);
+  });
+
+  it('says when Docker can’t give the logs, and refuses names that could be read as options', async () => {
+    const docker = new SimulatedDocker();
+    const runtime = runtimeOn(docker);
+    docker.down = true;
+
+    await expect(runtime.logs(target, name, { since: new Date(0), limit: 10 })).rejects.toThrow(
+      "Docker couldn't read the logs: Cannot connect to the Docker daemon",
+    );
+    await expect(runtime.logs(target, '--follow', { since: new Date(0), limit: 10 })).rejects.toThrow(PermanentDeploymentError);
   });
 
   it('removes everything of an environment, and is safe to repeat', async () => {

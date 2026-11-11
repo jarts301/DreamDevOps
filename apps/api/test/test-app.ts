@@ -93,6 +93,8 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   secretsKeyFile: '/nonexistent/environment-secrets.key',
   prometheusUrl: null,
   appMetricsEndpoint: null,
+  jaegerUrl: null,
+  appTracesEndpoint: null,
   sampleData: null,
   ...overrides,
 });

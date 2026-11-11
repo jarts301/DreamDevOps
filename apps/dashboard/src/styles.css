@@ -804,3 +804,109 @@ tr[data-production='true'] > td:first-child {
   padding: 28px 0;
   text-align: center;
 }
+
+/* Monitoring: logs read like a terminal, newest first, and errors stand out. */
+.card h3 {
+  margin: 20px 0 8px;
+  font-size: 1rem;
+}
+
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.log-lines {
+  max-height: 420px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.log-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.log-time {
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.log-level {
+  min-width: 3.5em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.log-line[data-level='warn'] .log-level,
+.log-line[data-level='error'] .log-level,
+.log-line[data-level='fatal'] .log-level,
+.log-line[data-level='stderr'] .log-level {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.log-message {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-trace {
+  padding: 0 8px;
+  font-size: 0.75rem;
+}
+
+/* Monitoring: a trace is a timeline, each span under the one it's part of. */
+.trace-spans {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-span {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 5em;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.trace-span-track {
+  position: relative;
+  height: 10px;
+  background: var(--color-background);
+  border-radius: 4px;
+}
+
+.trace-span-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  background: var(--color-primary);
+  border-radius: 4px;
+}
+
+.trace-span[data-error='true'] .trace-span-bar {
+  background: var(--color-danger);
+}
+
+.trace-span-duration {
+  text-align: right;
+  white-space: nowrap;
+}

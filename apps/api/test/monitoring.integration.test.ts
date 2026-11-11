@@ -18,6 +18,10 @@ import { HttpStub, type RecordedRequest } from './support/http-stub.ts';
 // stands in for Prometheus, and answers for whichever environments a query names.
 const prometheus = new HttpStub();
 const METRICS_ENDPOINT = 'http://metrics.test:9090/api/v1/otlp/v1/metrics';
+// Traces go to Jaeger, which a stub stands in for too. It answers with what `jaegerTraces` holds.
+const jaeger = new HttpStub();
+const TRACES_ENDPOINT = 'http://traces.test:4318/v1/traces';
+let jaegerTraces: object[] = [];
 
 /** Which metric each query is about, and the value the stub answers with. */
 const VALUES: readonly [string, string][] = [
@@ -70,24 +74,59 @@ beforeAll(async () => {
       },
     };
   });
-  await startDeploymentWorldWith({ prometheusUrl: prometheus.url, appMetricsEndpoint: METRICS_ENDPOINT });
+  await jaeger.start();
+  jaeger.on('GET', /^\/api\/traces\?/, () => ({ body: { data: jaegerTraces } }));
+  jaeger.on('GET', /^\/api\/traces\/[0-9a-f]+$/, (recorded) => {
+    const found = jaegerTraces.filter((trace) => recorded.path.endsWith((trace as { traceID: string }).traceID));
+    return found.length === 0 ? { status: 404, body: { data: null } } : { body: { data: found } };
+  });
+  await startDeploymentWorldWith({
+    prometheusUrl: prometheus.url,
+    appMetricsEndpoint: METRICS_ENDPOINT,
+    jaegerUrl: jaeger.url,
+    appTracesEndpoint: TRACES_ENDPOINT,
+  });
 }, 180_000);
 
 afterAll(async () => {
   await stopDeploymentWorld();
   await prometheus.stop();
+  await jaeger.stop();
 });
 
 beforeEach(() => {
   resetHosts();
   prometheus.requests.length = 0;
+  jaeger.requests.length = 0;
+  jaegerTraces = [];
+});
+
+/** A trace as Jaeger gives it, with one span from an environment. */
+const jaegerTrace = (traceId: string, service: string, environmentId: string) => ({
+  traceID: traceId,
+  spans: [
+    {
+      traceID: traceId,
+      spanID: '00f067aa0ba902b7',
+      operationName: 'GET',
+      references: [],
+      startTime: (Date.now() - 60_000) * 1000,
+      duration: 4_000,
+      tags: [
+        { key: 'span.kind', type: 'string', value: 'server' },
+        { key: 'url.path', type: 'string', value: '/api/ping' },
+      ],
+      processID: 'p1',
+    },
+  ],
+  processes: { p1: { serviceName: service, tags: [{ key: 'dreamdevops.environment.id', type: 'string', value: environmentId }] } },
 });
 
 const applicationName = async (world: World) =>
   ((await world.viewer.get(`/api/v1/company/applications/${world.applicationId}`).expect(200)).body as { name: string }).name;
 
 describe('a running application', () => {
-  it('is told where to send its metrics, and which environment it is, keeping attributes of its own', async () => {
+  it('is told where to send its metrics and traces, and which environment and service it is, keeping attributes of its own', async () => {
     const world = await setUp();
     const image = await developmentImage(world);
     const staging = await createEnvironment(world, world.techLead, { name: 'Staging' });
@@ -99,6 +138,8 @@ describe('a running application', () => {
     expect((await deployed(world.developer, staging.id, { buildId: image.id })).status).toBe('succeeded');
 
     expect(local.environmentOf(staging.target!.id)).toMatchObject({
+      OTEL_SERVICE_NAME: world.name,
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: TRACES_ENDPOINT,
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: METRICS_ENDPOINT,
       OTEL_METRIC_EXPORT_INTERVAL: '15000',
       OTEL_RESOURCE_ATTRIBUTES: `team=billing,dreamdevops.environment.id=${staging.id}`,
@@ -178,5 +219,80 @@ describe('monitoring', () => {
 
     const { body } = await world.viewer.get('/api/v1/company/monitoring/environments').expect(200);
     expect(body.environments).toEqual([]);
+  });
+});
+
+describe('logs', () => {
+  it('are what the running version writes, read only for the company’s own environments', async () => {
+    const [ours, theirs] = await Promise.all([setUp(), setUp()]);
+    const image = await developmentImage(ours);
+    const staging = await createEnvironment(ours, ours.techLead, { name: 'Staging' });
+    await deployed(ours.developer, staging.id, { buildId: image.id });
+    const now = Date.now();
+    local.write(staging.target!.id, { at: new Date(now - 2 * 60 * 60_000), stream: 'stdout', text: 'two hours ago' });
+    local.write(staging.target!.id, {
+      at: new Date(now - 60_000),
+      stream: 'stdout',
+      text: '{"level":30,"msg":"Ping received","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}',
+    });
+
+    const { body } = await ours.viewer.get(`/api/v1/company/monitoring/environments/${staging.id}/logs?range=1h`).expect(200);
+
+    expect(body.running).toBe(true);
+    expect(body.lines).toEqual([
+      {
+        at: new Date(now - 60_000).toISOString(),
+        stream: 'stdout',
+        level: 'info',
+        message: 'Ping received',
+        traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+        spanId: null,
+      },
+    ]);
+    expect(local.logReads.at(-1)).toMatchObject({ name: expect.stringContaining(ours.name), limit: 500 });
+    const { body: refused } = await theirs.viewer.get(`/api/v1/company/monitoring/environments/${staging.id}/logs`).expect(404);
+    expect(refused.detail).toBe('There’s no such environment.');
+  });
+
+  it('are none once what ran is stopped', async () => {
+    const world = await setUp();
+    const image = await developmentImage(world);
+    const staging = await createEnvironment(world, world.techLead, { name: 'Staging' });
+    await deployed(world.developer, staging.id, { buildId: image.id });
+    local.write(staging.target!.id, { at: new Date(), stream: 'stdout', text: 'still here' });
+    const { body: queued } = await world.developer.post(`/api/v1/company/environments/${staging.id}/stop`).send({}).expect(202);
+    await finished(world.developer, (queued as Deployment).id);
+
+    const { body } = await world.viewer.get(`/api/v1/company/monitoring/environments/${staging.id}/logs`).expect(200);
+
+    expect([body.running, body.lines]).toEqual([false, []]);
+  });
+});
+
+describe('traces', () => {
+  it('are found by the application’s short name, and shown only with the company’s own spans', async () => {
+    const [ours, theirs] = await Promise.all([setUp(), setUp()]);
+    const image = await developmentImage(ours);
+    const staging = await createEnvironment(ours, ours.techLead, { name: 'Staging' });
+    await deployed(ours.developer, staging.id, { buildId: image.id });
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+    jaegerTraces = [jaegerTrace(traceId, ours.name, staging.id)];
+
+    const { body } = await ours.viewer.get(`/api/v1/company/monitoring/environments/${staging.id}/traces`).expect(200);
+
+    expect(body).toMatchObject({ enabled: true, serviceName: ours.name, traces: [{ traceId, name: 'GET', spans: 1, errors: 0 }] });
+    expect(jaeger.calls()[0]).toMatch(new RegExp(`^GET /api/traces\\?service=${ours.name}&start=\\d+&end=\\d+&limit=100$`));
+
+    const { body: trace } = await ours.developer.get(`/api/v1/company/monitoring/traces/${traceId}`).expect(200);
+    expect(trace.spans).toEqual([
+      expect.objectContaining({
+        name: 'GET',
+        environmentId: staging.id,
+        environmentName: 'Staging',
+        applicationName: await applicationName(ours),
+        attributes: { 'url.path': '/api/ping' },
+      }),
+    ]);
+    await theirs.viewer.get(`/api/v1/company/monitoring/traces/${traceId}`).expect(404);
   });
 });

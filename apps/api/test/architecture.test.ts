@@ -58,7 +58,13 @@ const CONTEXTS: Readonly<Record<string, Context>> = {
   builds: { schemas: ['builds'], published: ['application/deployable-images.ts', 'builds.module.ts'] },
   environments: {
     schemas: ['environments'],
-    published: ['application/running-environments.ts', 'domain/events.ts', 'domain/telemetry.ts', 'environments.module.ts'],
+    published: [
+      'application/environment-logs.ts',
+      'application/running-environments.ts',
+      'domain/events.ts',
+      'domain/telemetry.ts',
+      'environments.module.ts',
+    ],
   },
   monitoring: { schemas: [], published: ['monitoring.module.ts'] },
 };

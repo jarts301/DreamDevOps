@@ -84,32 +84,56 @@ describe('variable values', () => {
     });
   });
 
-  it('tell the container where to send its metrics, and which environment it is, when the platform keeps metrics', () => {
-    const endpoint = 'http://host.docker.internal:9090/api/v1/otlp/v1/metrics';
+  const targets = (metricsEndpoint: string | null, tracesEndpoint: string | null) => ({
+    environmentId: 'env-1',
+    serviceName: 'billing-api',
+    metricsEndpoint,
+    tracesEndpoint,
+  });
+  const METRICS = 'http://host.docker.internal:9090/api/v1/otlp/v1/metrics';
+  const TRACES = 'http://host.docker.internal:4318/v1/traces';
 
-    expect(withTelemetry({ LOG_LEVEL: 'debug' }, 'env-1', endpoint)).toEqual({
+  it('tell the container where to send its metrics and traces, and which environment and service it is', () => {
+    expect(withTelemetry({ LOG_LEVEL: 'debug' }, targets(METRICS, TRACES))).toEqual({
       LOG_LEVEL: 'debug',
-      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: endpoint,
+      OTEL_SERVICE_NAME: 'billing-api',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: METRICS,
       OTEL_METRIC_EXPORT_INTERVAL: '15000',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: TRACES,
       OTEL_RESOURCE_ATTRIBUTES: 'dreamdevops.environment.id=env-1',
     });
     expect(ENVIRONMENT_ATTRIBUTE).toBe('dreamdevops.environment.id');
   });
 
-  it('add nothing when the platform keeps no metrics', () => {
-    expect(withTelemetry({ LOG_LEVEL: 'debug' }, 'env-1', null)).toEqual({ LOG_LEVEL: 'debug' });
+  it('tell the container only about what the platform keeps', () => {
+    expect(withTelemetry({}, targets(METRICS, null))).toEqual({
+      OTEL_SERVICE_NAME: 'billing-api',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: METRICS,
+      OTEL_METRIC_EXPORT_INTERVAL: '15000',
+      OTEL_RESOURCE_ATTRIBUTES: 'dreamdevops.environment.id=env-1',
+    });
+    expect(withTelemetry({}, targets(null, TRACES))).toEqual({
+      OTEL_SERVICE_NAME: 'billing-api',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: TRACES,
+      OTEL_RESOURCE_ATTRIBUTES: 'dreamdevops.environment.id=env-1',
+    });
   });
 
-  it('let the environment send its metrics elsewhere, but always say which environment it is', () => {
+  it('add nothing when the platform keeps neither metrics nor traces', () => {
+    expect(withTelemetry({ LOG_LEVEL: 'debug' }, targets(null, null))).toEqual({ LOG_LEVEL: 'debug' });
+  });
+
+  it('let the environment send them elsewhere, under another name, but always say which environment it is', () => {
     const own = {
+      OTEL_SERVICE_NAME: 'billing',
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://metrics.example.com/v1/metrics',
       OTEL_METRIC_EXPORT_INTERVAL: '60000',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://traces.example.com/v1/traces',
       OTEL_RESOURCE_ATTRIBUTES: ' team=billing,dreamdevops.environment.id=someone-else ',
     };
 
-    expect(withTelemetry(own, 'env-1', 'http://metrics.test/v1/metrics')).toEqual({
-      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://metrics.example.com/v1/metrics',
-      OTEL_METRIC_EXPORT_INTERVAL: '60000',
+    expect(withTelemetry(own, targets(METRICS, TRACES))).toEqual({
+      ...own,
       // The last one counts, so the environment's own ID wins.
       OTEL_RESOURCE_ATTRIBUTES: 'team=billing,dreamdevops.environment.id=someone-else,dreamdevops.environment.id=env-1',
     });
