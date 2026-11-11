@@ -133,3 +133,14 @@ export function containerName(applicationSlug: string, environmentSlug: string, 
 export function networkName(environmentId: string): string {
   return `dreamdevops-env-${environmentId.replaceAll('-', '')}`;
 }
+
+/** What a container may use at most, in words, such as "1 CPU and 512 MiB of memory". */
+export function describeLimits(limits: { readonly cpus: number; readonly memoryBytes: number } | null): string {
+  if (limits === null) {
+    return 'None';
+  }
+  const cpus = `${Number(limits.cpus.toFixed(2))} ${limits.cpus === 1 ? 'CPU' : 'CPUs'}`;
+  const mebibytes = limits.memoryBytes / (1024 * 1024);
+  const memory = mebibytes >= 1024 ? `${Number((mebibytes / 1024).toFixed(2))} GiB` : `${Number(mebibytes.toFixed(1))} MiB`;
+  return `${cpus} and ${memory} of memory`;
+}

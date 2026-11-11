@@ -38,7 +38,7 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Environments | Each application's environments, such as staging and production, on the company's hosting targets. Every company starts with **This machine**, the Docker of the machine that runs DreamDevOps, and can plan others: Kubernetes or Docker servers it runs itself, or AWS, Azure or Google Cloud. Switching an environment to another target is one change. Production is protected: only Tech Leads and Operators change it, by typing its name and giving a reason, and it can't be archived. |
 | Deployments | Deploying any version that built to an environment on This machine, with every step on the dashboard: checking, verifying the signature, pulling, starting and waiting until it's healthy. A version that isn't healthy is rolled back. Production runs only releases. Moving an environment to another target moves what runs in it. |
 | Variables and secrets | Each environment's own settings, which its containers get as environment variables when they start. Secrets are encrypted with a key only the API holds, and never shown again. |
-| Monitoring | Each running application's CPU, memory, requests, response times and server errors, now and charted over time, its logs, and traces of its requests across applications, on the dashboard's **Monitoring** page. Applications send metrics and traces with OpenTelemetry, to Prometheus and Jaeger, which the platform runs, and the platform reads their logs from their containers. |
+| Monitoring | Each running application's CPU and memory against its container's limits, its requests, response times and server errors, now and charted over time, its logs, and traces of its requests across applications, on the dashboard's **Monitoring** page. Applications send metrics and traces with OpenTelemetry, to Prometheus and Jaeger, which the platform runs, and the platform reads their logs from their containers. |
 | Editions | Every company on the free Community Edition, with a per-company setting and an extension point for the Commercial Edition |
 | Dashboard | Screens for all of the above, in light and dark themes |
 
@@ -244,6 +244,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Editions and entitlements](apps/api/src/editions/README.md) | Editions, the feature catalog, and how commercial features plug in |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |
+| [Current flows and testing](docs/reports/2026-11-current-flows-and-testing.md) | Every flow from signing in to monitoring, with what to expect, how to test it end to end, and a checklist |
 
 ## Contributing
 

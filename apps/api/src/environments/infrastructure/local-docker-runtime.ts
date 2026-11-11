@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { type CommandResult, CommandNotFoundError, lastLines, runCommand } from '../../shared/run-command.ts';
 import {
+  type ContainerLimits,
   type ContainerRequest,
   type Health,
   type HostRuntime,
@@ -33,7 +34,15 @@ export interface LocalDockerRuntimeOptions {
 }
 
 /** What each container may use, so one application can't starve the machine. */
-const LIMITS = ['--memory', '512m', '--cpus', '1', '--pids-limit', '256'];
+export const CONTAINER_LIMITS: ContainerLimits = { cpus: 1, memoryBytes: 512 * 1024 * 1024 };
+const LIMITS = [
+  '--memory',
+  `${CONTAINER_LIMITS.memoryBytes / (1024 * 1024)}m`,
+  '--cpus',
+  String(CONTAINER_LIMITS.cpus),
+  '--pids-limit',
+  '256',
+];
 
 /** Signs of a problem that may pass, such as the Docker engine restarting or a network blip. */
 const TEMPORARY = [
@@ -145,7 +154,12 @@ export class LocalDockerRuntime implements HostRuntime {
         throw new PermanentDeploymentError(`The container couldn't start: ${log}`);
       }
       const port = containerPort === null ? null : await this.#publishedPort(request.name, containerPort);
-      return { port, address: port === null ? null : `http://${this.#publicHost(target)}:${port}`, replaced };
+      return {
+        port,
+        address: port === null ? null : `http://${this.#publicHost(target)}:${port}`,
+        replaced,
+        limits: CONTAINER_LIMITS,
+      };
     } catch (error) {
       // Nothing new started, so the version before runs again, as if nothing happened.
       await this.rollBack(target, request.name).catch(() => false);

@@ -47,6 +47,7 @@ const running = (overrides: Partial<RunningEnvironment>): RunningEnvironment => 
   since: '2026-11-10T09:00:00.000Z',
   address: 'http://localhost:49153',
   targetName: 'This machine',
+  limits: { cpus: 1, memoryBytes: 512 * 1024 * 1024 },
   ...overrides,
 });
 

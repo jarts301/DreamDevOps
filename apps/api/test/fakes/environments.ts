@@ -97,7 +97,12 @@ export class FakeHostRuntime implements HostRuntime {
       labels: request.labels,
       environment: { ...request.environment },
     });
-    return { port, address: `http://localhost:${port}`, replaced: this.containers.has(previous) };
+    return {
+      port,
+      address: `http://localhost:${port}`,
+      replaced: this.containers.has(previous),
+      limits: { cpus: 1, memoryBytes: 512 * 1024 * 1024 },
+    };
   }
 
   async waitUntilHealthy(target: HostTarget, name: string): Promise<Health> {

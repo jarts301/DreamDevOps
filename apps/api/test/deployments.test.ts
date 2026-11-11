@@ -10,6 +10,7 @@ import {
   assertMayBecomeProduction,
   containerName,
   deploymentKind,
+  describeLimits,
   deploymentSteps,
   imageProblem,
   networkName,
@@ -69,6 +70,12 @@ describe('deployments', () => {
     expect(deploymentKind(null, 'b')).toBe('deploy');
     expect(deploymentKind('b', 'b')).toBe('deploy');
     expect(deploymentKind('a', 'b')).toBe('move');
+  });
+
+  it('say what their containers may use, in words', () => {
+    expect(describeLimits({ cpus: 1, memoryBytes: 512 * 1024 * 1024 })).toBe('1 CPU and 512 MiB of memory');
+    expect(describeLimits({ cpus: 0.5, memoryBytes: 2 * 1024 * 1024 * 1024 })).toBe('0.5 CPUs and 2 GiB of memory');
+    expect(describeLimits(null)).toBe('None');
   });
 
   it('go through the steps each kind needs', () => {
@@ -300,12 +307,19 @@ describe('the local Docker runtime', () => {
 
     const started = await runtime.start(target, request(1));
 
-    expect(started).toEqual({ port: 49_153, address: 'http://localhost:49153', replaced: false });
+    expect(started).toEqual({
+      port: 49_153,
+      address: 'http://localhost:49153',
+      replaced: false,
+      limits: { cpus: 1, memoryBytes: 536_870_912 },
+    });
     expect(docker.networks.has(network)).toBe(true);
     const run = docker.calls.find((call) => call[0] === 'run')!;
     expect(run).toEqual(
       expect.arrayContaining(['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--memory', '512m', '--pids-limit', '256']),
     );
+    // What it reports is what Docker was told.
+    expect(run.slice(run.indexOf('--memory'), run.indexOf('--memory') + 4)).toEqual(['--memory', '512m', '--cpus', '1']);
     expect(run.slice(run.indexOf('--network'), run.indexOf('--network') + 2)).toEqual(['--network', network]);
     expect(run.slice(run.indexOf('--restart'), run.indexOf('--restart') + 2)).toEqual(['--restart', 'unless-stopped']);
     expect(run.slice(-3)).toEqual(['--publish', '127.0.0.1::8080', image(1)]);
@@ -334,7 +348,7 @@ describe('the local Docker runtime', () => {
 
     const second = await runtime.start(target, request(2, first.port));
 
-    expect(second).toEqual({ port: first.port, address: first.address, replaced: true });
+    expect(second).toEqual({ port: first.port, address: first.address, replaced: true, limits: first.limits });
     expect(docker.containers.get(`${name}-previous`)).toMatchObject({ image: image(1), status: 'exited' });
     expect(docker.containers.get(name)).toMatchObject({ image: image(2), status: 'running' });
     await runtime.commit(target, name);
@@ -522,7 +536,7 @@ describe('the local Docker runtime', () => {
 
     const started = await runtimeOn(docker).start(target, request(1));
 
-    expect(started).toEqual({ port: null, address: null, replaced: false });
+    expect(started).toEqual({ port: null, address: null, replaced: false, limits: { cpus: 1, memoryBytes: 536_870_912 } });
     expect(docker.calls.find((call) => call[0] === 'run')).not.toContain('--publish');
   });
 

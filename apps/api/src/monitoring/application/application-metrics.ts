@@ -25,6 +25,8 @@ export interface MonitoredEnvironment {
   readonly since: string | null;
   readonly address: string | null;
   readonly targetName: string | null;
+  /** What its container may use at most, to set its CPU and memory against, or null when unknown. */
+  readonly limits: { readonly cpus: number; readonly memoryBytes: number } | null;
 }
 
 export interface MonitoringOverview {
@@ -166,6 +168,7 @@ function monitored(environment: RunningEnvironment, applicationName: string): Mo
     since: environment.since,
     address: environment.address,
     targetName: environment.targetName,
+    limits: environment.limits,
   };
 }
 

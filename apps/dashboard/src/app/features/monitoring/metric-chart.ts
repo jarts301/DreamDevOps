@@ -35,7 +35,9 @@ const PADDING = 4;
             <polyline [attr.points]="line" />
           }
         </svg>
-        <p class="cell-note">Highest {{ highest() }}. {{ series().description }}</p>
+        <p class="cell-note">
+          Highest {{ highest() }}{{ limit() ? ', of a limit of ' + limit() : '' }}. {{ series().description }}
+        </p>
       }
     </figure>
   `,
@@ -46,6 +48,8 @@ export class MetricChart {
   readonly start = input.required<string>();
   readonly end = input.required<string>();
   readonly stepSeconds = input.required<number>();
+  /** What the container may use at most, in words, such as 512 MiB, for the metrics that have one. */
+  readonly limit = input<string | null>(null);
 
   protected readonly width = WIDTH;
   protected readonly height = HEIGHT;

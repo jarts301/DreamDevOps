@@ -174,6 +174,8 @@ describe('monitoring', () => {
         since: expect.any(String),
         address: expect.stringMatching(/^http:\/\/localhost:\d+$/),
         targetName: 'This machine',
+        // What its container started with, as its deployment recorded it.
+        limits: { cpus: 1, memoryBytes: 536_870_912 },
         latest: { cpu: 12.5, memory: 52_428_800, requests: 3, responseTime: 0.08, errors: 0 },
       },
     ]);
@@ -191,7 +193,11 @@ describe('monitoring', () => {
 
     const { body } = await ours.developer.get(`/api/v1/company/monitoring/environments/${staging.id}?range=15m`).expect(200);
 
-    expect(body.environment).toMatchObject({ environmentId: staging.id, version: image.version });
+    expect(body.environment).toMatchObject({
+      environmentId: staging.id,
+      version: image.version,
+      limits: { cpus: 1, memoryBytes: 536_870_912 },
+    });
     expect(body.range).toMatchObject({ key: '15m', stepSeconds: 15 });
     expect(body.series.map((series: { key: string; points: unknown[] }) => [series.key, series.points.length])).toEqual([
       ['cpu', 2],

@@ -910,3 +910,9 @@ tr[data-production='true'] > td:first-child {
   text-align: right;
   white-space: nowrap;
 }
+
+/* Monitoring: a value close to its container's limit stands out. */
+.cell-note[data-tone='danger'] {
+  color: var(--color-danger);
+  font-weight: 600;
+}

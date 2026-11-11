@@ -39,6 +39,7 @@ const running = (overrides: Partial<RunningEnvironment>): RunningEnvironment => 
   since: '2026-11-10T09:00:00.000Z',
   address: 'http://localhost:49153',
   targetName: 'This machine',
+  limits: { cpus: 1, memoryBytes: 512 * 1024 * 1024 },
   ...overrides,
 });
 
@@ -49,7 +50,7 @@ function world() {
     running({ environmentId: PRODUCTION, environmentName: 'Production', production: true, version: '1.3.0' }),
     running({ environmentId: WEBSITE_STAGING, applicationId: WEBSITE, version: '2.0.0-rc.1' }),
     running({}),
-    running({ environmentId: IDLE, environmentName: 'Demo', version: null, since: null, address: null, targetName: null }),
+    running({ environmentId: IDLE, environmentName: 'Demo', version: null, since: null, address: null, targetName: null, limits: null }),
   ]);
   environments.byCompany.set(COMPANY_B, [running({ environmentId: OTHER_COMPANY_ENV, applicationId: OTHER_APP })]);
   const catalog = new FakeApplicationCatalog();
@@ -130,6 +131,7 @@ describe('the metrics of running applications', () => {
       since: '2026-11-10T09:00:00.000Z',
       address: 'http://localhost:49153',
       targetName: 'This machine',
+      limits: { cpus: 1, memoryBytes: 536_870_912 },
       latest: { cpu: 12.5, memory: 50_000_000, requests: 3, responseTime: 0.12, errors: 0 },
     });
     // An application that sent nothing yet has no values, rather than zeros.

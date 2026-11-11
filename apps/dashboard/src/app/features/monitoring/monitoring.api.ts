@@ -16,6 +16,12 @@ export interface MetricDefinition {
 /** Each metric's latest value, or null where the application sent nothing to work it out from. */
 export type MetricValues = Readonly<Record<MetricKey, number | null>>;
 
+/** What a container may use at most. */
+export interface ContainerLimits {
+  readonly cpus: number;
+  readonly memoryBytes: number;
+}
+
 export interface MonitoredEnvironment {
   readonly environmentId: string;
   readonly environmentName: string;
@@ -26,6 +32,8 @@ export interface MonitoredEnvironment {
   readonly since: string | null;
   readonly address: string | null;
   readonly targetName: string | null;
+  /** What its container may use at most, or null when unknown. */
+  readonly limits: ContainerLimits | null;
 }
 
 export interface MonitoringOverview {

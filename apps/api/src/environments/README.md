@@ -91,7 +91,7 @@ Each deployment runs these steps in the background, and saves its progress after
 | Check the version and environment | Checks again what was checked when it was asked for, as things may have changed | The environment was archived or moved, the target was archived or can't be deployed to, the image is gone, or production would run anything but a release |
 | Verify the signature | Reads the image's signatures from the registry, and checks one was made with the platform's key for this repository and digest | No signature checks out. Nothing is pulled. |
 | Pull the image | Downloads the image by its digest, only from the platform's registry | The registry refuses it |
-| Start the new version | Reads the environment's variables, opens its secrets, and starts the image with them as the environment's container. The version before it is kept, stopped. | A secret can't be opened, or the container can't start |
+| Start the new version | Reads the environment's variables, opens its secrets, and starts the image with them as the environment's container, within the host's limits, which the deployment records. The version before it is kept, stopped. | A secret can't be opened, or the container can't start |
 | Wait until it's healthy | Waits for the image's health check, up to `DEPLOY_HEALTH_TIMEOUT_SECONDS`, then removes the version before | It reports unhealthy, stops, or isn't healthy in time |
 | Remove it from the previous host | Moves only: removes it from the old target | Never. A failure is a warning. |
 
@@ -141,7 +141,7 @@ Each environment gets:
 - **Its own Docker network**, so it can't reach other environments' or other companies' containers.
 - **A port on 127.0.0.1**, chosen by Docker on the first deployment and kept after that, so its address, such as `http://localhost:49153`, stays the same. Only the image's first single TCP port, such as `8080/tcp`, is published. Set `LOCAL_HOSTING_BIND_ADDRESS` to let other machines reach it, and the target's host name so addresses use the name people know.
 
-Containers run hardened: with no Linux capabilities, no privilege escalation, 512 MB of memory, one CPU and 256 processes at most, and they restart with Docker. Images already run as a user other than root, and have a health check, as [Builds](../builds/README.md#the-steps) requires. Pulling uses the platform's registry account in a throwaway Docker configuration, never the person's own.
+Containers run hardened: with no Linux capabilities, no privilege escalation, 512 MiB of memory, one CPU and 256 processes at most, and they restart with Docker. Each deployment records its container's CPU and memory limits, which [Monitoring](../monitoring/README.md#limits) shows beside what it uses. Images already run as a user other than root, and have a health check, as [Builds](../builds/README.md#the-steps) requires. Pulling uses the platform's registry account in a throwaway Docker configuration, never the person's own.
 
 This machine is for trying things out and for small teams. Every company's applications share the machine that runs DreamDevOps, and, as with builds, they run code from the company's own developers: an application can reach services this machine offers to its containers, such as Docker Desktop's `host.docker.internal`. That includes Prometheus and Jaeger, which applications must reach to send their metrics and traces, and which answer questions about every company's. So on a server shared by several companies, or one that holds data applications mustn't reach, set `LOCAL_HOSTING=off`. Companies then can't connect it, and existing targets for it can't be deployed to.
 
@@ -240,7 +240,7 @@ These events, in `domain/events.ts`, are the module's contract with the modules 
 
 | Query | In | Answers |
 |---|---|---|
-| `RunningEnvironments` | `application/running-environments.ts` | The active environments a version runs in, or one environment |
+| `RunningEnvironments` | `application/running-environments.ts` | The active environments a version runs in, or one environment, with the limits its container started with |
 | `EnvironmentLogs` | `application/environment-logs.ts` | The lines the version in an environment wrote since a moment, read from its container on the host it runs on, through the runtime's `logs` |
 
 `domain/telemetry.ts` holds the attribute metrics and traces carry, `dreamdevops.environment.id`, which both modules use.

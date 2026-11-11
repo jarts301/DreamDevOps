@@ -49,6 +49,12 @@ Each is worked out from OpenTelemetry's standard metrics, by their names:
 
 An application that sends none of one shows **No data** for it, rather than zero. The Angular frontend blueprint sends CPU and memory only, because nginx only serves files.
 
+### Limits
+
+CPU and memory show against what the container may use at most, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**. A value at 90% of its limit or more stands out. A container at its memory limit is stopped by its host, and one at its CPU limit is slowed down.
+
+The limits come from the deployment that started the container. The host reports what it started it with, and the deployment records it, in its **Start the new version** step too. So what's shown is what that container really has, even after the host's limits change for new deployments. Memory is shown in MiB, as hosts set it. Where the limits aren't known, such as on a host that sets none, none are shown.
+
 The definitions are in `domain/metrics.ts`, and their PromQL in `infrastructure/prometheus-metrics-store.ts`.
 
 ## Logs
@@ -82,7 +88,7 @@ All routes start with `/api/v1`, need `dashboards:view`, which every company rol
 
 | Route | Purpose |
 |---|---|
-| `GET /company/monitoring/environments` | Every active environment a version runs in, by application, with its latest metrics. `enabled` says whether the server keeps metrics, and `problem` why they couldn't be read, if they couldn't. The environments are listed either way. |
+| `GET /company/monitoring/environments` | Every active environment a version runs in, by application, with its latest metrics and its container's `limits`, `cpus` and `memoryBytes`, or null. `enabled` says whether the server keeps metrics, and `problem` why they couldn't be read, if they couldn't. The environments are listed either way. |
 | `GET /company/monitoring/environments/:id?range=1h` | One environment's metrics over the last `15m`, `1h` (default), `6h` or `24h`, about 60 points each, for charts |
 | `GET /company/monitoring/environments/:id/logs?range=1h` | The latest 500 lines its version wrote within the range, oldest first. `running` says whether a version runs in it. |
 | `GET /company/monitoring/environments/:id/traces?range=1h` | The latest 20 traces it took part in within the range, newest first. `enabled` says whether the server keeps traces. |
@@ -115,6 +121,5 @@ Errors use the API's `application/problem+json` format: `400` for another range 
 - **Kept logs:** logs come from the running container only, so they end with it. Searching older logs needs a log store.
 - **Traces from browsers:** the Angular blueprint starts each trace, but doesn't send the browser's own span, so a trace starts at the API, under a parent span nobody reported.
 - **Checked senders:** Prometheus and Jaeger accept data from anything that reaches them, labelled as the sender says. A collector that checks each environment's own token would stop one environment sending as another.
-- **Resource limits:** charts don't show the limits containers run with, such as 512 MB of memory on This machine.
 - **Other providers:** only This machine deploys, so only it is monitored. Other providers will need their own way to reach the stores and read logs.
 - **Older blueprints:** applications started from blueprint versions before 1.2.0 send no metrics or traces, and before 1.3.0 their log lines carry no trace. Their logs still show, as every application's do. Copying the files the [blueprints guide](../../../../blueprints/README.md#metrics-logs-and-traces) lists brings them up to date.

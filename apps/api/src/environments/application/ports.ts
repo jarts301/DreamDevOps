@@ -38,12 +38,21 @@ export interface PulledImage {
   readonly exposedPorts: readonly string[];
 }
 
+/** The most a container may use, so one application can't starve its host. */
+export interface ContainerLimits {
+  /** CPU cores, such as 1 or 0.5. */
+  readonly cpus: number;
+  readonly memoryBytes: number;
+}
+
 export interface StartedContainer {
   /** The port people reach it on, or null when the image listens on none. */
   readonly port: number | null;
   readonly address: string | null;
   /** Whether a version ran before it. It's kept, stopped, until this one is healthy. */
   readonly replaced: boolean;
+  /** What it may use at most, or null when its host sets no limits. */
+  readonly limits: ContainerLimits | null;
 }
 
 /** One line a container wrote, with when Docker received it. */

@@ -76,6 +76,7 @@ describe('deploying to an environment', () => {
     expect(stepOf(done, 'verify').checks.every((check) => check.outcome === 'passed')).toBe(true);
     expect(done.address).toMatch(/^http:\/\/localhost:\d+$/);
     expect(stepOf(done, 'health').facts).toEqual([{ label: 'Address', value: done.address }]);
+    expect(stepOf(done, 'start').facts).toContainEqual({ label: 'Limits', value: '1 CPU and 512 MiB of memory' });
     const running = local.running((await environment(world, staging.id)).target!.id);
     expect(running).toEqual([{ name: expect.stringMatching(/^dreamdevops-.+-staging-[0-9a-f]{12}$/), image: digestOf(image), port: expect.any(Number) }]);
     expect(await environment(world, staging.id)).toMatchObject({

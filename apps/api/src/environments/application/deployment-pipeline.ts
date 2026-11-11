@@ -7,6 +7,7 @@ import { type Check, failed, failures, finishStep, passed, type StepOutcome, war
 import {
   containerName,
   DEPLOYMENT_STEP_NAMES,
+  describeLimits,
   type DeploymentStep,
   type DeploymentStepKey,
   imageKindName,
@@ -389,6 +390,7 @@ export class DeploymentPipeline {
       facts: [
         { label: 'Container', value: context.container },
         { label: 'Port', value: context.started.port === null ? 'None' : String(context.started.port) },
+        { label: 'Limits', value: describeLimits(context.started.limits) },
         { label: 'Variables', value: settings.variables.length === 0 ? 'None' : settings.variables.join(', ') },
         { label: 'Secrets', value: settings.secrets.length === 0 ? 'None' : settings.secrets.join(', ') },
       ],
@@ -495,9 +497,17 @@ export class DeploymentPipeline {
       await tx.query(
         `UPDATE environments.deployments
          SET status = 'succeeded', steps = $2, host_port = $3, address = $4, settings_revision = $5,
-             finished_at = now(), updated_at = now()
+             cpu_limit = $6, memory_limit_bytes = $7, finished_at = now(), updated_at = now()
          WHERE id = $1`,
-        [deployment.id, JSON.stringify(steps), context.started?.port ?? null, address, context.settingsRevision],
+        [
+          deployment.id,
+          JSON.stringify(steps),
+          context.started?.port ?? null,
+          address,
+          context.settingsRevision,
+          context.started?.limits?.cpus ?? null,
+          context.started?.limits?.memoryBytes ?? null,
+        ],
       );
       await tx.query('UPDATE environments.environments SET live_deployment_id = $2 WHERE id = $1', [
         environment.id,

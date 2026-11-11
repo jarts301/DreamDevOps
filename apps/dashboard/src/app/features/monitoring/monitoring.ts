@@ -4,11 +4,13 @@ import { errorMessage } from '../../core/api-error';
 import { PageActivity } from '../../core/page-activity';
 import { LogView } from './log-view';
 import { MetricChart } from './metric-chart';
-import { formatMetric } from './metric-format';
+import { formatLimit, formatMetric, NEAR_LIMIT, shareOfLimit } from './metric-format';
 import {
+  type ContainerLimits,
   type EnvironmentLogs,
   type EnvironmentMetrics,
   type EnvironmentTraces,
+  type MetricKey,
   type MetricUnit,
   type MetricValues,
   MonitoringApi,
@@ -138,6 +140,9 @@ class Loaded<T> {
                     @for (metric of current.metrics; track metric.key) {
                       <td class="metric-value" [class.muted]="row.latest[metric.key] === null">
                         {{ format(row.latest[metric.key], metric.unit) }}
+                        @if (limitNote(row.latest[metric.key], metric.key, row.limits); as note) {
+                          <p class="cell-note" [attr.data-tone]="note.near ? 'danger' : null">{{ note.text }}</p>
+                        }
                       </td>
                     }
                     <td class="cell-actions">
@@ -176,6 +181,15 @@ class Loaded<T> {
               </label>
             </div>
 
+            <p class="cell-note">
+              @if (chosen.limits) {
+                Its container may use at most {{ limitText('cpu', chosen.limits) }} and {{ limitText('memory', chosen.limits) }} of
+                memory{{ chosen.targetName ? ', on ' + chosen.targetName : '' }}.
+              } @else {
+                Its container's limits aren't known.
+              }
+            </p>
+
             <h3 id="metrics-heading">Metrics</h3>
             @if (!current.enabled) {
               <p class="muted">This server doesn't keep metrics yet.</p>
@@ -189,6 +203,7 @@ class Loaded<T> {
                     [start]="metrics.range.start"
                     [end]="metrics.range.end"
                     [stepSeconds]="metrics.range.stepSeconds"
+                    [limit]="limitText(series.key, chosen.limits)"
                   />
                 }
               </div>
@@ -275,6 +290,25 @@ export class Monitoring implements OnInit, OnDestroy {
 
   protected format(value: number | null, unit: MetricUnit): string {
     return formatMetric(value, unit);
+  }
+
+  protected limitText(key: MetricKey, limits: ContainerLimits | null): string | null {
+    return formatLimit(key, limits);
+  }
+
+  /** What a value is measured against, such as "of 512 MiB, 10%", and whether it's close to it. */
+  protected limitNote(value: number | null, key: MetricKey, limits: ContainerLimits | null): { text: string; near: boolean } | null {
+    const limit = formatLimit(key, limits);
+    if (limit === null) {
+      return null;
+    }
+    const share = shareOfLimit(value, key, limits);
+    if (share === null) {
+      return { text: `Limit: ${limit}`, near: false };
+    }
+    // CPU is already a share, of one core, so its percentage says how close it is.
+    const text = key === 'memory' ? `of ${limit}, ${Math.round(share * 100)}%` : `of ${limit}`;
+    return { text, near: share >= NEAR_LIMIT };
   }
 
   protected sendsNothing(latest: MetricValues): boolean {

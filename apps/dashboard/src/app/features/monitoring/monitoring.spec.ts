@@ -5,7 +5,7 @@ import { provideRouter } from '@angular/router';
 import { settle } from '../../testing';
 import { LogView } from './log-view';
 import { MetricChart } from './metric-chart';
-import { formatDuration, formatMetric } from './metric-format';
+import { formatDuration, formatLimit, formatMetric, shareOfLimit } from './metric-format';
 import type {
   EnvironmentLogs,
   EnvironmentMetrics,
@@ -42,6 +42,7 @@ const row = (overrides: Partial<MonitoringOverview['environments'][number]> = {}
   since: '2026-11-10T09:00:00Z',
   address: 'http://localhost:49153',
   targetName: 'This machine',
+  limits: { cpus: 1, memoryBytes: 512 * 1024 * 1024 },
   latest: { cpu: 12.5, memory: 52_428_800, requests: 3.25, responseTime: 0.084, errors: 0 },
   ...overrides,
 });
@@ -234,20 +235,54 @@ describe('monitoring', () => {
       'Actions',
     ]);
     expect(rows(fixture)).toEqual([
-      ['Billing API', 'Staging 1.4.0-rc.1 on This machine', '13%', '52.4 MB', '3.3/s', '84 ms', '0%', 'Show details'],
-      ['Billing API', 'Production Production 1.3.0 on This machine', '40%', '80.0 MB', '12/s', '1.50 s', '2.5%', 'Show details'],
+      [
+        'Billing API',
+        'Staging 1.4.0-rc.1 on This machine',
+        '13% of 1 CPU',
+        '50.0 MiB of 512 MiB, 10%',
+        '3.3/s',
+        '84 ms',
+        '0%',
+        'Show details',
+      ],
+      [
+        'Billing API',
+        'Production Production 1.3.0 on This machine',
+        '40% of 1 CPU',
+        '76.3 MiB of 512 MiB, 15%',
+        '12/s',
+        '1.50 s',
+        '2.5%',
+        'Show details',
+      ],
       [
         'Website',
         'Staging 2.0.0 on This machine No metrics received yet.',
-        'No data',
-        'No data',
+        'No data Limit: 1 CPU',
+        'No data Limit: 512 MiB',
         'No data',
         'No data',
         'No data',
         'Show details',
       ],
     ]);
+    expect(element(fixture).querySelector('.cell-note[data-tone="danger"]')).toBeNull();
     expect(element(fixture).querySelector('tr[data-production="true"] .status')?.textContent?.trim()).toBe('Production');
+  });
+
+  it('makes CPU and memory close to their container’s limits stand out', async () => {
+    const fixture = await open(
+      overview({ environments: [row({ latest: { cpu: 95, memory: 500 * 1024 * 1024, requests: 1, responseTime: 0.1, errors: 0 } })] }),
+    );
+
+    const near = [...element(fixture).querySelectorAll('.cell-note[data-tone="danger"]')].map((note) => note.textContent?.trim());
+    expect(near).toEqual(['of 1 CPU', 'of 512 MiB, 98%']);
+  });
+
+  it('shows no limits where they aren’t known', async () => {
+    const fixture = await open(overview({ environments: [row({ limits: null })] }));
+
+    expect(rows(fixture)[0]!.slice(2, 4)).toEqual(['13%', '50.0 MiB']);
   });
 
   it('says when the server keeps no metrics, and still shows logs and traces', async () => {
@@ -299,6 +334,11 @@ describe('monitoring', () => {
     await details(fixture);
 
     expect(element(fixture).querySelector('#details-heading')?.textContent).toBe('Billing API in Staging');
+    expect(text(fixture)).toContain('Its container may use at most 1 CPU and 512 MiB of memory, on This machine.');
+    expect([...element(fixture).querySelectorAll('app-metric-chart .cell-note')].map((note) => note.textContent?.trim()).slice(0, 2)).toEqual([
+      'Highest 20%, of a limit of 1 CPU. How much of one CPU core it uses.',
+      'Highest 50.0 MiB, of a limit of 512 MiB. How much memory it holds.',
+    ]);
     expect([...element(fixture).querySelectorAll('[aria-labelledby="details-heading"] h3')].map((heading) => heading.textContent)).toEqual([
       'Metrics',
       'Logs',
@@ -419,7 +459,8 @@ describe('monitoring', () => {
     await answerDetails();
     fixture.detectChanges();
 
-    expect(rows(fixture)[0]![2]).toBe('99%');
+    expect(rows(fixture)[0]![2]).toBe('99% of 1 CPU');
+    expect(element(fixture).querySelector('.cell-note[data-tone="danger"]')?.textContent?.trim()).toBe('of 1 CPU');
     fixture.destroy();
     await vi.advanceTimersByTimeAsync(REFRESH_MS);
     http.expectNone(OVERVIEW_URL);
@@ -583,10 +624,24 @@ describe('metric values', () => {
     expect(formatMetric(0.042, 'percent')).toBe('0.04%');
     expect(formatMetric(2.5, 'percent')).toBe('2.5%');
     expect(formatMetric(87.6, 'percent')).toBe('88%');
-    expect(formatMetric(52_428_800, 'bytes')).toBe('52.4 MB');
+    expect(formatMetric(52_428_800, 'bytes')).toBe('50.0 MiB');
+    expect(formatMetric(3 * 1024 * 1024 * 1024, 'bytes')).toBe('3.00 GiB');
     expect(formatMetric(0.2, 'per-second')).toBe('0.20/s');
     expect(formatMetric(0.084, 'seconds')).toBe('84 ms');
     expect(formatMetric(2.345, 'seconds')).toBe('2.35 s');
+  });
+
+  it('are measured against their container’s limits, for CPU and memory', () => {
+    const limits = { cpus: 1, memoryBytes: 512 * 1024 * 1024 };
+
+    expect([formatLimit('cpu', limits), formatLimit('memory', limits), formatLimit('requests', limits)]).toEqual(['1 CPU', '512 MiB', null]);
+    expect(formatLimit('cpu', { cpus: 0.5, memoryBytes: 2 * 1024 * 1024 * 1024 })).toBe('0.5 CPUs');
+    expect(formatLimit('memory', { cpus: 0.5, memoryBytes: 2 * 1024 * 1024 * 1024 })).toBe('2 GiB');
+    expect(formatLimit('cpu', null)).toBeNull();
+    expect(shareOfLimit(50, 'cpu', { cpus: 2, memoryBytes: 1 })).toBe(0.25);
+    expect(shareOfLimit(256 * 1024 * 1024, 'memory', limits)).toBe(0.5);
+    expect(shareOfLimit(null, 'memory', limits)).toBeNull();
+    expect(shareOfLimit(10, 'errors', limits)).toBeNull();
   });
 
   it('give lengths of time in milliseconds, or seconds once they’re long', () => {

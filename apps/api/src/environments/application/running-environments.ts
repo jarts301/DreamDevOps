@@ -15,6 +15,8 @@ export interface RunningEnvironment {
   readonly address: string | null;
   /** The hosting target it runs on. */
   readonly targetName: string | null;
+  /** What the version's container may use at most, or null when nothing runs or its host sets no limits. */
+  readonly limits: { readonly cpus: number; readonly memoryBytes: number } | null;
 }
 
 /**
