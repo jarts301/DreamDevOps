@@ -63,4 +63,8 @@ All routes start with `/api/v1`. The company routes act on the signed-in user's 
 
 ## Events
 
-Changes publish `UserInvited`, `RoleGranted`, `MemberRemoved` and `InvitationRevoked` through the outbox. Their payloads hold IDs and roles, not email addresses or tokens.
+Changes publish `UserInvited`, `RoleGranted`, `MemberRemoved` and `InvitationRevoked` through the outbox. Their payloads hold IDs and roles, not email addresses or tokens. `MemberRemoved`, which [Alerts](../alerts/README.md#emails) react to, has its contract in `domain/events.ts`.
+
+## For other contexts
+
+`CompanyMembers`, in `application/company-members.ts`, says who belongs to the current company now, with their names and addresses. Someone removed isn't found, so contexts that reach people, such as [Alerts](../alerts/README.md), keep only user IDs and ask here just before they do. It reads through `identity.company_members()`, in the current company only.

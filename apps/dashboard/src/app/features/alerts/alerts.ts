@@ -1,18 +1,29 @@
 import { DatePipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal, type WritableSignal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { PageActivity } from '../../core/page-activity';
 import { SessionService } from '../../core/session.service';
 import { formatMetric } from '../monitoring/metric-format';
 import type { MetricKey, MetricUnit } from '../monitoring/monitoring.api';
-import { fromThreshold, inputUnit, parseAddresses, toThreshold, WAIT_CHOICES } from './alert-units';
-import { type Alert, AlertsApi, type AlertsOverview, type Comparator, type Incident, type WatchableEnvironment } from './alerts.api';
+import { fromThreshold, inputUnit, toThreshold, WAIT_CHOICES } from './alert-units';
+import {
+  type Alert,
+  AlertsApi,
+  type AlertsOverview,
+  type Comparator,
+  type Incident,
+  type Recipient,
+  type WatchableEnvironment,
+} from './alerts.api';
 
 /** How often the page reads alerts again while it's open, as they're checked every minute. */
 export const REFRESH_MS = 30_000;
 
 const MANAGE_ALERTS = 'alerts:manage';
+
+/** The most members one alert emails. */
+export const MAX_RECIPIENTS = 10;
 
 const ENDINGS: Readonly<Record<NonNullable<Incident['endedBy']>, string>> = {
   recovered: 'Resolved',
@@ -21,8 +32,8 @@ const ENDINGS: Readonly<Record<NonNullable<Incident['endedBy']>, string>> = {
 
 /**
  * The company's alerts: each watches one metric of one environment, and emails the
- * addresses it names when the metric crosses its threshold for long enough, and when it's
- * back. Every member who views dashboards sees them, and those who manage alerts change them.
+ * members it names when the metric crosses its threshold for long enough, and when it's
+ * back. Only people who are still members are emailed. Every member who views dashboards sees them, and those who manage alerts change them.
  */
 @Component({
   selector: 'app-alerts',
@@ -104,13 +115,28 @@ const ENDINGS: Readonly<Record<NonNullable<Incident['endedBy']>, string>> = {
                   </select>
                 </label>
               </div>
-              <label class="field field-wide">
-                <span>Email</span>
-                <input type="text" formControlName="recipients" autocomplete="off" placeholder="you@example.com, on-call@example.com" required />
-              </label>
-              <p class="cell-note">Up to 10 addresses, separated by commas. Each gets an email when the alert fires and when it's resolved.</p>
+              <fieldset class="checkbox-group" aria-describedby="new-alert-recipients-note">
+                <legend>Email</legend>
+                @for (member of members(); track member.userId) {
+                  <label class="checkbox">
+                    <input
+                      type="checkbox"
+                      [checked]="chosen().has(member.userId)"
+                      [disabled]="!chosen().has(member.userId) && chosen().size >= maxRecipients"
+                      (change)="toggleRecipient(chosen, member.userId)"
+                    />
+                    {{ memberName(member) }}
+                  </label>
+                }
+              </fieldset>
+              <p class="cell-note" id="new-alert-recipients-note">
+                Up to {{ maxRecipients }} members. Each gets an email when the alert fires and when it's resolved, at their
+                address then. Anyone who leaves the company isn't emailed, and is taken off the alert.
+              </p>
               <div class="button-row">
-                <button type="submit" class="button button-primary" [disabled]="form.invalid || working()">Create alert</button>
+                <button type="submit" class="button button-primary" [disabled]="form.invalid || chosen().size === 0 || working()">
+                  Create alert
+                </button>
               </div>
             </form>
           }
@@ -181,10 +207,15 @@ const ENDINGS: Readonly<Record<NonNullable<Incident['endedBy']>, string>> = {
                       }
                     </td>
                     <td>
-                      @if (alert.recipients) {
-                        {{ alert.recipients.join(', ') }}
+                      @if (alert.recipientCount === 0) {
+                        <span class="muted">Nobody</span>
+                        @if (alert.enabled) {
+                          <p class="cell-note" data-tone="danger">Everyone it named has left the company. Choose someone to email.</p>
+                        }
+                      } @else if (alert.recipients) {
+                        {{ names(alert.recipients) }}
                       } @else {
-                        {{ alert.recipientCount }} {{ alert.recipientCount === 1 ? 'address' : 'addresses' }}
+                        {{ alert.recipientCount }} {{ alert.recipientCount === 1 ? 'member' : 'members' }}
                       }
                       @if (alert.lastNotificationError) {
                         <p class="cell-note" data-tone="danger">Email failed: {{ alert.lastNotificationError }}</p>
@@ -246,16 +277,28 @@ const ENDINGS: Readonly<Record<NonNullable<Incident['endedBy']>, string>> = {
                               </select>
                             </label>
                           </div>
-                          <label class="field field-wide">
-                            <span>Email</span>
-                            <input type="text" formControlName="recipients" autocomplete="off" required />
-                          </label>
+                          <fieldset class="checkbox-group">
+                            <legend>Email</legend>
+                            @for (member of members(); track member.userId) {
+                              <label class="checkbox">
+                                <input
+                                  type="checkbox"
+                                  [checked]="editChosen().has(member.userId)"
+                                  [disabled]="!editChosen().has(member.userId) && editChosen().size >= maxRecipients"
+                                  (change)="toggleRecipient(editChosen, member.userId)"
+                                />
+                                {{ memberName(member) }}
+                              </label>
+                            }
+                          </fieldset>
                           <p class="cell-note">
                             It keeps watching {{ metricName(alert.metric) }} {{ alert.comparator }} its threshold. To watch something
                             else, create another alert.
                           </p>
                           <div class="button-row">
-                            <button type="submit" class="button button-primary" [disabled]="editForm.invalid || working()">Save</button>
+                            <button type="submit" class="button button-primary" [disabled]="editForm.invalid || editChosen().size === 0 || working()">
+                              Save
+                            </button>
                             <button type="button" class="button" (click)="editing.set(null)">Cancel</button>
                           </div>
                         </form>
@@ -331,6 +374,7 @@ export class Alerts implements OnInit, OnDestroy {
   #destroyed = false;
 
   protected readonly waitChoices = WAIT_CHOICES;
+  protected readonly maxRecipients = MAX_RECIPIENTS;
   protected readonly working = this.#activity.working;
   protected readonly error = this.#activity.error;
   protected readonly notice = this.#activity.notice;
@@ -338,6 +382,11 @@ export class Alerts implements OnInit, OnDestroy {
   protected readonly overview = signal<AlertsOverview | null>(null);
   protected readonly incidents = signal<Incident[]>([]);
   protected readonly environments = signal<WatchableEnvironment[]>([]);
+  /** Whom alerts can email, for those who manage them. */
+  protected readonly members = signal<Recipient[]>([]);
+  /** The members the new alert emails, and those of the alert being changed. */
+  protected readonly chosen = signal<ReadonlySet<string>>(new Set());
+  protected readonly editChosen = signal<ReadonlySet<string>>(new Set());
   protected readonly editing = signal<string | null>(null);
   protected readonly deleting = signal<string | null>(null);
   protected readonly canManage = computed(() => this.#session.can(MANAGE_ALERTS));
@@ -349,24 +398,26 @@ export class Alerts implements OnInit, OnDestroy {
     comparator: ['above' as Comparator, Validators.required],
     threshold: [80, [Validators.required, Validators.min(0)]],
     forMinutes: [5, Validators.required],
-    recipients: ['', Validators.required],
   });
 
   protected readonly editForm = this.#forms.group({
     name: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(80)]],
     threshold: [0, [Validators.required, Validators.min(0)]],
     forMinutes: [0, Validators.required],
-    recipients: ['', Validators.required],
   });
 
   async ngOnInit(): Promise<void> {
-    this.form.controls.recipients.setValue(this.#session.user()?.email ?? '');
     await this.#activity.run(async () => {
-      const [, environments] = await Promise.all([
+      const [, environments, members] = await Promise.all([
         this.#load(),
         this.canManage() ? this.#api.environments() : Promise.resolve([]),
+        this.canManage() ? this.#api.members() : Promise.resolve([]),
       ]);
       this.environments.set(environments);
+      this.members.set(members);
+      // New alerts email whoever creates them, unless they choose otherwise.
+      const me = this.#session.user()?.userId;
+      this.chosen.set(new Set(members.some((member) => member.userId === me) && me !== undefined ? [me] : []));
       // The Monitoring page links here with the environment to watch.
       const asked = this.#route.snapshot.queryParamMap.get('environment');
       const chosen = environments.find((environment) => environment.environmentId === asked) ?? environments[0];
@@ -383,6 +434,24 @@ export class Alerts implements OnInit, OnDestroy {
 
   protected placeName(environment: WatchableEnvironment): string {
     return `${environment.applicationName} · ${environment.environmentName}${environment.production ? ' (production)' : ''}`;
+  }
+
+  protected memberName(member: Recipient): string {
+    return `${member.displayName} (${member.email})${member.userId === this.#session.user()?.userId ? ', you' : ''}`;
+  }
+
+  protected names(recipients: readonly Recipient[]): string {
+    return recipients.map((recipient) => recipient.displayName).join(', ');
+  }
+
+  protected toggleRecipient(selection: WritableSignal<ReadonlySet<string>>, userId: string): void {
+    selection.update((current) => {
+      const next = new Set(current);
+      if (!next.delete(userId)) {
+        next.add(userId);
+      }
+      return next;
+    });
   }
 
   protected unitLabel(metric: MetricKey): string {
@@ -411,7 +480,7 @@ export class Alerts implements OnInit, OnDestroy {
         comparator: value.comparator,
         threshold: toThreshold(Number(value.threshold), this.#unitOf(value.metric)),
         forMinutes: Number(value.forMinutes),
-        recipients: parseAddresses(value.recipients),
+        recipients: this.#inMemberOrder(this.chosen()),
       });
       this.form.controls.name.reset();
       return `The alert "${created.name}" is created. It's checked every minute.`;
@@ -424,8 +493,8 @@ export class Alerts implements OnInit, OnDestroy {
       name: alert.name,
       threshold: fromThreshold(alert.threshold, this.#unitOf(alert.metric)),
       forMinutes: alert.forMinutes,
-      recipients: (alert.recipients ?? []).join(', '),
     });
+    this.editChosen.set(new Set((alert.recipients ?? []).map((recipient) => recipient.userId)));
     this.editing.set(alert.id);
   }
 
@@ -436,7 +505,7 @@ export class Alerts implements OnInit, OnDestroy {
         name: value.name,
         threshold: toThreshold(Number(value.threshold), this.#unitOf(alert.metric)),
         forMinutes: Number(value.forMinutes),
-        recipients: parseAddresses(value.recipients),
+        recipients: this.#inMemberOrder(this.editChosen()),
       });
       this.editing.set(null);
       return `The alert "${saved.name}" is saved.`;
@@ -447,7 +516,7 @@ export class Alerts implements OnInit, OnDestroy {
     await this.#activity.run(async () => {
       const result = await this.#api.test(alert.id);
       if (result.delivered) {
-        this.notice.set(`A test email was sent to ${result.sent} ${result.sent === 1 ? 'address' : 'addresses'}.`);
+        this.notice.set(`A test email was sent to ${result.sent} ${result.sent === 1 ? 'member' : 'members'}.`);
       } else {
         this.error.set(`The test email failed: ${result.error ?? 'unknown reason'}`);
       }
@@ -468,6 +537,13 @@ export class Alerts implements OnInit, OnDestroy {
       this.deleting.set(null);
       return `The alert "${alert.name}" is deleted.`;
     }, () => this.#load());
+  }
+
+  /** The chosen members' IDs, in the order the list shows them. */
+  #inMemberOrder(selection: ReadonlySet<string>): string[] {
+    return this.members()
+      .map((member) => member.userId)
+      .filter((userId) => selection.has(userId));
   }
 
   #unitOf(metric: MetricKey): MetricUnit {

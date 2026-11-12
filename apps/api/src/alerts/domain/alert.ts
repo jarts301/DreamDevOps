@@ -19,8 +19,6 @@ export interface AlertCondition {
 export const MAX_FOR_MINUTES = 60;
 export const MAX_RECIPIENTS = 10;
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export function parseAlertId(value: unknown): string {
   if (!isUuid(value)) {
     throw new AlertError('invalid', 'The alert ID is not valid.');
@@ -75,25 +73,25 @@ export function parseForMinutes(value: unknown): number {
   return value;
 }
 
-/** The addresses an alert emails: at least one, at most ten, each once, in lowercase. */
-export function parseRecipients(value: unknown): string[] {
+/** The members an alert emails: at least one, at most ten, each once. */
+export function parseRecipientIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new AlertError('invalid', 'Enter at least one email address to notify.');
+    throw new AlertError('invalid', 'Choose at least one member to email.');
   }
-  const recipients: string[] = [];
+  const ids: string[] = [];
   for (const entry of value) {
-    const email = typeof entry === 'string' ? entry.trim().toLowerCase() : '';
-    if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
-      throw new AlertError('invalid', `"${String(entry).slice(0, 80)}" isn't a valid email address.`);
+    if (!isUuid(entry)) {
+      throw new AlertError('invalid', 'Choose members of the company to email.');
     }
-    if (!recipients.includes(email)) {
-      recipients.push(email);
+    const id = entry.toLowerCase();
+    if (!ids.includes(id)) {
+      ids.push(id);
     }
   }
-  if (recipients.length > MAX_RECIPIENTS) {
-    throw new AlertError('invalid', `An alert emails at most ${MAX_RECIPIENTS} addresses.`);
+  if (ids.length > MAX_RECIPIENTS) {
+    throw new AlertError('invalid', `An alert emails at most ${MAX_RECIPIENTS} members.`);
   }
-  return recipients;
+  return ids;
 }
 
 /**

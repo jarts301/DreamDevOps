@@ -30,14 +30,6 @@ export function fromThreshold(threshold: number, unit: MetricUnit): number {
   return Number((threshold / INPUT_UNITS[unit].perInput).toPrecision(12));
 }
 
-/** Addresses typed in one field, separated by commas, semicolons, spaces or lines. */
-export function parseAddresses(text: string): string[] {
-  return text
-    .split(/[\s,;]+/)
-    .map((address) => address.trim())
-    .filter((address) => address !== '');
-}
-
 /** How long an alert waits, in the choices the form offers. */
 export const WAIT_CHOICES: readonly { readonly minutes: number; readonly label: string }[] = [
   { minutes: 0, label: 'At once' },

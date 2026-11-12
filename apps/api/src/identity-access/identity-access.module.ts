@@ -7,6 +7,8 @@ import { PostgresSessionStore } from '../session/postgres-session-store.ts';
 import { SESSION_STORE } from '../session/session-store.ts';
 import { DATABASE_POOL } from '../tokens.ts';
 import { CompanyAccessService } from './application/company-access.service.ts';
+import { COMPANY_MEMBERS } from './application/company-members.ts';
+import { MemberDirectory } from './application/member-directory.ts';
 import { IDENTITY_PROVIDER, USER_DIRECTORY } from './application/ports.ts';
 import { AuthController } from './http/auth.controller.ts';
 import { CompanyAccessController, InvitationsController } from './http/company-access.controller.ts';
@@ -50,11 +52,17 @@ export class IdentityAccessModule {
                 new CompanyAccessService(database, pool, { requireVerifiedEmail: config.requireVerifiedEmail }),
               inject: [TenantDatabase, DATABASE_POOL],
             },
+            {
+              provide: COMPANY_MEMBERS,
+              useFactory: (database: TenantDatabase) => new MemberDirectory(database),
+              inject: [TenantDatabase],
+            },
           ],
           settings.overrides,
         ),
-        // Sessions and users are what every request's guards need.
-        exports: [SESSION_STORE, USER_DIRECTORY, CompanyAccessService],
+        // Sessions and users are what every request's guards need. Other contexts, such as
+        // Alerts, learn who belongs to the company through COMPANY_MEMBERS.
+        exports: [SESSION_STORE, USER_DIRECTORY, CompanyAccessService, COMPANY_MEMBERS],
       };
     });
   }

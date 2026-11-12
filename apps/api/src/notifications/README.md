@@ -12,7 +12,7 @@ Locally, [Mailpit](http://localhost:8025) catches every email, and nothing leave
 
 ## Alert emails
 
-[Alerts](../alerts/README.md) email the addresses they name when they fire and when they're resolved, through `AlertEmails`, which this context publishes. Alerts says what happened, in words, and this context lays out the email and its link to the dashboard's **Alerts** page.
+[Alerts](../alerts/README.md) email the company members they name when they fire and when they're resolved, through `AlertEmails`, which this context publishes. Alerts says what happened, in words, and this context lays out the email and its link to the dashboard's **Alerts** page.
 
 Unlike invitations, each alert email is sent by a background job of its own, so a failure throws, and the job tries again. Locally, they arrive in [Mailpit](http://localhost:8025) too.
 

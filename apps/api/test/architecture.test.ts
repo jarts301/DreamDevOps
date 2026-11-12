@@ -25,8 +25,10 @@ const CONTEXTS: Readonly<Record<string, Context>> = {
     published: [
       'domain/access.ts',
       'domain/email.ts',
+      'domain/events.ts',
       'application/ports.ts',
       'application/company-access.service.ts',
+      'application/company-members.ts',
       'identity-access.module.ts',
     ],
   },

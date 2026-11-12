@@ -7,9 +7,9 @@ import { permissionDescription } from '../../core/labels';
 import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
 import type { MetricDefinition } from '../monitoring/monitoring.api';
-import { fromThreshold, inputUnit, parseAddresses, toThreshold } from './alert-units';
+import { fromThreshold, inputUnit, toThreshold } from './alert-units';
 import { Alerts } from './alerts';
-import type { Alert, AlertsOverview, Incident } from './alerts.api';
+import type { Alert, AlertsOverview, Incident, Recipient } from './alerts.api';
 
 const METRICS: MetricDefinition[] = [
   { key: 'cpu', name: 'CPU', unit: 'percent', description: 'How much of one CPU core it uses.' },
@@ -20,6 +20,11 @@ const METRICS: MetricDefinition[] = [
 ];
 
 const MIB = 1024 * 1024;
+
+const ME: Recipient = { userId: 'u-me', displayName: 'Me Myself', email: 'me@example.com' };
+const ONCALL: Recipient = { userId: 'u-oncall', displayName: 'On Call', email: 'oncall@example.com' };
+const LEAD: Recipient = { userId: 'u-lead', displayName: 'Lead', email: 'lead@example.com' };
+const MEMBERS = [LEAD, ME, ONCALL];
 
 const alert = (overrides: Partial<Alert> = {}): Alert => ({
   id: 'al-1',
@@ -34,7 +39,7 @@ const alert = (overrides: Partial<Alert> = {}): Alert => ({
   threshold: 80,
   forMinutes: 5,
   condition: 'CPU above 80% for 5 minutes',
-  recipients: ['oncall@example.com', 'lead@example.com'],
+  recipients: [ONCALL, LEAD],
   recipientCount: 2,
   enabled: true,
   state: 'firing',
@@ -118,7 +123,7 @@ describe('alerts', () => {
         {
           provide: SessionService,
           useValue: {
-            user: () => ({ permissions, email: 'me@example.com' }),
+            user: () => ({ permissions, userId: ME.userId, email: ME.email }),
             can: (permission: string) => permissions.includes(permission),
           },
         },
@@ -161,7 +166,13 @@ describe('alerts', () => {
 
   const open = async (
     permissions: string[],
-    options: { page?: AlertsOverview; incidents?: Incident[]; query?: Record<string, string>; environments?: object[] } = {},
+    options: {
+      page?: AlertsOverview;
+      incidents?: Incident[];
+      query?: Record<string, string>;
+      environments?: object[];
+      members?: Recipient[];
+    } = {},
   ) => {
     setUp(permissions, options.query);
     const fixture = TestBed.createComponent(Alerts);
@@ -169,6 +180,7 @@ describe('alerts', () => {
     await settle();
     answerReload(options.page, options.incidents);
     if (permissions.includes('alerts:manage')) {
+      http.expectOne('/api/v1/company/alerts/members').flush(options.members ?? MEMBERS);
       http.expectOne((request) => request.url === '/api/v1/company/applications').flush([{ id: 'a-1', name: 'Billing API' }]);
       await settle();
       http
@@ -193,7 +205,7 @@ describe('alerts', () => {
     expect(rows[0]!.querySelector('[data-tone="danger"]')?.textContent).toBe('Firing');
     expect(rows[0]!.textContent).toContain('CPU above 80% for 5 minutes');
     expect(rows[0]!.textContent).toContain('93%');
-    expect(rows[0]!.textContent).toContain('oncall@example.com, lead@example.com');
+    expect(rows[0]!.textContent).toContain('On Call, Lead');
     expect(rows[1]!.querySelector('[data-tone="success"]')?.textContent).toBe('OK');
     expect(rows[1]!.textContent).toContain('84 ms');
     expect(text(fixture)).toContain('Email failed: Mail server unavailable');
@@ -204,24 +216,33 @@ describe('alerts', () => {
       page: overview({ alerts: [alert({ recipients: null, recipientCount: 2 })] }),
     });
 
-    expect(text(fixture)).toContain('2 addresses');
+    expect(text(fixture)).toContain('2 members');
     expect(text(fixture)).not.toContain('New alert');
     expect(button(fixture, 'Edit High CPU')).toBeUndefined();
     expect(button(fixture, 'Delete High CPU')).toBeUndefined();
   });
 
-  it('creates an alert on the environment Monitoring linked to, with memory typed in MiB and the person’s own email', async () => {
+  it('creates an alert on the environment Monitoring linked to, with memory typed in MiB, emailing chosen members', async () => {
     const fixture = await open(MANAGER, { query: { environment: 'e-1' }, page: overview({ alerts: [] }) });
     const form = element(fixture).querySelector('form')!;
+    const box = (member: Recipient) =>
+      [...form.querySelectorAll('label.checkbox')].find((label) => label.textContent?.includes(member.email))!.querySelector('input')!;
 
     expect(field<HTMLSelectElement>(form, 'Environment').value).toBe('e-1');
-    expect(field(form, 'Email').value).toBe('me@example.com');
+    // Only the company's members can be chosen, and whoever creates it is chosen at first.
+    expect([...form.querySelectorAll('label.checkbox')].map((label) => label.textContent?.trim())).toEqual([
+      'Lead (lead@example.com)',
+      'Me Myself (me@example.com), you',
+      'On Call (oncall@example.com)',
+    ]);
+    expect([LEAD, ME, ONCALL].map((member) => box(member).checked)).toEqual([false, true, false]);
     await type(fixture, field(form, 'Name'), 'Memory filling up');
     await choose(fixture, field<HTMLSelectElement>(form, 'Metric'), 1);
     expect(text(fixture)).toContain('Threshold (MiB)');
     await type(fixture, field(form, 'Threshold'), '450');
     await choose(fixture, field<HTMLSelectElement>(form, 'How long'), 4);
-    await type(fixture, field(form, 'Email'), 'me@example.com,  oncall@example.com');
+    box(ONCALL).click();
+    await render(fixture);
 
     button(fixture, 'Create alert')!.click();
     const request = http.expectOne((candidate) => candidate.method === 'POST');
@@ -232,7 +253,7 @@ describe('alerts', () => {
       comparator: 'above',
       threshold: 450 * MIB,
       forMinutes: 10,
-      recipients: ['me@example.com', 'oncall@example.com'],
+      recipients: [ME.userId, ONCALL.userId],
     });
     request.flush(alert({ name: 'Memory filling up' }));
     await settle();
@@ -266,7 +287,8 @@ describe('alerts', () => {
       name: 'Slow answers',
       threshold: 0.75,
       forMinutes: 0,
-      recipients: ['oncall@example.com', 'lead@example.com'],
+      // The list's order, whatever order they were chosen in.
+      recipients: [LEAD.userId, ONCALL.userId],
     });
     request.flush(alert({ name: 'Slow answers' }));
     await settle();
@@ -285,7 +307,7 @@ describe('alerts', () => {
     await settle();
     answerReload();
     await render(fixture);
-    expect(text(fixture)).toContain('A test email was sent to 2 addresses.');
+    expect(text(fixture)).toContain('A test email was sent to 2 members.');
 
     button(fixture, 'Send a test email for High CPU')!.click();
     http.expectOne('/api/v1/company/alerts/al-1/test').flush({ delivered: false, sent: 0, error: 'Mail server unavailable' });
@@ -320,6 +342,35 @@ describe('alerts', () => {
     expect(text(fixture)).toContain('The alert "High CPU" is deleted.');
   });
 
+  it('won’t create an alert that emails nobody, and says when everyone an alert named has left', async () => {
+    const fixture = await open(MANAGER, {
+      page: overview({ alerts: [alert({ recipients: [], recipientCount: 0 })] }),
+    });
+    const form = element(fixture).querySelector('form')!;
+    await type(fixture, field(form, 'Name'), 'Nobody listens');
+    const mine = [...form.querySelectorAll('label.checkbox')].find((label) => label.textContent?.includes(ME.email))!.querySelector('input')!;
+
+    mine.click();
+    await render(fixture);
+
+    expect(button(fixture, 'Create alert')!.disabled).toBe(true);
+    expect(text(fixture)).toContain('Everyone it named has left the company. Choose someone to email.');
+  });
+
+  it('lets an alert email at most 10 members', async () => {
+    const many = Array.from({ length: 12 }, (_, index) => ({ userId: `u-${index}`, displayName: `Person ${index}`, email: `p${index}@example.com` }));
+    const fixture = await open(MANAGER, { members: many, page: overview({ alerts: [] }) });
+    const boxes = [...element(fixture).querySelectorAll<HTMLInputElement>('form label.checkbox input')];
+
+    for (const box of boxes.slice(0, 10)) {
+      box.click();
+      await render(fixture);
+    }
+
+    expect(boxes.filter((box) => box.checked)).toHaveLength(10);
+    expect(boxes.slice(10).every((box) => box.disabled)).toBe(true);
+  });
+
   it('shows when alerts fired, and which still fire', async () => {
     const fixture = await open(['dashboards:view']);
 
@@ -343,16 +394,6 @@ describe('alert thresholds', () => {
     expect(toThreshold(80, 'percent')).toBe(80);
     expect(fromThreshold(512 * MIB, 'bytes')).toBe(512);
     expect(fromThreshold(0.25, 'seconds')).toBe(250);
-  });
-
-  it('name their addresses however they’re separated', () => {
-    expect(parseAddresses(' a@example.com, b@example.com;c@example.com\nd@example.com  ')).toEqual([
-      'a@example.com',
-      'b@example.com',
-      'c@example.com',
-      'd@example.com',
-    ]);
-    expect(parseAddresses('  ')).toEqual([]);
   });
 });
 

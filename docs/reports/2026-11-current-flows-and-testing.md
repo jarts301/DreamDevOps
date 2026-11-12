@@ -33,7 +33,7 @@ A guide to every flow DreamDevOps offers today, from signing in to watching a ru
 | Change | What it gives | Where it's described |
 |---|---|---|
 | **Monitoring** page and context | Each running application's CPU, memory, requests, response times and server errors, now and charted over 15 minutes to 24 hours | [Monitoring guide](../../apps/api/src/monitoring/README.md) |
-| **Alerts** page and context | Alerts on any environment's metric, above or below a threshold for a number of minutes, checked every minute, emailing their addresses when they fire and when they're resolved, through Mailpit locally | [Alerts guide](../../apps/api/src/alerts/README.md) |
+| **Alerts** page and context | Alerts on any environment's metric, above or below a threshold for a number of minutes, checked every minute, emailing the members they name when they fire and when they're resolved, never anyone removed from the company, through Mailpit locally | [Alerts guide](../../apps/api/src/alerts/README.md) |
 | Daily high | Each chart has an orange dashed line at the metric's highest value in the 24 hours before the range, and says when values go above it | [Daily high](../../apps/api/src/monitoring/README.md#daily-high) |
 | Container limits | CPU and memory shown against what each container may use, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**, standing out from 90% | [Limits](../../apps/api/src/monitoring/README.md#limits) |
 | Logs | What each running container writes, with level, message and trace, newest first, with a filter | [Logs](../../apps/api/src/monitoring/README.md#logs) |
@@ -90,7 +90,7 @@ Run these from the repository root. Steps 3 and 4 matter for the latest change.
    ```bash
    docker compose -f infra/local/compose.yaml run --rm smoke-test
    ```
-4. **Apply the migrations.** This adds `0015_record-container-limits` and `0016_create-alerts`, which the API needs:
+4. **Apply the migrations.** This adds `0015_record-container-limits`, `0016_create-alerts` and `0017_alert-recipients-are-members`, which the API needs:
    ```bash
    npm run db:migrate
    ```
@@ -384,11 +384,12 @@ Start them again with `docker compose -f infra/local/compose.yaml run --rm start
 Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-environment-and-deploy), and sends metrics, as in [Flow 6](#flow-6-metrics-and-container-limits).
 
 1. Sign in as `dev-operator`, and open **Alerts**. Or open **Monitoring**, choose **Show details** on the environment, and follow **Set up an alert**, which picks the environment.
-2. Create an alert: **CPU**, **Above**, threshold `0`, **At once**, with your email.
+2. Create an alert: **CPU**, **Above**, threshold `0`, **At once**, emailing yourself and `dev-viewer`.
 3. Choose **Test email**.
 4. Wait a minute, and open **Alerts** again.
 5. **Edit** the alert, raise the threshold to `90`, and wait a minute.
 6. Sign in as `dev-viewer`, and open **Alerts**.
+7. As `dev-company-admin`, remove `dev-viewer` on **Team**, lower the threshold to `0` again, and wait a minute.
 
 **Expect:**
 - **Test email:** *A test email was sent to 1 address.*, and a *[Test]* email in Mailpit at <http://localhost:8025>.
@@ -396,6 +397,7 @@ Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-enviro
 - **Resolved:** the alert shows **OK**, Mailpit has a *[Resolved]* email saying how long it fired, and **History** shows it **Resolved**.
 - **Audit log:** as `dev-company-admin`, *Created the alert*, *The alert … fired* and *… was resolved*.
 - **A viewer** sees the alerts and their history, but not whom they email, nor any button to change them.
+- **A removed member** is no longer on the alert, and gets no email when it fires again. Only you do.
 - **A metric that waits:** with **For 5 minutes**, the alert shows **Waiting** first, and fires only after 5 minutes past the threshold.
 - **Prometheus down**, as in Flow 13: alerts keep their state, and say *Couldn't check*. Started again, they carry on.
 
@@ -421,7 +423,8 @@ Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-enviro
 | 15 | Older applications | Any | A 1.1.0 backend shows logs, but no metrics, and no **Trace** buttons |
 | 16 | Alert test email | `dev-operator` | A *[Test]* email arrives in Mailpit |
 | 17 | Alert fires and resolves | `dev-operator` | *[Firing]*, then *[Resolved]*, emails in Mailpit, each within a minute, and both in **History** |
-| 18 | Alerts for viewers | `dev-viewer` | Alerts and history shown, without addresses or buttons |
+| 18 | Alerts for viewers | `dev-viewer` | Alerts and history shown, without whom they email or buttons |
+| 19 | Removed members | `dev-company-admin` | A member removed on **Team** is taken off every alert, and gets no alert emails |
 
 ## Automated tests
 
@@ -502,10 +505,11 @@ Alerts' routes also need the `monitoring` feature. Seeing them needs `dashboards
 |---|---|
 | `GET /company/alerts` | Every alert, with its state and latest value |
 | `GET /company/alerts/incidents` | The latest 50 times an alert fired |
+| `GET /company/alerts/members` | The members an alert can email, for those who manage alerts |
 | `POST /company/alerts` | Creates an alert |
-| `PATCH /company/alerts/:id` | Changes its name, threshold, minutes, addresses, or whether it's on |
+| `PATCH /company/alerts/:id` | Changes its name, threshold, minutes, members, or whether it's on |
 | `DELETE /company/alerts/:id` | Deletes it and its history |
-| `POST /company/alerts/:id/test` | Emails its addresses a test |
+| `POST /company/alerts/:id/test` | Emails its members a test |
 
 ### Settings
 
@@ -533,7 +537,7 @@ Alerts' routes also need the `monitoring` feature. Seeing them needs `dashboards
 | Part | Files |
 |---|---|
 | Monitoring context | `apps/api/src/monitoring/` |
-| Alerts context | `apps/api/src/alerts/`, `migrations/0016_create-alerts.sql`, and `AlertEmails` in `apps/api/src/notifications/application/alert-emails.ts` |
+| Alerts context | `apps/api/src/alerts/`, `migrations/0016_create-alerts.sql` and `0017_alert-recipients-are-members.sql`, `AlertEmails` in `apps/api/src/notifications/application/alert-emails.ts`, and `CompanyMembers` in `apps/api/src/identity-access/application/company-members.ts` |
 | What Environments publishes for it | `apps/api/src/environments/application/running-environments.ts`, `environment-logs.ts`, `domain/telemetry.ts` |
 | Limits | `apps/api/src/environments/infrastructure/local-docker-runtime.ts` (`CONTAINER_LIMITS`), `migrations/0015_record-container-limits.sql` |
 | Dashboard | `apps/dashboard/src/app/features/monitoring/`, `apps/dashboard/src/app/features/alerts/` |

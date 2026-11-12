@@ -1,3 +1,5 @@
+import { currentCompanyId } from '@dreamdevops/shared-kernel';
+import type { CompanyMember, CompanyMembers } from '../../src/identity-access/application/company-members.ts';
 import type {
   AuthorizationRequest,
   CodeExchange,
@@ -86,5 +88,23 @@ export class InMemoryUserDirectory implements UserDirectory {
 
   async loadAccess(userId: string): Promise<UserAccess | null> {
     return this.#users.get(userId) ?? null;
+  }
+}
+
+/** Members by company, answered in the current company only, as the real one does. */
+export class FakeCompanyMembers implements CompanyMembers {
+  readonly byCompany = new Map<string, CompanyMember[]>();
+
+  async list(): Promise<CompanyMember[]> {
+    return [...(this.byCompany.get(currentCompanyId()) ?? [])];
+  }
+
+  async find(userIds: readonly string[]): Promise<CompanyMember[]> {
+    return (await this.list()).filter((member) => userIds.includes(member.userId));
+  }
+
+  /** Removes someone from a company, as removing a member does. */
+  remove(companyId: string, userId: string): void {
+    this.byCompany.set(companyId, (this.byCompany.get(companyId) ?? []).filter((member) => member.userId !== userId));
   }
 }

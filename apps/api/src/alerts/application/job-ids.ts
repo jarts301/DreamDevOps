@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 /**
- * A job ID made from what the job is about, such as an event and an address, so the same
+ * A job ID made from what the job is about, such as an event and a member, so the same
  * job is queued once even if it's asked for twice. Job IDs must be UUIDs, so this derives
  * one, in the shape of a version 5 UUID.
  */

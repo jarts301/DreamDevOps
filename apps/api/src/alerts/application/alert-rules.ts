@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createDomainEvent, currentCompanyId, describeError, type DomainEvent } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
+import type { CompanyMember, CompanyMembers } from '../../identity-access/application/company-members.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import type { LatestMetrics } from '../../monitoring/application/latest-metrics.ts';
 import { type MetricDefinition, type MetricKey, METRICS } from '../../monitoring/domain/metrics.ts';
@@ -16,7 +17,7 @@ import {
   parseEnvironmentId,
   parseForMinutes,
   parseMetric,
-  parseRecipients,
+  parseRecipientIds,
   parseThreshold,
 } from '../domain/alert.ts';
 import { AlertError } from '../domain/errors.ts';
@@ -41,8 +42,11 @@ export interface AlertView {
   readonly forMinutes: number;
   /** The condition in words, such as "CPU above 80% for 5 minutes". */
   readonly condition: string;
-  /** The addresses it emails, or null for members who can't manage alerts. */
-  readonly recipients: readonly string[] | null;
+  /**
+   * The members it emails, or null for those who can't manage alerts. Only people who are
+   * still members count: anyone removed from the company is left out, and never emailed.
+   */
+  readonly recipients: readonly Recipient[] | null;
   readonly recipientCount: number;
   readonly enabled: boolean;
   readonly state: AlertState;
@@ -57,6 +61,13 @@ export interface AlertView {
   readonly lastNotifiedAt: string | null;
   readonly lastNotificationError: string | null;
   readonly createdAt: string;
+}
+
+/** A member an alert emails. */
+export interface Recipient {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly email: string;
 }
 
 export interface AlertsOverview {
@@ -98,7 +109,7 @@ interface AlertRow {
   comparator: Comparator;
   threshold: number;
   for_minutes: number;
-  recipients: string[];
+  recipient_ids: string[];
   enabled: boolean;
   state: AlertState;
   pending_since: Date | null;
@@ -145,13 +156,22 @@ export class AlertRules {
   readonly #places: Places;
   readonly #metrics: LatestMetrics;
   readonly #emails: AlertEmails;
+  readonly #members: CompanyMembers;
   readonly #now: () => Date;
 
-  constructor(database: TenantDatabase, places: Places, metrics: LatestMetrics, emails: AlertEmails, now: () => Date = () => new Date()) {
+  constructor(
+    database: TenantDatabase,
+    places: Places,
+    metrics: LatestMetrics,
+    emails: AlertEmails,
+    members: CompanyMembers,
+    now: () => Date = () => new Date(),
+  ) {
     this.#database = database;
     this.#places = places;
     this.#metrics = metrics;
     this.#emails = emails;
+    this.#members = members;
     this.#now = now;
   }
 
@@ -161,12 +181,36 @@ export class AlertRules {
       const { rows } = await tx.query<AlertRow>(`${SELECT_ALERTS} ORDER BY lower(a.name), a.id`);
       return rows;
     });
-    const places = await this.#places.of(rows.map((row) => row.environment_id));
+    const [places, members] = await Promise.all([
+      this.#places.of(rows.map((row) => row.environment_id)),
+      rows.length === 0 ? Promise.resolve([]) : this.#members.list(),
+    ]);
+    const byId = new Map(members.map((member) => [member.userId, member]));
     return {
       metricsEnabled: this.#metrics.enabled,
       metrics: METRICS,
-      alerts: rows.map((row) => toView(row, places.get(row.environment_id) ?? null, options.showRecipients)),
+      alerts: rows.map((row) => toView(row, places.get(row.environment_id) ?? null, byId, options.showRecipients)),
     };
+  }
+
+  /** The members an alert can email: everyone in the company, by name. */
+  async members(): Promise<Recipient[]> {
+    return (await this.#members.list()).map(recipientOf);
+  }
+
+  /**
+   * Takes someone who left the company off every alert, so they aren't emailed again, even
+   * if they rejoin. Emails are only ever sent to current members anyway, so this only
+   * tidies up what alerts show.
+   */
+  async forgetMember(userId: string): Promise<void> {
+    await this.#database.transaction((tx) =>
+      tx.query(
+        `UPDATE alerts.alerts SET recipient_ids = array_remove(recipient_ids, $1::uuid), updated_at = now()
+         WHERE $1::uuid = ANY (recipient_ids)`,
+        [userId],
+      ),
+    );
   }
 
   /** The latest incidents, newest first, including those that still fire. */
@@ -224,17 +268,18 @@ export class AlertRules {
       threshold: parseThreshold(input.threshold, metric),
       forMinutes: parseForMinutes(input.forMinutes),
     };
-    const recipients = parseRecipients(input.recipients);
+    const recipients = parseRecipientIds(input.recipients);
+    await this.#assertMembers(recipients);
     const place = await this.#places.find(environmentId);
     if (place === null) {
       throw new AlertError('not-found', 'There’s no such environment.');
     }
     const id = randomUUID();
-    return this.#database.transaction(async (tx) => {
+    const row = await this.#database.transaction(async (tx) => {
       await assertNameFree(tx, name, null);
       await tx.query(
         `INSERT INTO alerts.alerts
-           (id, company_id, name, environment_id, metric, comparator, threshold, for_minutes, recipients, created_by)
+           (id, company_id, name, environment_id, metric, comparator, threshold, for_minutes, recipient_ids, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [id, currentCompanyId(), name, environmentId, metric, condition.comparator, condition.threshold, condition.forMinutes, recipients, actor.userId],
       );
@@ -246,12 +291,13 @@ export class AlertRules {
           payload: { ...payloadOf(id, name, condition, place), recipients: recipients.length },
         }),
       ]);
-      return toView((await findAlert(tx, id))!, place, true);
+      return (await findAlert(tx, id))!;
     });
+    return this.#view(row, place);
   }
 
   /**
-   * Changes an alert's name, threshold, minutes, addresses, or whether it's on. What it
+   * Changes an alert's name, threshold, minutes, members, or whether it's on. What it
    * watches stays, so its emails always describe it truly. Turning it off ends any
    * incident, without an email, and a new threshold or number of minutes applies from the
    * next check.
@@ -272,29 +318,32 @@ export class AlertRules {
     }
     const name = input.name === undefined ? null : parseAlertName(input.name);
     const forMinutes = input.forMinutes === undefined ? null : parseForMinutes(input.forMinutes);
-    const recipients = input.recipients === undefined ? null : parseRecipients(input.recipients);
+    const recipients = input.recipients === undefined ? null : parseRecipientIds(input.recipients);
+    if (recipients !== null) {
+      await this.#assertMembers(recipients);
+    }
     const enabled = input.enabled ?? null;
     // What an alert watches never changes, so its place is named before the row is locked.
     const place = await this.#placeOf(id);
-    return this.#database.transaction(async (tx) => {
+    const row = await this.#database.transaction(async (tx) => {
       const current = await lockAlert(tx, id);
       const threshold = input.threshold === undefined ? null : parseThreshold(input.threshold, current.metric);
       const next = {
         name: name ?? current.name,
         threshold: threshold ?? current.threshold,
         forMinutes: forMinutes ?? current.for_minutes,
-        recipients: recipients ?? current.recipients,
+        recipients: recipients ?? current.recipient_ids,
         enabled: enabled ?? current.enabled,
       };
       const changes = [
         next.name !== current.name && 'name',
         next.threshold !== current.threshold && 'threshold',
         next.forMinutes !== current.for_minutes && 'forMinutes',
-        next.recipients.join(',') !== current.recipients.join(',') && 'recipients',
+        next.recipients.join(',') !== current.recipient_ids.join(',') && 'recipients',
         next.enabled !== current.enabled && 'enabled',
       ].filter((change) => change !== false);
       if (changes.length === 0) {
-        return toView((await findAlert(tx, id))!, place, true);
+        return (await findAlert(tx, id))!;
       }
       if (next.name !== current.name) {
         await assertNameFree(tx, next.name, id);
@@ -302,7 +351,7 @@ export class AlertRules {
       const turnedOff = current.enabled && !next.enabled;
       await tx.query(
         `UPDATE alerts.alerts SET
-           name = $2, threshold = $3, for_minutes = $4, recipients = $5, enabled = $6, updated_at = now(),
+           name = $2, threshold = $3, for_minutes = $4, recipient_ids = $5, enabled = $6, updated_at = now(),
            state = CASE WHEN $7 THEN 'ok' ELSE state END,
            pending_since = CASE WHEN $7 THEN NULL ELSE pending_since END,
            check_problem = CASE WHEN $7 THEN NULL ELSE check_problem END
@@ -330,8 +379,9 @@ export class AlertRules {
           },
         }),
       ]);
-      return toView((await findAlert(tx, id))!, place, true);
+      return (await findAlert(tx, id))!;
     });
+    return this.#view(row, place);
   }
 
   /** Deletes an alert and its history. */
@@ -354,7 +404,7 @@ export class AlertRules {
   }
 
   /**
-   * Emails every address the alert names straight away, saying it's a test, so whoever
+   * Emails every member the alert names straight away, saying it's a test, so whoever
    * set it up can check the emails arrive. Returns whether they all went.
    */
   async test(actor: Principal, idValue: unknown): Promise<TestResult> {
@@ -364,13 +414,18 @@ export class AlertRules {
       throw new AlertError('not-found', 'This alert does not exist.');
     }
     const place = (await this.#places.find(alert.environment_id)) ?? unknownPlace(alert.environment_id);
+    // Only those who are members now, at their address now.
+    const recipients = await this.#members.find(alert.recipient_ids);
+    if (recipients.length === 0) {
+      return { delivered: false, sent: 0, error: 'The alert names nobody who is still a member of the company. Choose someone to email.' };
+    }
     let sent = 0;
     let error: string | null = null;
-    for (const to of alert.recipients) {
+    for (const recipient of recipients) {
       try {
         await this.#emails.send({
           kind: 'test',
-          to,
+          to: recipient.email,
           companyName: actor.companyName ?? 'Your company',
           alertName: alert.name,
           applicationName: place.applicationName,
@@ -395,6 +450,20 @@ export class AlertRules {
       ),
     );
     return { delivered: error === null, sent, error };
+  }
+
+  /** Refuses anyone who isn't a member of the company now. */
+  async #assertMembers(userIds: readonly string[]): Promise<void> {
+    const members = await this.#members.find(userIds);
+    if (members.length !== userIds.length) {
+      throw new AlertError('invalid', 'Choose members of the company to email. Someone chosen isn’t a member.');
+    }
+  }
+
+  /** An alert as the dashboard shows it to those who manage it. */
+  async #view(row: AlertRow, place: Place | null): Promise<AlertView> {
+    const members = await this.#members.find(row.recipient_ids);
+    return toView(row, place, new Map(members.map((member) => [member.userId, member])), true);
   }
 
   /** The place an alert watches, or not-found if the company has no such alert. */
@@ -459,7 +528,16 @@ async function assertNameFree(tx: TenantTransaction, name: string, exceptId: str
   }
 }
 
-function toView(row: AlertRow, place: Place | null, showRecipients: boolean): AlertView {
+function recipientOf(member: CompanyMember): Recipient {
+  return { userId: member.userId, displayName: member.displayName, email: member.email };
+}
+
+function toView(row: AlertRow, place: Place | null, members: ReadonlyMap<string, CompanyMember>, showRecipients: boolean): AlertView {
+  // Anyone who left the company is left out, until they're taken off the alert.
+  const recipients = row.recipient_ids.flatMap((id) => {
+    const member = members.get(id);
+    return member === undefined ? [] : [recipientOf(member)];
+  });
   return {
     id: row.id,
     name: row.name,
@@ -473,8 +551,8 @@ function toView(row: AlertRow, place: Place | null, showRecipients: boolean): Al
     threshold: row.threshold,
     forMinutes: row.for_minutes,
     condition: describeCondition(conditionOf(row), { withDuration: true }),
-    recipients: showRecipients ? row.recipients : null,
-    recipientCount: row.recipients.length,
+    recipients: showRecipients ? recipients : null,
+    recipientCount: recipients.length,
     enabled: row.enabled,
     state: row.state,
     pendingSince: row.pending_since?.toISOString() ?? null,

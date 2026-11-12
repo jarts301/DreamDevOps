@@ -6,6 +6,13 @@ import { EnvironmentsApi } from '../environments/environments.api';
 import type { MetricDefinition, MetricKey } from '../monitoring/monitoring.api';
 
 export type Comparator = 'above' | 'below';
+
+/** A member of the company an alert can email. */
+export interface Recipient {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly email: string;
+}
 export type AlertState = 'ok' | 'pending' | 'firing';
 
 export interface Alert {
@@ -24,8 +31,11 @@ export interface Alert {
   readonly forMinutes: number;
   /** The condition in words, such as "CPU above 80% for 5 minutes". */
   readonly condition: string;
-  /** The addresses it emails, or null for members who can't manage alerts. */
-  readonly recipients: readonly string[] | null;
+  /**
+   * The members it emails, or null for those who can't manage alerts. Anyone removed from
+   * the company is left out, and never emailed.
+   */
+  readonly recipients: readonly Recipient[] | null;
   readonly recipientCount: number;
   readonly enabled: boolean;
   readonly state: AlertState;
@@ -69,6 +79,7 @@ export interface NewAlert {
   readonly comparator: Comparator;
   readonly threshold: number;
   readonly forMinutes: number;
+  /** The user IDs of the members to email. */
   readonly recipients: readonly string[];
 }
 
@@ -76,6 +87,7 @@ export interface AlertChanges {
   readonly name?: string;
   readonly threshold?: number;
   readonly forMinutes?: number;
+  /** The user IDs of the members to email. */
   readonly recipients?: readonly string[];
   readonly enabled?: boolean;
 }
@@ -98,6 +110,11 @@ export class AlertsApi {
 
   overview(): Promise<AlertsOverview> {
     return firstValueFrom(this.#http.get<AlertsOverview>(BASE));
+  }
+
+  /** Whom alerts can email: the company's members. Only for those who manage alerts. */
+  members(): Promise<Recipient[]> {
+    return firstValueFrom(this.#http.get<Recipient[]>(`${BASE}/members`));
   }
 
   incidents(): Promise<Incident[]> {

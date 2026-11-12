@@ -7,8 +7,8 @@ import type { Comparator } from './alert.ts';
  * chat rules can post AlertTriggered and AlertResolved, so their names and fields must
  * stay compatible, or come with a new event version.
  *
- * Payloads never hold the addresses an alert emails, only how many there are, so the audit
- * log and chat never show them.
+ * Payloads never hold whom an alert emails, only how many members, so the audit log and
+ * chat never show anyone's address.
  */
 export interface AlertPayload {
   readonly alertId: string;

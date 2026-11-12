@@ -32,7 +32,7 @@ const SUBJECT_PREFIXES: Readonly<Record<AlertEmailKind, string>> = {
 };
 
 /**
- * Emails the people an alert names when it fires and when it's resolved. Each email goes
+ * Emails the members an alert names when it fires and when it's resolved. Each email goes
  * through a background job, so a failure throws, and the job tries again.
  */
 export class AlertEmails {
@@ -92,7 +92,7 @@ export class AlertEmails {
 }
 
 function footer(email: AlertEmail): string {
-  return `You get this email because the alert "${email.alertName}" in ${email.companyName} on DreamDevOps names this address.`;
+  return `You get this email because the alert "${email.alertName}" names you, as a member of ${email.companyName} on DreamDevOps.`;
 }
 
 /** Such as "Tue, 10 Nov 2026 12:30 UTC". Emails can't know the reader's time zone. */

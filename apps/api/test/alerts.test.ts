@@ -5,7 +5,11 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { AlertChecks, CheckSummary } from '../src/alerts/application/alert-checks.ts';
-import type { AlertDeliveries, EmailJob } from '../src/alerts/application/alert-deliveries.ts';
+import { AlertDeliveries, EMAIL_QUEUE, type EmailJob } from '../src/alerts/application/alert-deliveries.ts';
+import type { AlertRules } from '../src/alerts/application/alert-rules.ts';
+import type { AlertTriggered } from '../src/alerts/domain/events.ts';
+import type { CompanyDirectory } from '../src/tenancy/application/company-directory.ts';
+import type { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { jobIdFor } from '../src/alerts/application/job-ids.ts';
 import {
   describeCondition,
@@ -15,20 +19,21 @@ import {
   parseComparator,
   parseForMinutes,
   parseMetric,
-  parseRecipients,
+  parseRecipientIds,
   parseThreshold,
 } from '../src/alerts/domain/alert.ts';
 import { AlertError } from '../src/alerts/domain/errors.ts';
 import { type AlertStatus, nextStatus, OK } from '../src/alerts/domain/evaluation.ts';
 import { AlertsSubscriptions, CHECK_QUEUE, CHECK_SCHEDULE, EVALUATE_QUEUE } from '../src/alerts/messaging/alerts-subscriptions.ts';
 import { Entitlements } from '../src/editions/application/entitlements.ts';
+import { COMPANY_MEMBERS, type CompanyMember } from '../src/identity-access/application/company-members.ts';
 import { RUNNING_ENVIRONMENTS, type RunningEnvironment } from '../src/environments/application/running-environments.ts';
 import { CompanyLatestMetrics } from '../src/monitoring/application/company-latest-metrics.ts';
 import { MetricsUnavailableError } from '../src/monitoring/application/ports.ts';
 import { formatMetricValue } from '../src/monitoring/domain/metrics.ts';
 import { type AlertEmail, AlertEmails } from '../src/notifications/application/alert-emails.ts';
 import { NOTIFIABLE_EVENTS, summarize } from '../src/notifications/domain/event-catalog.ts';
-import { COMPANY_A, COMPANY_B, FakeMailer, FakeMetricsStore, FakeRunningEnvironments } from './fakes.ts';
+import { COMPANY_A, COMPANY_B, FakeCompanyMembers, FakeMailer, FakeMetricsStore, FakeRunningEnvironments } from './fakes.ts';
 import { signIn as signInAs } from './support/integration.ts';
 import { createTestApp, testConfig } from './test-app.ts';
 
@@ -36,6 +41,25 @@ const STAGING = '00000000-0000-4000-8000-0000000000e1';
 const PRODUCTION = '00000000-0000-4000-8000-0000000000e2';
 const THEIR_STAGING = '00000000-0000-4000-8000-0000000000f1';
 const ALERT = '00000000-0000-4000-8000-0000000000c1';
+const OPS = '00000000-0000-4000-8000-0000000000d1';
+const LEAD = '00000000-0000-4000-8000-0000000000d2';
+const FORMER = '00000000-0000-4000-8000-0000000000d3';
+const THEIRS = '00000000-0000-4000-8000-0000000000d9';
+
+const member = (userId: string, name: string, companyId = COMPANY_A): CompanyMember => ({
+  userId,
+  displayName: name,
+  email: `${name.toLowerCase()}@${companyId === COMPANY_A ? 'a' : 'b'}.example.com`,
+  role: 'operator',
+});
+
+/** Ops and Lead are members of company A, and someone else of company B. */
+function members(): FakeCompanyMembers {
+  const fake = new FakeCompanyMembers();
+  fake.byCompany.set(COMPANY_A, [member(OPS, 'Ops'), member(LEAD, 'Lead')]);
+  fake.byCompany.set(COMPANY_B, [member(THEIRS, 'Theirs', COMPANY_B)]);
+  return fake;
+}
 
 const MINUTE = 60_000;
 const at = (minutes: number, seconds = 0) => new Date(Date.UTC(2026, 10, 10, 12, minutes, seconds));
@@ -92,16 +116,14 @@ describe('what an alert may say', () => {
     }
   });
 
-  it('emails one to ten addresses, each once, in lowercase', () => {
-    expect(parseRecipients([' Ops@Example.com ', 'ops@example.com', 'lead@example.com'])).toEqual([
-      'ops@example.com',
-      'lead@example.com',
-    ]);
-    expect(() => parseRecipients([])).toThrow('Enter at least one email address to notify.');
-    expect(() => parseRecipients('ops@example.com')).toThrow(AlertError);
-    expect(() => parseRecipients(['ops@example.com', 'not an address'])).toThrow('"not an address" isn\'t a valid email address.');
-    expect(() => parseRecipients(Array.from({ length: 11 }, (_, index) => `person${index}@example.com`))).toThrow(
-      'An alert emails at most 10 addresses.',
+  it('emails one to ten members, each once, by their user IDs', () => {
+    expect(parseRecipientIds([OPS.toUpperCase(), OPS, LEAD])).toEqual([OPS, LEAD]);
+    expect(() => parseRecipientIds([])).toThrow('Choose at least one member to email.');
+    expect(() => parseRecipientIds(OPS)).toThrow('Choose at least one member to email.');
+    // Addresses are no longer accepted: alerts email members, at their address as it is then.
+    expect(() => parseRecipientIds(['ops@example.com'])).toThrow('Choose members of the company to email.');
+    expect(() => parseRecipientIds(Array.from({ length: 11 }, (_, index) => `00000000-0000-4000-8000-0000000001${String(index).padStart(2, '0')}`))).toThrow(
+      'An alert emails at most 10 members.',
     );
   });
 
@@ -261,7 +283,7 @@ describe('alert emails', () => {
           'See your alerts on the dashboard:',
           'http://localhost:4200/alerts',
           '',
-          'You get this email because the alert "High CPU" in Acme on DreamDevOps names this address.',
+          'You get this email because the alert "High CPU" names you, as a member of Acme on DreamDevOps.',
         ].join('\n'),
       },
     ]);
@@ -341,7 +363,8 @@ describe('alert jobs', () => {
     } as unknown as AlertChecks;
     const delivered: EmailJob[] = [];
     const deliveries = { deliver: async (job: EmailJob) => void delivered.push(job), fanOut: async () => {} } as unknown as AlertDeliveries;
-    const subscriptions = new AlertsSubscriptions(checks, deliveries, testConfig(), () => at(0, 30));
+    const rules = { forgetMember: async () => {} } as unknown as AlertRules;
+    const subscriptions = new AlertsSubscriptions(checks, deliveries, rules, testConfig(), () => at(0, 30));
 
     await subscriptions.subscribe({ bus: new EventBus(queue), queue });
 
@@ -357,6 +380,116 @@ describe('alert jobs', () => {
     await queue.drain();
     expect(checked).toHaveLength(2);
   });
+
+  it('take someone removed from the company off every alert, in that company', async () => {
+    const queue = new InMemoryJobQueue();
+    const bus = new EventBus(queue);
+    const forgotten: { userId: string; companyId: string }[] = [];
+    const { currentCompanyId } = await import('@dreamdevops/shared-kernel');
+    const rules = {
+      forgetMember: async (userId: string) => void forgotten.push({ userId, companyId: currentCompanyId() }),
+    } as unknown as AlertRules;
+    const idle = { companiesToCheck: async () => [], check: async () => ({}) } as unknown as AlertChecks;
+    const deliveries = { deliver: async () => {}, fanOut: async () => {} } as unknown as AlertDeliveries;
+    await new AlertsSubscriptions(idle, deliveries, rules, testConfig()).subscribe({ bus, queue });
+
+    await bus.publish(
+      createDomainEvent({
+        eventType: 'MemberRemoved',
+        companyId: parseCompanyId(COMPANY_A),
+        payload: { userId: FORMER, role: 'operator', removedBy: OPS },
+      }),
+    );
+    await queue.drain();
+
+    expect(forgotten).toEqual([{ userId: FORMER, companyId: COMPANY_A }]);
+  });
+});
+
+describe('alert emails go only to members', () => {
+  /** A database whose alert names Ops, Lead and someone who has left since. */
+  const database = (recipientIds: string[]) => {
+    const queries: string[] = [];
+    const fake = {
+      transaction: async <T>(work: (tx: { query: (sql: string) => Promise<{ rows: object[] }> }) => Promise<T>) =>
+        work({
+          query: async (sql: string) => {
+            queries.push(sql);
+            return { rows: sql.includes('SELECT recipient_ids') ? [{ recipient_ids: recipientIds }] : [] };
+          },
+        }),
+    } as unknown as TenantDatabase;
+    return { fake, queries };
+  };
+  const companies = { find: async () => ({ id: COMPANY_A, name: 'Acme', slug: 'acme', status: 'active' }) } as unknown as CompanyDirectory;
+  const event = (): AlertTriggered =>
+    createDomainEvent({
+      eventType: 'AlertTriggered',
+      companyId: parseCompanyId(COMPANY_A),
+      payload: {
+        alertId: ALERT,
+        name: 'High CPU',
+        environmentId: STAGING,
+        environmentName: 'Staging',
+        applicationId: '00000000-0000-4000-8000-0000000000a1',
+        applicationName: 'Billing API',
+        production: false,
+        metric: 'cpu',
+        comparator: 'above',
+        threshold: 80,
+        forMinutes: 0,
+        condition: 'CPU above 80%',
+        incidentId: '00000000-0000-4000-8000-0000000000b7',
+        measured: 93,
+        value: '93%',
+        firingSince: '2026-11-10T12:30:00.000Z',
+      },
+    }) as AlertTriggered;
+
+  const setUp = () => {
+    const mailer = new FakeMailer();
+    const team = members();
+    const { fake, queries } = database([OPS, LEAD, FORMER]);
+    const deliveries = new AlertDeliveries(fake, companies, new AlertEmails(mailer, 'http://localhost:4200'), team);
+    return { mailer, team, deliveries, queries };
+  };
+
+  it('queue one email per member the alert names, leaving out anyone no longer in the company', async () => {
+    const { deliveries } = setUp();
+    const queue = new InMemoryJobQueue();
+    const jobs: EmailJob[] = [];
+    await queue.createQueue(EMAIL_QUEUE);
+    await queue.work(EMAIL_QUEUE, async (job) => void jobs.push(job.data as EmailJob));
+    const triggered = event();
+
+    await inCompany(COMPANY_A, () => deliveries.fanOut(triggered, queue));
+    // Delivered twice, as events can be, it still queues each email once.
+    await inCompany(COMPANY_A, () => deliveries.fanOut(triggered, queue));
+    await queue.drain();
+
+    expect(jobs.map((job) => job.userId)).toEqual([OPS, LEAD]);
+  });
+
+  it('send each to the member’s address as it is when sent', async () => {
+    const { deliveries, mailer, team } = setUp();
+    team.byCompany.set(COMPANY_A, [{ ...member(OPS, 'Ops'), email: 'ops.new@a.example.com' }, member(LEAD, 'Lead')]);
+
+    await deliveries.deliver({ event: event(), userId: OPS });
+
+    expect(mailer.sent.map((sent) => [sent.to, sent.subject])).toEqual([['ops.new@a.example.com', '[Firing] High CPU: Billing API in Staging']]);
+  });
+
+  it('never email someone removed from the company after the alert fired', async () => {
+    const { deliveries, mailer, team, queries } = setUp();
+    team.remove(COMPANY_A, LEAD);
+
+    await deliveries.deliver({ event: event(), userId: LEAD });
+    // Nor anyone of another company, whatever a job says.
+    await deliveries.deliver({ event: event(), userId: THEIRS });
+
+    expect(mailer.sent).toEqual([]);
+    expect(queries).toEqual([]);
+  });
 });
 
 describe('alert routes', () => {
@@ -370,6 +503,7 @@ describe('alert routes', () => {
       config: { secureCookies: false },
       overrides: [
         { provide: RUNNING_ENVIRONMENTS, useValue: environments },
+        { provide: COMPANY_MEMBERS, useValue: members() },
         { provide: Entitlements, useValue: { isEnabled: async () => entitled } },
       ],
     });
@@ -384,11 +518,12 @@ describe('alert routes', () => {
   });
 
   const signIn = (user: string) => signInAs(app, user);
-  const valid = { name: 'High CPU', environmentId: STAGING, metric: 'cpu', comparator: 'above', threshold: 80, forMinutes: 5, recipients: ['ops@example.com'] };
+  const valid = { name: 'High CPU', environmentId: STAGING, metric: 'cpu', comparator: 'above', threshold: 80, forMinutes: 5, recipients: [OPS] };
 
   it.each([
     ['GET', '/api/v1/company/alerts'],
     ['GET', '/api/v1/company/alerts/incidents'],
+    ['GET', '/api/v1/company/alerts/members'],
     ['POST', '/api/v1/company/alerts'],
     ['PATCH', `/api/v1/company/alerts/${ALERT}`],
     ['DELETE', `/api/v1/company/alerts/${ALERT}`],
@@ -418,8 +553,38 @@ describe('alert routes', () => {
     expect((await post({ ...valid, name: 'x' }).expect(400)).body.detail).toBe('Enter an alert name between 2 and 80 characters.');
     expect((await post({ ...valid, metric: 'disk' }).expect(400)).body.detail).toMatch(/^Choose a metric/);
     expect((await post({ ...valid, threshold: -5 }).expect(400)).body.detail).toBe('Enter a threshold of zero or more.');
-    expect((await post({ ...valid, recipients: [] }).expect(400)).body.detail).toBe('Enter at least one email address to notify.');
+    expect((await post({ ...valid, recipients: [] }).expect(400)).body.detail).toBe('Choose at least one member to email.');
+    expect((await post({ ...valid, recipients: ['ops@example.com'] }).expect(400)).body.detail).toBe(
+      'Choose members of the company to email.',
+    );
     expect((await post({ ...valid, environmentId: 'staging' }).expect(400)).body.detail).toBe('Choose the environment to watch.');
+  });
+
+  it('email only members of the company: not someone who left, nor another company’s', async () => {
+    const operator = await signIn('operator-a');
+    const post = (recipients: string[]) =>
+      operator.post('/api/v1/company/alerts').set('Origin', 'http://dashboard.test').send({ ...valid, recipients });
+
+    for (const recipients of [[OPS, FORMER], [THEIRS]]) {
+      expect((await post(recipients).expect(400)).body.detail).toBe(
+        'Choose members of the company to email. Someone chosen isn’t a member.',
+      );
+    }
+    await operator
+      .patch(`/api/v1/company/alerts/${ALERT}`)
+      .set('Origin', 'http://dashboard.test')
+      .send({ recipients: [FORMER] })
+      .expect(400);
+  });
+
+  it('offer those who manage alerts the company’s members to email, and nobody else', async () => {
+    const { body } = await (await signIn('operator-a')).get('/api/v1/company/alerts/members').expect(200);
+
+    expect(body).toEqual([
+      { userId: OPS, displayName: 'Ops', email: 'ops@a.example.com' },
+      { userId: LEAD, displayName: 'Lead', email: 'lead@a.example.com' },
+    ]);
+    await (await signIn('viewer-a')).get('/api/v1/company/alerts/members').expect(403);
   });
 
   it('refuse to watch an environment the company doesn’t have', async () => {

@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import type { Principal } from '../domain/access.ts';
 import { normalizeEmail } from '../domain/email.ts';
 import { AccessError } from '../domain/errors.ts';
+import type { MemberRemovedPayload } from '../domain/events.ts';
 
 const COMPANY_ADMIN = 'company-admin';
 const INVITATION_LIFETIME_DAYS = 7;
@@ -93,7 +94,7 @@ export class CompanyAccessService {
       }
       await tx.query('DELETE FROM identity.memberships WHERE user_id = $1', [userId]);
       await appendToOutbox(tx, [
-        createDomainEvent({
+        createDomainEvent<'MemberRemoved', MemberRemovedPayload>({
           eventType: 'MemberRemoved',
           companyId: currentCompanyId(),
           actorId: actor.userId,

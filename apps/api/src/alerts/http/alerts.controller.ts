@@ -36,6 +36,14 @@ export class AlertsController {
     return this.#rules.history();
   }
 
+  /** Whom an alert can email: the company's members, with their names and addresses. */
+  @RequirePermissions(MANAGE_ALERTS)
+  @RequireFeature('monitoring')
+  @Get('members')
+  members(): Promise<object[]> {
+    return this.#rules.members();
+  }
+
   @RequirePermissions(MANAGE_ALERTS)
   @RequireFeature('monitoring')
   @Post()

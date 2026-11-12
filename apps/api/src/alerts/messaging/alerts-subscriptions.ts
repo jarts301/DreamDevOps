@@ -2,9 +2,11 @@ import { Logger } from '@nestjs/common';
 import { parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
+import type { MemberRemoved } from '../../identity-access/domain/events.ts';
 import type { AlertChecks } from '../application/alert-checks.ts';
 import { type AlertDeliveries, EMAIL_QUEUE, type EmailJob } from '../application/alert-deliveries.ts';
 import { jobIdFor } from '../application/job-ids.ts';
+import type { AlertRules } from '../application/alert-rules.ts';
 import type { AlertResolved, AlertTriggered } from '../domain/events.ts';
 
 /** Sent every minute, on a schedule every API process shares, to check every company's alerts. */
@@ -20,18 +22,27 @@ interface EvaluateJob {
 
 /**
  * Checks alerts every minute, and emails people when they fire and when they're resolved.
- * A check that fails isn't tried again: the next minute's check takes its place.
+ * A check that fails isn't tried again: the next minute's check takes its place. Someone
+ * removed from the company is taken off every alert.
  */
 export class AlertsSubscriptions implements BackgroundSubscriber {
   readonly #logger = new Logger(AlertsSubscriptions.name);
   readonly #checks: AlertChecks;
   readonly #deliveries: AlertDeliveries;
+  readonly #rules: AlertRules;
   readonly #config: AppConfig;
   readonly #now: () => Date;
 
-  constructor(checks: AlertChecks, deliveries: AlertDeliveries, config: AppConfig, now: () => Date = () => new Date()) {
+  constructor(
+    checks: AlertChecks,
+    deliveries: AlertDeliveries,
+    rules: AlertRules,
+    config: AppConfig,
+    now: () => Date = () => new Date(),
+  ) {
     this.#checks = checks;
     this.#deliveries = deliveries;
+    this.#rules = rules;
     this.#config = config;
     this.#now = now;
   }
@@ -61,6 +72,13 @@ export class AlertsSubscriptions implements BackgroundSubscriber {
     const fanOut = (event: AlertTriggered | AlertResolved) => this.#deliveries.fanOut(event, queue);
     await bus.subscribe<AlertTriggered>('AlertTriggered', 'alerts-email', fanOut, { retryLimit: 5, retryDelaySeconds: 5 });
     await bus.subscribe<AlertResolved>('AlertResolved', 'alerts-email', fanOut, { retryLimit: 5, retryDelaySeconds: 5 });
+
+    await bus.subscribe<MemberRemoved>(
+      'MemberRemoved',
+      'alerts-recipients',
+      (event) => this.#rules.forgetMember(event.payload.userId),
+      { retryLimit: 5, retryDelaySeconds: 5 },
+    );
 
     // Last, once every queue it feeds has its worker.
     await queue.schedule(CHECK_QUEUE, CHECK_SCHEDULE);
