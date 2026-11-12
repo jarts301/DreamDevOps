@@ -21,6 +21,7 @@ A guide to every flow DreamDevOps offers today, from signing in to watching a ru
 - [Flow 11: Stopping, moving and rolling back](#flow-11-stopping-moving-and-rolling-back)
 - [Flow 12: Company separation](#flow-12-company-separation)
 - [Flow 13: When something is down](#flow-13-when-something-is-down)
+- [Flow 14: Alerts by email](#flow-14-alerts-by-email)
 - [Test checklist](#test-checklist)
 - [Automated tests](#automated-tests)
 - [Troubleshooting](#troubleshooting)
@@ -32,6 +33,7 @@ A guide to every flow DreamDevOps offers today, from signing in to watching a ru
 | Change | What it gives | Where it's described |
 |---|---|---|
 | **Monitoring** page and context | Each running application's CPU, memory, requests, response times and server errors, now and charted over 15 minutes to 24 hours | [Monitoring guide](../../apps/api/src/monitoring/README.md) |
+| **Alerts** page and context | Alerts on any environment's metric, above or below a threshold for a number of minutes, checked every minute, emailing their addresses when they fire and when they're resolved, through Mailpit locally | [Alerts guide](../../apps/api/src/alerts/README.md) |
 | Daily high | Each chart has an orange dashed line at the metric's highest value in the 24 hours before the range, and says when values go above it | [Daily high](../../apps/api/src/monitoring/README.md#daily-high) |
 | Container limits | CPU and memory shown against what each container may use, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**, standing out from 90% | [Limits](../../apps/api/src/monitoring/README.md#limits) |
 | Logs | What each running container writes, with level, message and trace, newest first, with a filter | [Logs](../../apps/api/src/monitoring/README.md#logs) |
@@ -88,7 +90,7 @@ Run these from the repository root. Steps 3 and 4 matter for the latest change.
    ```bash
    docker compose -f infra/local/compose.yaml run --rm smoke-test
    ```
-4. **Apply the migrations.** This adds `0015_record-container-limits`, which the API needs:
+4. **Apply the migrations.** This adds `0015_record-container-limits` and `0016_create-alerts`, which the API needs:
    ```bash
    npm run db:migrate
    ```
@@ -377,6 +379,26 @@ Prometheus's and Jaeger's own pages show every company's data. They're for whoev
 
 Start them again with `docker compose -f infra/local/compose.yaml run --rm start`. Jaeger starts empty, since it keeps traces in memory.
 
+## Flow 14: Alerts by email
+
+Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-environment-and-deploy), and sends metrics, as in [Flow 6](#flow-6-metrics-and-container-limits).
+
+1. Sign in as `dev-operator`, and open **Alerts**. Or open **Monitoring**, choose **Show details** on the environment, and follow **Set up an alert**, which picks the environment.
+2. Create an alert: **CPU**, **Above**, threshold `0`, **At once**, with your email.
+3. Choose **Test email**.
+4. Wait a minute, and open **Alerts** again.
+5. **Edit** the alert, raise the threshold to `90`, and wait a minute.
+6. Sign in as `dev-viewer`, and open **Alerts**.
+
+**Expect:**
+- **Test email:** *A test email was sent to 1 address.*, and a *[Test]* email in Mailpit at <http://localhost:8025>.
+- **Firing:** the alert shows **Firing**, with when it started and its latest value, Mailpit has a *[Firing]* email with a link to **Alerts**, and **History** shows it **Still firing**.
+- **Resolved:** the alert shows **OK**, Mailpit has a *[Resolved]* email saying how long it fired, and **History** shows it **Resolved**.
+- **Audit log:** as `dev-company-admin`, *Created the alert*, *The alert … fired* and *… was resolved*.
+- **A viewer** sees the alerts and their history, but not whom they email, nor any button to change them.
+- **A metric that waits:** with **For 5 minutes**, the alert shows **Waiting** first, and fires only after 5 minutes past the threshold.
+- **Prometheus down**, as in Flow 13: alerts keep their state, and say *Couldn't check*. Started again, they carry on.
+
 ## Test checklist
 
 | # | Check | Account | Passes when |
@@ -397,6 +419,9 @@ Start them again with `docker compose -f infra/local/compose.yaml run --rm start
 | 13 | Company separation | Two companies | `404` for the other company's environment and trace |
 | 14 | Tools down | Any | Each message of Flow 13, and the rest keeps working |
 | 15 | Older applications | Any | A 1.1.0 backend shows logs, but no metrics, and no **Trace** buttons |
+| 16 | Alert test email | `dev-operator` | A *[Test]* email arrives in Mailpit |
+| 17 | Alert fires and resolves | `dev-operator` | *[Firing]*, then *[Resolved]*, emails in Mailpit, each within a minute, and both in **History** |
+| 18 | Alerts for viewers | `dev-viewer` | Alerts and history shown, without addresses or buttons |
 
 ## Automated tests
 
@@ -451,7 +476,7 @@ The new integration tests are `monitoring.integration.test.ts`. Against a real d
 - **Logs aren't kept.** They come from the running container only, so a new deployment or a stop ends them. Searching older logs needs a log store, such as Loki.
 - **Traces are in memory.** Jaeger forgets them when it restarts. A storage backend keeps them.
 - **Browsers don't report their spans.** A frontend starts each trace, but its own span isn't recorded yet.
-- **No alerts.** Nothing watches the metrics yet.
+- **Alerts email once.** A firing alert emails when it starts and when it's resolved, with no reminders or silences in between, and only watches the five metrics, not logs or traces. The [Alerts guide](../../apps/api/src/alerts/README.md#not-included-yet) lists the rest.
 - **Senders aren't checked.** Prometheus and Jaeger accept what reaches them, labelled as the sender says, so an application's code could send data as another environment, if it knew its ID. A collector that checks a token per environment would stop it.
 - **The tools' own pages show every company.** Prometheus's and Jaeger's pages are for whoever runs the machine. Applications on This machine can reach them, which is one more reason This machine is for trying things out and small teams.
 - **Docker Desktop only, for sending.** Containers reach Prometheus and Jaeger through `host.docker.internal`. With Docker Engine on Linux, they can't, as with Forgejo's webhooks.
@@ -470,6 +495,17 @@ All start with `/api/v1`, and need `dashboards:view` and the `monitoring` featur
 | `GET /company/monitoring/environments/:id/logs?range=1h` | Its latest 500 lines |
 | `GET /company/monitoring/environments/:id/traces?range=1h` | Its latest 20 traces |
 | `GET /company/monitoring/traces/:traceId` | One trace, the company's spans only |
+
+Alerts' routes also need the `monitoring` feature. Seeing them needs `dashboards:view`, and changing them `alerts:manage`, which Company Admins, Tech Leads and Operators have.
+
+| Route | Answers |
+|---|---|
+| `GET /company/alerts` | Every alert, with its state and latest value |
+| `GET /company/alerts/incidents` | The latest 50 times an alert fired |
+| `POST /company/alerts` | Creates an alert |
+| `PATCH /company/alerts/:id` | Changes its name, threshold, minutes, addresses, or whether it's on |
+| `DELETE /company/alerts/:id` | Deletes it and its history |
+| `POST /company/alerts/:id/test` | Emails its addresses a test |
 
 ### Settings
 
@@ -497,8 +533,9 @@ All start with `/api/v1`, and need `dashboards:view` and the `monitoring` featur
 | Part | Files |
 |---|---|
 | Monitoring context | `apps/api/src/monitoring/` |
+| Alerts context | `apps/api/src/alerts/`, `migrations/0016_create-alerts.sql`, and `AlertEmails` in `apps/api/src/notifications/application/alert-emails.ts` |
 | What Environments publishes for it | `apps/api/src/environments/application/running-environments.ts`, `environment-logs.ts`, `domain/telemetry.ts` |
 | Limits | `apps/api/src/environments/infrastructure/local-docker-runtime.ts` (`CONTAINER_LIMITS`), `migrations/0015_record-container-limits.sql` |
-| Dashboard | `apps/dashboard/src/app/features/monitoring/` |
+| Dashboard | `apps/dashboard/src/app/features/monitoring/`, `apps/dashboard/src/app/features/alerts/` |
 | Local tools | `infra/local/compose.yaml`, `infra/local/prometheus/prometheus.yml`, `infra/local/ops/smoke-test.sh` |
 | Blueprints | `blueprints/node-service/1.3.0/`, `blueprints/angular-frontend/1.3.0/` |

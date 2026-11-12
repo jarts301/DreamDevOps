@@ -1,4 +1,6 @@
 import { type DynamicModule, Module } from '@nestjs/common';
+import { AlertsModule } from '../alerts/alerts.module.ts';
+import { AlertsSubscriptions } from '../alerts/messaging/alerts-subscriptions.ts';
 import { AuditModule } from '../audit/audit.module.ts';
 import { AuditSubscriptions } from '../audit/messaging/audit-subscriptions.ts';
 import { BuildsModule } from '../builds/builds.module.ts';
@@ -23,6 +25,7 @@ const SUBSCRIBERS = [
   EnvironmentsSubscriptions,
   AuditSubscriptions,
   NotificationsSubscriptions,
+  AlertsSubscriptions,
 ];
 
 /** Runs the outbox relay and job queue, and lets each module set up its own background work. */
@@ -38,6 +41,7 @@ export class BackgroundModule {
         EnvironmentsModule.register(settings),
         AuditModule.register(settings),
         NotificationsModule.register(settings),
+        AlertsModule.register(settings),
       ],
       providers: withOverrides(
         [

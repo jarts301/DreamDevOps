@@ -37,7 +37,7 @@ const CONTEXTS: Readonly<Record<string, Context>> = {
   audit: { schemas: ['audit'], published: ['audit.module.ts'] },
   notifications: {
     schemas: ['notification'],
-    published: ['application/invitation-emails.ts', 'notifications.module.ts'],
+    published: ['application/alert-emails.ts', 'application/invitation-emails.ts', 'notifications.module.ts'],
   },
   editions: {
     schemas: ['editions'],
@@ -66,7 +66,11 @@ const CONTEXTS: Readonly<Record<string, Context>> = {
       'environments.module.ts',
     ],
   },
-  monitoring: { schemas: [], published: ['monitoring.module.ts'] },
+  monitoring: {
+    schemas: [],
+    published: ['application/latest-metrics.ts', 'domain/metrics.ts', 'monitoring.module.ts'],
+  },
+  alerts: { schemas: ['alerts'], published: ['domain/events.ts', 'alerts.module.ts'] },
 };
 
 /** Schemas every context may use: the shared kernel's outbox. */

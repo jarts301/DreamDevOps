@@ -20,6 +20,25 @@ function deployedVersion(payload: Readonly<Record<string, unknown>>): string {
   return typeof payload['version'] === 'string' ? payload['version'] : 'what ran';
 }
 
+const ALERT_CHANGES: Readonly<Record<string, string>> = {
+  name: 'its name',
+  threshold: 'its threshold',
+  forMinutes: 'how long it waits',
+  recipients: 'whom it emails',
+};
+
+/** What changed about an alert, such as ": its threshold and whom it emails", or that it was turned on or off. */
+function alertChanges(payload: Readonly<Record<string, unknown>>): string {
+  const changes = Array.isArray(payload['changes']) ? (payload['changes'] as unknown[]) : [];
+  const parts = changes.flatMap((change) => (typeof change === 'string' && ALERT_CHANGES[change] ? [ALERT_CHANGES[change]] : []));
+  const switched = changes.includes('enabled') ? (payload['enabled'] ? ', and turned it on' : ', and turned it off') : '';
+  if (parts.length === 0) {
+    return switched.replace(', and', ':');
+  }
+  const listed = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+  return `: ${listed}${switched}`;
+}
+
 /** Describes a recorded event for people. Payloads hold IDs and roles, not names or emails. */
 export function describeEvent(eventType: string, payload: Readonly<Record<string, unknown>>): string {
   const role = typeof payload['role'] === 'string' ? roleName(payload['role']) : 'a role';
@@ -116,6 +135,16 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
         eventType === 'EnvironmentVariableRemoved' ? 'Removed' : payload['change'] === 'added' ? 'Added' : 'Changed';
       return `${verb} the ${payload['secret'] ? 'secret' : 'variable'} ${String(payload['name'])} of ${deploymentPlace(payload)}${because(payload['reason'])}`;
     }
+    case 'AlertCreated':
+      return `Created the alert "${String(payload['name'])}" on ${String(payload['condition'])} in ${deploymentPlace(payload)}`;
+    case 'AlertUpdated':
+      return `Changed the alert "${String(payload['name'])}" on ${deploymentPlace(payload)}${alertChanges(payload)}`;
+    case 'AlertDeleted':
+      return `Deleted the alert "${String(payload['name'])}" on ${deploymentPlace(payload)}`;
+    case 'AlertTriggered':
+      return `The alert "${String(payload['name'])}" fired: ${String(payload['condition'])} in ${deploymentPlace(payload)}, at ${String(payload['value'])}`;
+    case 'AlertResolved':
+      return `The alert "${String(payload['name'])}" was resolved: ${String(payload['condition'])} no longer holds in ${deploymentPlace(payload)}, at ${String(payload['value'])}`;
     case 'CompanyEditionChanged':
       return `Moved the company from the ${editionName(payload['previousEdition'])} to the ${editionName(payload['edition'])} Edition`;
     case 'UserInvited':

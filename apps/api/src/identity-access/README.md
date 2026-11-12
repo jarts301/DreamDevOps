@@ -22,8 +22,9 @@ Each user has one role per company. Roles and their permissions are stored as da
 | View dashboards and logs | `dashboards:view` | Yes | Yes | Yes | Yes | Yes |
 | Read the audit log | `audit:read` | Yes | | | | |
 | Manage chat notifications | `notifications:manage` | Yes | | | | |
+| Manage alerts and whom they email | `alerts:manage` | Yes | Yes | | Yes | |
 
-The [Environments guide](../environments/README.md#permissions) explains what the environment and deployment permissions allow, such as deploying only releases to production.
+The [Environments guide](../environments/README.md#permissions) explains what the environment and deployment permissions allow, such as deploying only releases to production. The [Alerts guide](../alerts/README.md#permissions) explains who sees and manages alerts.
 
 **Platform Admin** comes from the `platform-admin` realm role in Keycloak, not from a company. It grants `companies:manage`, `audit:read-own` and `editions:manage`, and no access to company data.
 

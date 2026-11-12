@@ -40,7 +40,7 @@ All routes start with `/api/v1`.
 | `GET /auth/callback` | Public | Finishes login and creates the session |
 | `GET /auth/me` | Signed in | Shows the signed-in user |
 | `POST /auth/logout` | Signed in | Ends the session |
-| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md), [Application Catalog](src/catalog/README.md), [Source Governance](src/source-governance/README.md), [Builds](src/builds/README.md), [Environments](src/environments/README.md) and [Monitoring](src/monitoring/README.md) guides |
+| Others | | See the [Identity and Access](src/identity-access/README.md), [Tenancy](src/tenancy/README.md), [Audit](src/audit/README.md), [Notifications](src/notifications/README.md), [Editions](src/editions/README.md), [Application Catalog](src/catalog/README.md), [Source Governance](src/source-governance/README.md), [Builds](src/builds/README.md), [Environments](src/environments/README.md), [Monitoring](src/monitoring/README.md) and [Alerts](src/alerts/README.md) guides |
 | `GET /health/live` | Public | The process is running |
 | `GET /health/ready` | Public | The process can reach its database |
 
@@ -74,7 +74,7 @@ Behind a reverse proxy, set `TRUSTED_PROXIES` to the number of proxies, or every
 
 ## Background processing
 
-The API also runs the outbox relay and the job queue, which deliver saved events to the modules that react to them: company provisioning, repositories, image builds, deployments, the audit log and chat notifications. Each uses its own database role. They start and stop with the API. Each context sets up what it reacts to in its `messaging` folder.
+The API also runs the outbox relay and the job queue, which deliver saved events to the modules that react to them: company provisioning, repositories, image builds, deployments, the audit log, chat notifications and alert emails. The job queue also checks alerts every minute, on a schedule all API processes share. Each uses its own database role. They start and stop with the API. Each context sets up what it reacts to in its `messaging` folder.
 
 Each queue's worker takes up to 10 jobs at a time and keeps going while a backlog remains. Each job succeeds or fails on its own, so one failure never repeats the jobs beside it. Builds take minutes, so their worker takes one at a time, with a heartbeat that lets a stopped API's build start again. Deployments work the same way, two at a time.
 

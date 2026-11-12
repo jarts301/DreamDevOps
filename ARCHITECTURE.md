@@ -23,14 +23,15 @@ Each context is a folder in `apps/api/src`, with its own guide.
 | [Identity and access](apps/api/src/identity-access/README.md) | Login, sessions, members, roles and invitations | `identity` | `Principal` and permission checks, email rules, `CompanyAccessService` | Notifications |
 | [Tenancy](apps/api/src/tenancy/README.md) | The company register, and each company's Git organization | `tenancy` | `CompanyDirectory` | Identity and access, Notifications |
 | [Audit](apps/api/src/audit/README.md) | Each company's tamper-evident history | `audit` | Nothing | Every context's events |
-| [Notifications](apps/api/src/notifications/README.md) | Invitation emails and chat rules | `notification` | `InvitationEmails` | `CompanyDirectory`, every context's events |
+| [Notifications](apps/api/src/notifications/README.md) | Invitation and alert emails, and chat rules | `notification` | `InvitationEmails`, `AlertEmails` | `CompanyDirectory`, every context's events |
 | [Editions](apps/api/src/editions/README.md) | Each company's edition and features | `editions` | `EntitlementProvider`, `RequireFeature` | `CompanyDirectory` |
 | [Blueprints](blueprints/README.md) | Versioned scaffolds for new applications | Files | `BlueprintCatalog`, blueprint types | Nothing |
 | [Catalog](apps/api/src/catalog/README.md) | Each company's applications | `catalog` | `ApplicationCatalog`, application events | Blueprints |
 | [Source governance](apps/api/src/source-governance/README.md) | Repositories, Git Flow rules and teams | `source` | `RepositoryLookup`, Git Flow, repository events | Catalog, Blueprints, `CompanyDirectory` |
 | [Builds](apps/api/src/builds/README.md) | Versioned, scanned and signed images | `builds` | `DeployableImages` | Catalog, `RepositoryLookup`, `CompanyDirectory` |
 | [Environments](apps/api/src/environments/README.md) | Each application's environments, hosting targets, deployments and production protection | `environments` | Environment, hosting target and deployment events, `RunningEnvironments`, `EnvironmentLogs`, the attribute metrics and traces carry | Catalog, Builds' `DeployableImages` |
-| [Monitoring](apps/api/src/monitoring/README.md) | Metrics, logs and traces of what runs in each environment, read from Prometheus, the containers and Jaeger | None, Prometheus and Jaeger keep the data | Nothing | Environments' `RunningEnvironments` and `EnvironmentLogs`, Catalog |
+| [Monitoring](apps/api/src/monitoring/README.md) | Metrics, logs and traces of what runs in each environment, read from Prometheus, the containers and Jaeger | None, Prometheus and Jaeger keep the data | `LatestMetrics`, the metrics' definitions | Environments' `RunningEnvironments` and `EnvironmentLogs`, Catalog |
+| [Alerts](apps/api/src/alerts/README.md) | Alerts on each environment's metrics, checked every minute, and their history | `alerts` | Alert events | Monitoring's `LatestMetrics`, `RunningEnvironments`, Catalog, `CompanyDirectory`, Notifications' `AlertEmails` |
 
 The dependencies form no cycle. Tenancy publishes `CompanyDirectory` in a Nest module of its own, so contexts that only read companies don't depend on the rest of Tenancy.
 
@@ -112,7 +113,7 @@ Still to do, per context, when the time comes:
 | Foreign keys between schemas | For example, `builds.builds` and `source.repositories` reference `catalog.applications`, and most tables reference `tenancy.companies` and `identity.users` | Drop them when moving the data, and keep the IDs. The contexts already treat them as references, not joins. |
 | Database functions that read other schemas | `catalog.applications_view`, `builds.builds_view` and `audit.company_entries` read user names from `identity`, and `source.member_accounts` reads `identity` and `tenancy` | Ask Identity for names, or keep a copy fed by its events, such as `RoleGranted` |
 | A shared transaction | Tenancy creates a company and its first admin's invitation in one transaction, through `CompanyAccessService.inviteFirstAdminIn` | Make it a saga: Identity creates the invitation when it hears `CompanyCreated`, and the token is delivered by email only |
-| In-process calls | `CompanyDirectory`, `RepositoryLookup`, `BlueprintCatalog`, `ApplicationCatalog.get`, `InvitationEmails`, `RunningEnvironments`, `EnvironmentLogs` | Implement each interface with an HTTP client, in the calling service |
+| In-process calls | `CompanyDirectory`, `RepositoryLookup`, `BlueprintCatalog`, `ApplicationCatalog.get`, `InvitationEmails`, `AlertEmails`, `RunningEnvironments`, `EnvironmentLogs`, `LatestMetrics` | Implement each interface with an HTTP client, in the calling service |
 | One outbox and job queue | `kernel.outbox` and the `pgboss` schema | Give each service its own outbox and relay, and publish events to a shared broker |
 | One login session | The API is the dashboard's backend, with a session cookie | Keep the backend for the dashboard, and let it call services with a signed token for the user and company |
 | One settings object | `config/app-config.ts` holds every context's settings | Split it into a section per context before moving one |

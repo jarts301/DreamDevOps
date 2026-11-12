@@ -53,6 +53,7 @@ const SAMPLE_MEMBERSHIPS: Readonly<Record<string, readonly CompanyMembership[]>>
   'tech-lead-a': [membership(COMPANY_A, 'tech-lead', 'applications:read', 'applications:write')],
   'developer-a': [membership(COMPANY_A, 'developer', 'applications:read')],
   'viewer-a': [membership(COMPANY_A, 'viewer', 'dashboards:view')],
+  'operator-a': [membership(COMPANY_A, 'operator', 'dashboards:view', 'alerts:manage')],
   'viewer-b': [membership(COMPANY_B, 'viewer', 'dashboards:view')],
   'tech-lead-b': [membership(COMPANY_B, 'tech-lead', 'applications:read', 'applications:write')],
   consultant: [

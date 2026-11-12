@@ -21,6 +21,7 @@ const NAVIGATION: readonly NavigationItem[] = [
   { path: '/environments', label: 'Environments', needsCompany: true },
   { path: '/hosting', label: 'Hosting', needsCompany: true },
   { path: '/monitoring', label: 'Monitoring', permission: 'dashboards:view' },
+  { path: '/alerts', label: 'Alerts', permission: 'dashboards:view' },
   { path: '/blueprints', label: 'Blueprints' },
   { path: '/team', label: 'Team', permission: 'company-users:manage' },
   { path: '/audit', label: 'Audit log', permission: 'audit:read' },

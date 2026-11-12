@@ -1,6 +1,6 @@
 # Notifications
 
-Sends invitation emails, and posts chosen company events to chat tools.
+Sends invitation and alert emails, and posts chosen company events to chat tools.
 
 ## Invitation emails
 
@@ -9,6 +9,12 @@ Every invitation is emailed as soon as it's saved, including the first admin of 
 The token exists only in memory and in the email, so the email is sent straight away, not through a stored background job. If sending fails, the invitation still exists, the API reports `emailSent: false`, and the dashboard asks the inviter to send the link themselves.
 
 Locally, [Mailpit](http://localhost:8025) catches every email, and nothing leaves your machine.
+
+## Alert emails
+
+[Alerts](../alerts/README.md) email the addresses they name when they fire and when they're resolved, through `AlertEmails`, which this context publishes. Alerts says what happened, in words, and this context lays out the email and its link to the dashboard's **Alerts** page.
+
+Unlike invitations, each alert email is sent by a background job of its own, so a failure throws, and the job tries again. Locally, they arrive in [Mailpit](http://localhost:8025) too.
 
 ## Chat rules
 

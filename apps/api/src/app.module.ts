@@ -1,6 +1,7 @@
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { AlertsModule } from './alerts/alerts.module.ts';
 import { AuditModule } from './audit/audit.module.ts';
 import { BackgroundModule } from './background/background.module.ts';
 import { BlueprintsModule } from './blueprints/blueprints.module.ts';
@@ -66,6 +67,7 @@ export class AppModule {
       BuildsModule.register(settings),
       EnvironmentsModule.register(settings),
       MonitoringModule.register(settings),
+      AlertsModule.register(settings),
       BackgroundModule.register(settings),
     ];
     // Replacements for tokens no module provides are added here, as they always were.

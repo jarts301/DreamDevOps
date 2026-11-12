@@ -8,6 +8,8 @@ import { type ModuleSettings, registerOnce, withOverrides } from '../platform/mo
 import { ApplicationLogs } from './application/application-logs.ts';
 import { ApplicationMetrics } from './application/application-metrics.ts';
 import { ApplicationTraces } from './application/application-traces.ts';
+import { CompanyLatestMetrics } from './application/company-latest-metrics.ts';
+import { LATEST_METRICS } from './application/latest-metrics.ts';
 import { METRICS_STORE, type MetricsStore, TRACE_STORE, type TraceStore } from './application/ports.ts';
 import { MonitoringController } from './http/monitoring.controller.ts';
 import { JaegerTraceStore } from './infrastructure/jaeger-trace-store.ts';
@@ -56,9 +58,17 @@ export class MonitoringModule {
                 new ApplicationMetrics(environments, catalog, store),
               inject: [RUNNING_ENVIRONMENTS, ApplicationCatalog, METRICS_STORE],
             },
+            {
+              provide: LATEST_METRICS,
+              useFactory: (environments: RunningEnvironments, store: MetricsStore | null) =>
+                new CompanyLatestMetrics(environments, store),
+              inject: [RUNNING_ENVIRONMENTS, METRICS_STORE],
+            },
           ],
           settings.overrides,
         ),
+        // Other contexts, such as Alerts, see only the latest metrics of their company's environments.
+        exports: [LATEST_METRICS],
       };
     });
   }

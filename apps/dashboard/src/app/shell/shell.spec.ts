@@ -58,12 +58,24 @@ describe('Shell', () => {
     expect(element(fixture).textContent).toContain('Acme · Company Admin');
   });
 
-  it('shows Monitoring to members who view dashboards', async () => {
+  it('shows Monitoring and Alerts to members who view dashboards', async () => {
     const fixture = await open(sampleUser({ role: 'viewer', permissions: ['dashboards:view'] }));
 
-    expect(menu(fixture)).toEqual(['Overview', 'Applications', 'Builds', 'Environments', 'Hosting', 'Monitoring', 'Blueprints', 'Edition']);
-    const monitoring = [...element(fixture).querySelectorAll('.nav-link')].find((link) => link.textContent?.trim() === 'Monitoring');
-    expect(monitoring?.getAttribute('href')).toBe('/monitoring');
+    expect(menu(fixture)).toEqual([
+      'Overview',
+      'Applications',
+      'Builds',
+      'Environments',
+      'Hosting',
+      'Monitoring',
+      'Alerts',
+      'Blueprints',
+      'Edition',
+    ]);
+    const link = (label: string) =>
+      [...element(fixture).querySelectorAll('.nav-link')].find((candidate) => candidate.textContent?.trim() === label);
+    expect(link('Monitoring')?.getAttribute('href')).toBe('/monitoring');
+    expect(link('Alerts')?.getAttribute('href')).toBe('/alerts');
   });
 
   it('shows a platform admin the platform screens, and no company screens', async () => {

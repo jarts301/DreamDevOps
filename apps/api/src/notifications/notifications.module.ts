@@ -3,6 +3,7 @@ import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { COMPANY_DIRECTORY, type CompanyDirectory } from '../tenancy/application/company-directory.ts';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
+import { AlertEmails } from './application/alert-emails.ts';
 import { InvitationEmails } from './application/invitation-emails.ts';
 import { NotificationRules } from './application/notification-rules.ts';
 import { MAILER, type Mailer, WEBHOOK_SENDER, type WebhookSender } from './application/ports.ts';
@@ -11,7 +12,7 @@ import { SafeWebhookSender } from './infrastructure/safe-webhook-sender.ts';
 import { SmtpMailer } from './infrastructure/smtp-mailer.ts';
 import { NotificationsSubscriptions } from './messaging/notifications-subscriptions.ts';
 
-/** Invitation emails, and company rules that post chosen events to chat tools. */
+/** Invitation and alert emails, and company rules that post chosen events to chat tools. */
 @Module({})
 export class NotificationsModule {
   static register(settings: ModuleSettings): DynamicModule {
@@ -41,6 +42,11 @@ export class NotificationsModule {
               inject: [MAILER],
             },
             {
+              provide: AlertEmails,
+              useFactory: (mailer: Mailer) => new AlertEmails(mailer, config.dashboardUrl),
+              inject: [MAILER],
+            },
+            {
               provide: WEBHOOK_SENDER,
               useFactory: () => new SafeWebhookSender({ allowPrivateNetworks: config.webhookAllowPrivateNetworks }),
             },
@@ -58,7 +64,7 @@ export class NotificationsModule {
           ],
           settings.overrides,
         ),
-        exports: [InvitationEmails, NotificationsSubscriptions],
+        exports: [InvitationEmails, AlertEmails, NotificationsSubscriptions],
       };
     });
   }

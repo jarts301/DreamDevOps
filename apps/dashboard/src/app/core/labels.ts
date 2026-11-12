@@ -24,6 +24,7 @@ const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'dashboards:view': 'View dashboards and logs',
   'audit:read': 'Read the audit log',
   'notifications:manage': 'Manage chat notifications',
+  'alerts:manage': 'Manage alerts on metrics, and whom they email',
 };
 
 export function roleName(role: string | null): string {

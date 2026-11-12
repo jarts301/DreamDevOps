@@ -28,6 +28,7 @@ The change and its events commit together, so an event can't be lost or sent for
 - **Ordering:** the relay publishes in saved order, but retries and multiple workers can change the order handlers run in, so handlers shouldn't rely on it.
 - **New company tables:** enable and force row-level security, using `kernel.current_company_id()` in the policy, as [the outbox migration](migrations/0001_create-kernel-outbox.sql) does.
 - **Long jobs:** a job that takes minutes, such as a build, needs its own queue with `expireInSeconds` and `heartbeatSeconds`, and a worker with a `concurrency`, so it runs one job at a time. Otherwise it may expire while still running and run twice.
+- **Recurring jobs:** `queue.schedule(queue, cron)` sends a job to a queue on a cron schedule, in UTC, such as every minute with `* * * * *`. Every process shares the schedule, so each occurrence sends one job, however many processes run, and scheduling again replaces it, so each start can set it. Create the queue and its worker first. In tests, the in-memory queue sends them when `runSchedules()` is called.
 
 ## Database roles
 

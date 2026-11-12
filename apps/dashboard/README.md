@@ -36,6 +36,7 @@ To try a role, sign in as its account: Dummy Company is ready when the API start
 7. Choose **Deploy** on an environment, pick a version that built, and follow its steps: checking, verifying the signature, pulling, starting and waiting until it's healthy. Open its address once it runs. Production offers only releases, and asks for its name first. This needs Docker, as builds do.
 8. Open **Variables** on an environment to give it settings, such as `LOG_LEVEL`, and secrets, such as `DATABASE_URL`. The environment then shows that what runs has older settings, and **Apply now** starts it again with them.
 9. Open **Monitoring** to see how what runs is doing: each environment's CPU, memory, requests, response times and server errors. Choose **Show details** to follow one over time, read its logs, and open the traces of its requests. An application registered after the blueprints reached version 1.3.0 sends them on its own, a few seconds after it starts. Open a backend's `/api/ping` to log a line and record a trace, or choose **Check the API** on a frontend's page.
+10. Open **Alerts** to get an email when a metric of an environment crosses a threshold for long enough, such as CPU above 80% for 5 minutes. As a Company Admin, Tech Lead or Operator, create one, or follow **Set up an alert** from an environment's details on **Monitoring**. Choose **Test email**, and open [Mailpit](http://localhost:8025) to see it. Alerts are checked every minute: when one fires, and when it's resolved, its addresses get an email, and its **History** shows it.
 
 ## Layout
 

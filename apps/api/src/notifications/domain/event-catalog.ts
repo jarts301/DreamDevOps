@@ -34,6 +34,8 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   DeploymentFailed: 'A deployment fails',
   EnvironmentVariableSet: "An environment's variable or secret is added or changed",
   EnvironmentVariableRemoved: "An environment's variable or secret is removed",
+  AlertTriggered: 'An alert starts firing',
+  AlertResolved: 'A firing alert is resolved',
 };
 
 const BUILD_KIND_NAMES: Readonly<Record<string, string>> = {
@@ -88,6 +90,11 @@ function deploymentAction(payload: Record<string, unknown>, stage: 'requested' |
   };
   const [requested, done, failedText] = verbs[String(payload.kind)] ?? verbs.deploy!;
   return stage === 'requested' ? requested : stage === 'done' ? done : failedText;
+}
+
+/** Where an alert looks, such as 'the production environment "Production" of "Billing"'. */
+function alertPlace(payload: Record<string, unknown>): string {
+  return `the ${payload.production ? 'production ' : ''}environment "${String(payload.environmentName)}" of "${String(payload.applicationName)}"`;
 }
 
 /** A one-line message about an event. Payloads hold IDs, not names or emails. */
@@ -168,6 +175,10 @@ export function summarize(event: DomainEvent, companyName: string): string {
         }${because(payload.reason)}.`;
       case 'CompanyEditionChanged':
         return `The company moved to the ${editionName(payload.edition)} Edition.`;
+      case 'AlertTriggered':
+        return `The alert "${String(payload.name)}" is firing: ${alertPlace(payload)} has ${String(payload.condition)}, at ${String(payload.value)}.`;
+      case 'AlertResolved':
+        return `The alert "${String(payload.name)}" is resolved: ${alertPlace(payload)} no longer has ${String(payload.condition)}, at ${String(payload.value)}.`;
       default:
         return `${event.eventType} happened.`;
     }

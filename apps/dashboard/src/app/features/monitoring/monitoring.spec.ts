@@ -2,6 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
+import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
 import { LogView } from './log-view';
 import { MetricChart } from './metric-chart';
@@ -226,6 +227,20 @@ describe('monitoring', () => {
     http.expectOne(`${OVERVIEW_URL}/${id}/traces?range=${range}`).flush(answers.traces ?? traces());
     await render(fixture);
   };
+
+  it('offers those who manage alerts to set one up on the environment they look at', async () => {
+    const plain = await open();
+    await details(plain);
+    expect(text(plain)).not.toContain('Set up an alert');
+    plain.destroy();
+
+    vi.spyOn(TestBed.inject(SessionService), 'can').mockImplementation((permission) => permission === 'alerts:manage');
+    const fixture = await open();
+    await details(fixture);
+
+    const link = [...element(fixture).querySelectorAll('a')].find((anchor) => anchor.textContent?.trim() === 'Set up an alert')!;
+    expect(link.getAttribute('href')).toBe('/alerts?environment=e-1');
+  });
 
   it('lists what runs in each environment, with its latest metrics in their units', async () => {
     const fixture = await open();

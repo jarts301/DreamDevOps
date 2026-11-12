@@ -10,6 +10,7 @@ export class InMemoryJobQueue implements JobQueue {
   readonly #handlers = new Map<string, JobHandler>();
   readonly #seenIds = new Set<string>();
   readonly #deadLetters = new Map<string, Job[]>();
+  readonly #schedules = new Map<string, { readonly cron: string; readonly data: object }>();
   #pending: Promise<void> = Promise.resolve();
 
   async createQueue(queue: string, options: QueueOptions = {}): Promise<void> {
@@ -37,9 +38,35 @@ export class InMemoryJobQueue implements JobQueue {
     this.#handlers.set(queue, handler);
   }
 
-  /** Waits for all jobs sent so far to finish, including retries. */
+  /** Keeps the schedule. Nothing runs on its own: tests call runSchedules, as if its time came. */
+  async schedule(queue: string, cron: string, data: object = {}): Promise<void> {
+    this.#assertQueueExists(queue);
+    if (cron.trim().split(/\s+/).length !== 5) {
+      throw new Error(`"${cron}" isn't a cron expression of five fields.`);
+    }
+    this.#schedules.set(queue, { cron, data });
+  }
+
+  /** Each queue's schedule, by queue. */
+  schedulesOf(): ReadonlyMap<string, { readonly cron: string; readonly data: object }> {
+    return this.#schedules;
+  }
+
+  /** Sends one job for every schedule, as when their time comes, and waits for them to finish. */
+  async runSchedules(): Promise<void> {
+    for (const [queue, { data }] of this.#schedules) {
+      await this.send(queue, data);
+    }
+    await this.drain();
+  }
+
+  /** Waits for all jobs sent so far to finish, including retries, and any jobs they send. */
   async drain(): Promise<void> {
-    await this.#pending;
+    let pending: Promise<void>;
+    do {
+      pending = this.#pending;
+      await pending;
+    } while (pending !== this.#pending);
   }
 
   deadLettersOf(queue: string): readonly Job[] {

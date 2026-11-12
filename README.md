@@ -39,10 +39,11 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Deployments | Deploying any version that built to an environment on This machine, with every step on the dashboard: checking, verifying the signature, pulling, starting and waiting until it's healthy. A version that isn't healthy is rolled back. Production runs only releases. Moving an environment to another target moves what runs in it. |
 | Variables and secrets | Each environment's own settings, which its containers get as environment variables when they start. Secrets are encrypted with a key only the API holds, and never shown again. |
 | Monitoring | Each running application's CPU and memory against its container's limits, its requests, response times and server errors, now and charted over time, its logs, and traces of its requests across applications, on the dashboard's **Monitoring** page. Applications send metrics and traces with OpenTelemetry, to Prometheus and Jaeger, which the platform runs, and the platform reads their logs from their containers. |
+| Alerts | Alerts on any environment's CPU, memory, requests, response times or server errors, above or below a threshold for a number of minutes, checked every minute. Each emails the addresses it names when it fires and when it's resolved, and keeps a history, on the dashboard's **Alerts** page. Locally, the emails arrive in Mailpit. |
 | Editions | Every company on the free Community Edition, with a per-company setting and an extension point for the Commercial Edition |
 | Dashboard | Screens for all of the above, in light and dark themes |
 
-Deploying to anything but This machine, setting up cloud infrastructure, and alerts aren't available yet. Companies can't be deleted.
+Deploying to anything but This machine and setting up cloud infrastructure aren't available yet. Companies can't be deleted.
 
 ## Prerequisites
 
@@ -116,7 +117,7 @@ Run these commands from the repository root. They work in Bash and PowerShell.
 
    The API sets up Dummy Company, and adds each account to it with its role, every time it starts locally. It adds any account your Keycloak doesn't have yet, with the same password, and leaves alone what exists, such as a role you changed. To skip it, set `SAMPLE_DATA=off` in `infra/local/.env`.
 
-To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally). Invitation emails don't leave your machine: open them in Mailpit at <http://localhost:8025>.
+To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally). Invitation and alert emails don't leave your machine: open them in Mailpit at <http://localhost:8025>.
 
 ## Local services
 
@@ -223,6 +224,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | **Monitoring** shows no metrics for an application | Metrics come from applications started from a blueprint from version 1.2.0, and reach the platform once a version is deployed. Check Prometheus runs, with `docker compose -f infra/local/compose.yaml run --rm smoke-test`. Containers reach it through `host.docker.internal`, as Forgejo reaches the API, which doesn't work with Docker Engine on Linux. |
 | **Monitoring** says metrics or traces aren't set up | Start the API with `npm run start:api`, which sets `PROMETHEUS_URL` and `JAEGER_URL`, and start the local services again, which adds Prometheus and Jaeger. |
 | **Monitoring** shows no traces for an application | Traces come from services started from a blueprint from version 1.2.0, and from frontends from 1.3.0, once a version is deployed again. Jaeger keeps them in memory, so restarting it clears them. |
+| No alert emails arrive | Open Mailpit at <http://localhost:8025>, and choose **Test email** on the alert. If the test arrives, check the alert shows **Firing** on **Alerts**: alerts are checked once a minute, against the values on **Monitoring**, so an application that sends no metrics never fires. If the test fails, the alert says why, and the local services must be running. |
 
 ## Documentation
 
@@ -241,6 +243,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Builds and versions](apps/api/src/builds/README.md) | Development, candidate and release images, their versions, validation, scanning and signing |
 | [Environments](apps/api/src/environments/README.md) | Environments, hosting targets and providers, deploying, variables and secrets, hosting on this machine, production protection, and adding a provider |
 | [Monitoring](apps/api/src/monitoring/README.md) | How applications' metrics, logs and traces reach the platform, what each one means, and how they're kept apart per company |
+| [Alerts](apps/api/src/alerts/README.md) | What an alert watches, how alerts are checked every minute, their emails, and who manages them |
 | [Editions and entitlements](apps/api/src/editions/README.md) | Editions, the feature catalog, and how commercial features plug in |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |

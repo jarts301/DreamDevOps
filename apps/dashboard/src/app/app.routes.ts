@@ -52,6 +52,12 @@ export const routes: Routes = [
         loadComponent: () => import('./features/monitoring/monitoring').then((module) => module.Monitoring),
       },
       {
+        path: 'alerts',
+        title: 'Alerts · DreamDevOps',
+        canActivate: [permissionGuard('dashboards:view')],
+        loadComponent: () => import('./features/alerts/alerts').then((module) => module.Alerts),
+      },
+      {
         path: 'blueprints',
         title: 'Blueprints · DreamDevOps',
         loadComponent: () => import('./features/catalog/blueprints').then((module) => module.Blueprints),

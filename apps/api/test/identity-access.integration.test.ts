@@ -227,9 +227,10 @@ describe('user directory', () => {
 
 describe('the role matrix', () => {
   // The proposal's permission matrix, written out independently of the migrations
-  // (0012 added the environment permissions).
+  // (0012 added the environment permissions, and 0016 alerts:manage).
   const MATRIX: Record<string, string[]> = {
     'company-admin': [
+      'alerts:manage',
       'applications:create',
       'audit:read',
       'company-users:manage',
@@ -240,6 +241,7 @@ describe('the role matrix', () => {
     ],
     developer: ['code:push', 'dashboards:view', 'deployments-test:run', 'feature-images:build'],
     operator: [
+      'alerts:manage',
       'dashboards:view',
       'deployments-production:run',
       'deployments-test:run',
@@ -248,6 +250,7 @@ describe('the role matrix', () => {
       'targets:connect',
     ],
     'tech-lead': [
+      'alerts:manage',
       'applications:create',
       'code:push',
       'dashboards:view',

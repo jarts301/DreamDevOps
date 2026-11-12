@@ -32,6 +32,48 @@ export const METRICS: readonly MetricDefinition[] = [
 
 export const METRIC_KEYS: readonly MetricKey[] = METRICS.map((metric) => metric.key);
 
+/** A metric's definition, by its key. */
+export function metricOf(key: MetricKey): MetricDefinition {
+  return METRICS.find((metric) => metric.key === key)!;
+}
+
+export function isMetricKey(value: unknown): value is MetricKey {
+  return typeof value === 'string' && (METRIC_KEYS as readonly string[]).includes(value);
+}
+
+const MEBIBYTE = 1024 * 1024;
+
+/**
+ * Shows a value in its metric's unit, such as 12.5%, 48.2 MiB, 3.1/s or 120 ms, as the
+ * dashboard does. Memory is in MiB, as containers' limits are.
+ */
+export function formatMetricValue(value: number | null, unit: MetricUnit): string {
+  if (value === null) {
+    return 'No data';
+  }
+  switch (unit) {
+    case 'percent':
+      return `${round(value)}%`;
+    case 'bytes':
+      return value >= 1024 * MEBIBYTE ? `${(value / (1024 * MEBIBYTE)).toFixed(2)} GiB` : `${(value / MEBIBYTE).toFixed(1)} MiB`;
+    case 'per-second':
+      return `${round(value)}/s`;
+    case 'seconds':
+      return value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s`;
+  }
+}
+
+/** Fewer decimals as numbers grow, so small values don't read as zero and large ones stay short. */
+function round(value: number): string {
+  if (value === 0) {
+    return '0';
+  }
+  if (Math.abs(value) >= 10) {
+    return String(Math.round(value));
+  }
+  return Math.abs(value) >= 1 ? value.toFixed(1) : value.toFixed(2);
+}
+
 /** Each metric's value, or null where the application sent nothing to work it out from. */
 export type MetricValues = Readonly<Record<MetricKey, number | null>>;
 

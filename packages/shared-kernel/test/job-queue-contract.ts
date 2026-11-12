@@ -142,6 +142,18 @@ export function describeJobQueueContract(name: string, createHarness: () => Prom
       await harness.eventually(() => expect(calls).toBe(2));
     });
 
+    it('schedules jobs on a queue, and accepts the same schedule again, such as after a restart', async () => {
+      const queue = queueName();
+      await harness.queue.createQueue(queue);
+
+      await expect(harness.queue.schedule(queue, '* * * * *', { kind: 'tick' })).resolves.toBeUndefined();
+      await expect(harness.queue.schedule(queue, '*/5 * * * *')).resolves.toBeUndefined();
+    });
+
+    it('refuses to schedule jobs on a queue that does not exist', async () => {
+      await expect(harness.queue.schedule(queueName(), '* * * * *')).rejects.toThrow();
+    });
+
     it('runs long jobs one at a time per worker, with a heartbeat and a longer expiry', async () => {
       const queue = queueName();
       const handled: number[] = [];

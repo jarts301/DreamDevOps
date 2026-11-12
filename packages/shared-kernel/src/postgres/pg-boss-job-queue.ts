@@ -89,6 +89,11 @@ export class PgBossJobQueue implements JobQueue {
     );
   }
 
+  /** pg-boss keeps schedules in its own tables, and one process at a time sends their jobs. */
+  async schedule(queue: string, cron: string, data: object = {}): Promise<void> {
+    await this.#boss.schedule(queue, cron, data, { tz: 'UTC' });
+  }
+
   async stop(): Promise<void> {
     await this.#boss.stop({ graceful: true, timeout: 10_000 });
   }

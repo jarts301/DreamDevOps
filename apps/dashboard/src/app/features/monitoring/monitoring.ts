@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { PageActivity } from '../../core/page-activity';
+import { SessionService } from '../../core/session.service';
 import { LogView } from './log-view';
 import { MetricChart } from './metric-chart';
 import { formatLimit, formatMetric, NEAR_LIMIT, shareOfLimit } from './metric-format';
@@ -189,6 +190,12 @@ class Loaded<T> {
                 Its container's limits aren't known.
               }
             </p>
+            @if (canManageAlerts()) {
+              <p class="cell-note">
+                <a routerLink="/alerts" [queryParams]="{ environment: chosen.environmentId }">Set up an alert</a> to get an email
+                when one of its metrics crosses a threshold.
+              </p>
+            }
 
             <h3 id="metrics-heading">Metrics</h3>
             @if (!current.enabled) {
@@ -260,11 +267,13 @@ class Loaded<T> {
 })
 export class Monitoring implements OnInit, OnDestroy {
   readonly #api = inject(MonitoringApi);
+  readonly #session = inject(SessionService);
   readonly #activity = new PageActivity('no-notice');
   #refreshTimer: ReturnType<typeof setTimeout> | undefined;
   #destroyed = false;
 
   protected readonly ranges = RANGES;
+  protected readonly canManageAlerts = computed(() => this.#session.can('alerts:manage'));
   protected readonly error = this.#activity.error;
   protected readonly loading = signal(true);
   protected readonly overview = signal<MonitoringOverview | null>(null);

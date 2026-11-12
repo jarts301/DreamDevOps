@@ -15,6 +15,7 @@ The platform tells each container where to send metrics and traces, and which en
 - [Logs](#logs)
 - [Traces](#traces)
 - [Routes](#routes)
+- [For other contexts](#for-other-contexts)
 - [Data separation](#data-separation)
 - [Settings](#settings)
 - [Not included yet](#not-included-yet)
@@ -106,6 +107,13 @@ All routes start with `/api/v1`, need `dashboards:view`, which every company rol
 
 Errors use the API's `application/problem+json` format: `400` for another range or a trace ID that isn't one, `404` for an unknown environment or another company's, or a trace with none of the company's spans, and `503` when the server keeps no metrics or traces, or Prometheus, Jaeger or the host can't answer.
 
+## For other contexts
+
+[Alerts](../alerts/README.md) watch these metrics. They ask through `LatestMetrics`, in `application/latest-metrics.ts`, which this context publishes with the metrics' definitions in `domain/metrics.ts`:
+
+- **What it answers:** the latest values the **Monitoring** table shows, for the environments it's asked about, or that the server keeps no metrics, or why the store couldn't answer.
+- **Only the company's own:** it asks the store only about environments that run in the current company, whichever IDs it's given.
+
 ## Data separation
 
 - **Asking:** the list of environments comes from Environments, in the current company, under row-level security. Queries to Prometheus name those environments' IDs and nothing else, and logs are read only from those environments' containers.
@@ -127,7 +135,6 @@ Errors use the API's `application/problem+json` format: `400` for another range 
 
 ## Not included yet
 
-- **Alerts:** the `monitoring` feature includes them, but nothing watches the metrics yet.
 - **Kept logs:** logs come from the running container only, so they end with it. Searching older logs needs a log store.
 - **Traces from browsers:** the Angular blueprint starts each trace, but doesn't send the browser's own span, so a trace starts at the API, under a parent span nobody reported.
 - **Checked senders:** Prometheus and Jaeger accept data from anything that reaches them, labelled as the sender says. A collector that checks each environment's own token would stop one environment sending as another.

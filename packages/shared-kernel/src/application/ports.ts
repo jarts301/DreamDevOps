@@ -39,6 +39,13 @@ export interface JobQueue {
   /** Returns the job ID, or null if a job with this ID was already sent. A given ID must be a UUID. */
   send(queue: string, data: object, options?: { readonly id?: string }): Promise<string | null>;
   work(queue: string, handler: JobHandler, options?: WorkOptions): Promise<void>;
+  /**
+   * Sends a job to the queue on a recurring cron schedule, in UTC, such as every minute
+   * with "* * * * *". Every process that shares the queue shares the schedule, so each
+   * occurrence sends one job, however many processes run. Scheduling a queue again
+   * replaces its schedule, so each start can set it.
+   */
+  schedule(queue: string, cron: string, data?: object): Promise<void>;
 }
 
 /** Receives events leaving the outbox. Delivery is at least once. */
