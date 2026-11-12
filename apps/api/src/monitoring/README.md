@@ -49,6 +49,16 @@ Each is worked out from OpenTelemetry's standard metrics, by their names:
 
 An application that sends none of one shows **No data** for it, rather than zero. The Angular frontend blueprint sends CPU and memory only, because nginx only serves files.
 
+### Daily high
+
+Each chart has an orange dashed line at the metric's daily high: its highest value in the 24 hours before the chart's range. That's what's been normal lately, so a value above the line is higher than anything the day before, and the chart says whether the values went above it, or are above it now.
+
+- **The day before the range, not including it,** so the range's own values can go above the line. A high that included them could never be passed.
+- **Worked out as the chart's points are,** with the same rate window, so a spike is compared with spikes, not with smoothed averages.
+- **None yet** when the application sent nothing the day before, such as in its first day.
+
+Prometheus works it out with `max_over_time` over the day, in the same request as the chart.
+
 ### Limits
 
 CPU and memory show against what the container may use at most, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**. A value at 90% of its limit or more stands out. A container at its memory limit is stopped by its host, and one at its CPU limit is slowed down.
@@ -89,7 +99,7 @@ All routes start with `/api/v1`, need `dashboards:view`, which every company rol
 | Route | Purpose |
 |---|---|
 | `GET /company/monitoring/environments` | Every active environment a version runs in, by application, with its latest metrics and its container's `limits`, `cpus` and `memoryBytes`, or null. `enabled` says whether the server keeps metrics, and `problem` why they couldn't be read, if they couldn't. The environments are listed either way. |
-| `GET /company/monitoring/environments/:id?range=1h` | One environment's metrics over the last `15m`, `1h` (default), `6h` or `24h`, about 60 points each, for charts |
+| `GET /company/monitoring/environments/:id?range=1h` | One environment's metrics over the last `15m`, `1h` (default), `6h` or `24h`, about 60 points each, for charts, each with its `dailyHigh`, the highest value in the 24 hours before the range |
 | `GET /company/monitoring/environments/:id/logs?range=1h` | The latest 500 lines its version wrote within the range, oldest first. `running` says whether a version runs in it. |
 | `GET /company/monitoring/environments/:id/traces?range=1h` | The latest 20 traces it took part in within the range, newest first. `enabled` says whether the server keeps traces. |
 | `GET /company/monitoring/traces/:traceId` | One trace, by its 32-digit ID, with the company's own spans |

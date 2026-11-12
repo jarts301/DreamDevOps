@@ -2,6 +2,7 @@ import type { ApplicationCatalog } from '../../catalog/application/application-c
 import type { RunningEnvironment, RunningEnvironments } from '../../environments/application/running-environments.ts';
 import { MonitoringError } from '../domain/errors.ts';
 import {
+  dailyHighWindow,
   type MetricDefinition,
   METRICS,
   type MetricValues,
@@ -42,11 +43,18 @@ export interface MonitoringOverview {
 export interface MetricSeries extends MetricDefinition {
   /** One point per step, oldest first. Steps where the application sent nothing have no point. */
   readonly points: readonly { readonly at: string; readonly value: number }[];
+  /**
+   * The highest value in the day before the range, what's been normal lately, or null when
+   * the application sent nothing then. Values above it are higher than any that day.
+   */
+  readonly dailyHigh: number | null;
 }
 
 export interface EnvironmentMetrics {
   readonly environment: MonitoredEnvironment;
   readonly range: { readonly key: TimeRangeKey; readonly start: string; readonly end: string; readonly stepSeconds: number };
+  /** The day each series' daily high comes from: the 24 hours before the range. */
+  readonly dailyHigh: { readonly start: string; readonly end: string };
   readonly series: readonly MetricSeries[];
 }
 
@@ -133,9 +141,11 @@ export class ApplicationMetrics {
         end: window.end.toISOString(),
         stepSeconds: window.stepSeconds,
       },
+      dailyHigh: { start: dailyHighWindow(window).start.toISOString(), end: window.start.toISOString() },
       series: METRICS.map((metric) => ({
         ...metric,
-        points: (series[metric.key] ?? []).map((point) => ({ at: point.at.toISOString(), value: point.value })),
+        points: (series[metric.key]?.points ?? []).map((point) => ({ at: point.at.toISOString(), value: point.value })),
+        dailyHigh: series[metric.key]?.dailyHigh ?? null,
       })),
     };
   }

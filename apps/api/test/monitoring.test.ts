@@ -185,6 +185,7 @@ describe('the metrics of running applications', () => {
         { at: new Date('2026-11-10T12:34:00.000Z'), value: 20 },
       ],
     });
+    setup.store.dailyHighs.set(STAGING, { cpu: 15 });
 
     const metrics = await inCompany(COMPANY_A, () => metricsOf(setup).environment(STAGING, '15m'));
 
@@ -202,8 +203,12 @@ describe('the metrics of running applications', () => {
         { at: '2026-11-10T12:33:30.000Z', value: 10 },
         { at: '2026-11-10T12:34:00.000Z', value: 20 },
       ],
+      // The highest of the day before, which the last point went above.
+      dailyHigh: 15,
     });
-    expect(metrics.series[1]!.points).toEqual([]);
+    expect(metrics.series[1]).toMatchObject({ points: [], dailyHigh: null });
+    // The day before the range, so the range's own values can go above its high.
+    expect(metrics.dailyHigh).toEqual({ start: '2026-11-09T12:19:45.000Z', end: '2026-11-10T12:19:45.000Z' });
   });
 
   it('chart an environment where nothing runs any more, since it may have run recently', async () => {
@@ -347,27 +352,59 @@ describe('the Prometheus metrics store', () => {
         },
       },
     });
+    prometheus.on('POST', '/api/v1/query', (recorded) => ({
+      body: formOf(recorded).get('query')!.includes('process_cpu_time_seconds_total')
+        ? vector({ [STAGING]: '1.75' })
+        : vector({ [STAGING]: 'NaN' }),
+    }));
     const window = { start: new Date('2026-11-10T12:00:00.000Z'), end: new Date('2026-11-10T13:00:00.000Z'), stepSeconds: 60 };
 
     const series = await store.series(STAGING, window);
 
-    expect(series.cpu).toEqual([
-      { at: new Date(1_762_777_200_000), value: 1.5 },
-      { at: new Date(1_762_777_320_000), value: 2 },
-    ]);
-    const form = formOf(prometheus.requests[0]!);
-    expect(form.get('query')).toContain(`{dreamdevops_environment_id="${STAGING}"}[120s]`);
-    expect([form.get('start'), form.get('end'), form.get('step')]).toEqual(['1794312000', '1794315600', '60']);
+    expect(series.cpu).toEqual({
+      points: [
+        { at: new Date(1_762_777_200_000), value: 1.5 },
+        { at: new Date(1_762_777_320_000), value: 2 },
+      ],
+      dailyHigh: 1.75,
+    });
+    // A percentile of no requests isn't a number, so there's no daily high.
+    expect(series.responseTime.dailyHigh).toBeNull();
+    const range = formOf(prometheus.requests.find((recorded) => recorded.path === '/api/v1/query_range')!);
+    expect(range.get('query')).toContain(`{dreamdevops_environment_id="${STAGING}"}[120s]`);
+    expect([range.get('start'), range.get('end'), range.get('step')]).toEqual(['1794312000', '1794315600', '60']);
+  });
+
+  it('reads the daily high from the day before the window, as the chart’s points are read', async () => {
+    prometheus.on('POST', '/api/v1/query_range', { body: { status: 'success', data: { resultType: 'matrix', result: [] } } });
+    prometheus.on('POST', '/api/v1/query', { body: vector({}) });
+    const window = { start: new Date('2026-11-10T12:00:00.000Z'), end: new Date('2026-11-10T13:00:00.000Z'), stepSeconds: 60 };
+
+    const series = await store.series(STAGING, window);
+
+    expect(series.memory.dailyHigh).toBeNull();
+    const highs = prometheus.requests.filter((recorded) => recorded.path === '/api/v1/query').map(formOf);
+    expect(highs).toHaveLength(5);
+    // Evaluated where the window starts, over the 24 hours before it, once a minute.
+    expect(highs.every((form) => form.get('time') === '1794312000')).toBe(true);
+    expect(highs[0]!.get('query')).toBe(
+      `max_over_time((sum by (dreamdevops_environment_id) (rate(process_cpu_time_seconds_total{dreamdevops_environment_id="${STAGING}"}[120s])) * 100)[86400s:60s])`,
+    );
   });
 
   it('works rates out over at least a step, so long ranges miss nothing between points', async () => {
     prometheus.on('POST', '/api/v1/query_range', { body: { status: 'success', data: { resultType: 'matrix', result: [] } } });
+    prometheus.on('POST', '/api/v1/query', { body: vector({}) });
     const window = { start: new Date('2026-11-09T13:00:00.000Z'), end: new Date('2026-11-10T13:00:00.000Z'), stepSeconds: 1440 };
 
     const series = await store.series(STAGING, window);
 
-    expect(series.requests).toEqual([]);
-    expect(queries()[0]).toContain('[1440s]');
+    expect(series.requests).toEqual({ points: [], dailyHigh: null });
+    const rates = queries().filter((query) => query.includes('rate('));
+    expect(rates).toHaveLength(8);
+    expect(rates.every((query) => query.includes('[1440s]'))).toBe(true);
+    // The daily high is sampled once a step too, as the chart's points are.
+    expect(queries().filter((query) => query.startsWith('max_over_time'))[0]).toMatch(/\[86400s:1440s\]\)$/);
   });
 
   it('says when Prometheus can’t be reached or can’t answer', async () => {

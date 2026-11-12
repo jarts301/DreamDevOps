@@ -207,6 +207,10 @@ describe('monitoring', () => {
       ['errors', 2],
     ]);
     expect(body.series[0].points[1]).toEqual({ at: body.range.end, value: 12.5 });
+    // Each metric's highest value in the day before the range, for the chart's orange line.
+    expect(body.series.map((series: { dailyHigh: number | null }) => series.dailyHigh)).toEqual([12.5, 52_428_800, 3, 0.08, 0]);
+    expect(Date.parse(body.dailyHigh.end)).toBe(Date.parse(body.range.start));
+    expect(Date.parse(body.dailyHigh.end) - Date.parse(body.dailyHigh.start)).toBe(24 * 60 * 60 * 1000);
 
     prometheus.requests.length = 0;
     const { body: refused } = await theirs.viewer.get(`/api/v1/company/monitoring/environments/${staging.id}`).expect(404);

@@ -9,6 +9,14 @@ export interface Point {
   readonly value: number;
 }
 
+/** One metric over a window, and its highest value in the day before it. */
+export interface SeriesData {
+  /** One point per step, with gaps where the application sent nothing. */
+  readonly points: readonly Point[];
+  /** The highest value in the 24 hours before the window, or null when it sent nothing then. */
+  readonly dailyHigh: number | null;
+}
+
 export interface MetricsWindow {
   readonly start: Date;
   readonly end: Date;
@@ -22,8 +30,12 @@ export interface MetricsWindow {
 export interface MetricsStore {
   /** Each environment's latest values, for those that sent any recently. */
   latest(environmentIds: readonly string[]): Promise<ReadonlyMap<string, MetricValues>>;
-  /** One environment's metrics over a window, one point per step, with gaps where it sent nothing. */
-  series(environmentId: string, window: MetricsWindow): Promise<Readonly<Record<MetricKey, readonly Point[]>>>;
+  /**
+   * One environment's metrics over a window, one point per step, with gaps where it sent
+   * nothing, and each one's highest value in the day before the window, worked out the
+   * same way, so the two compare.
+   */
+  series(environmentId: string, window: MetricsWindow): Promise<Readonly<Record<MetricKey, SeriesData>>>;
 }
 
 /** The store can't be reached, or answered with something it shouldn't. The message is safe to show. */

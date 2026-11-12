@@ -32,6 +32,7 @@ A guide to every flow DreamDevOps offers today, from signing in to watching a ru
 | Change | What it gives | Where it's described |
 |---|---|---|
 | **Monitoring** page and context | Each running application's CPU, memory, requests, response times and server errors, now and charted over 15 minutes to 24 hours | [Monitoring guide](../../apps/api/src/monitoring/README.md) |
+| Daily high | Each chart has an orange dashed line at the metric's highest value in the 24 hours before the range, and says when values go above it | [Daily high](../../apps/api/src/monitoring/README.md#daily-high) |
 | Container limits | CPU and memory shown against what each container may use, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**, standing out from 90% | [Limits](../../apps/api/src/monitoring/README.md#limits) |
 | Logs | What each running container writes, with level, message and trace, newest first, with a filter | [Logs](../../apps/api/src/monitoring/README.md#logs) |
 | Traces | Each request through one or more applications, as a timeline, showing only the company's own spans | [Traces](../../apps/api/src/monitoring/README.md#traces) |
@@ -218,7 +219,16 @@ Don't share that command's full output: it includes the environment's secrets.
 
 - **Heading:** *Its container may use at most 1 CPU and 512 MiB of memory, on This machine.*
 - **Charts:** five of them, for the range chosen. CPU and memory add *of a limit of 1 CPU* and *of a limit of 512 MiB*.
+- **Daily high:** each chart has an orange dashed line at its highest value in the 24 hours before the range. Under the chart:
+  - *Daily high 40%.* when nothing went above it
+  - *Went above it in this range.* or *Now above it.*, in orange, when values went above it
+  - *No daily high yet* when the application sent nothing the day before, such as on its first day
 - **Gaps:** where the application sent nothing, the line breaks.
+
+**Seeing the daily high.** The line needs a day of data:
+- **After a day:** leave a backend running for a day, then open its charts with **Last hour**.
+- **Sooner:** load it for a few minutes, wait 20 minutes, and open **Last 15 minutes**. Its day before ends 15 minutes ago, so the earlier load is part of it, and the line sits at its peak.
+- **Going above it:** send more requests than before, such as with two `curl` loops, and **Requests** shows *Now above it.*
 
 **Seeing a value near its limit.** Memory only nears 512 MiB with real load. To see the red highlight, build a feature image of the backend with a temporary route. Deploy it to a test environment, open the route, and remove the route afterwards:
 
@@ -378,6 +388,7 @@ Start them again with `docker compose -f infra/local/compose.yaml run --rm start
 | 5 | Monitoring table | `dev-viewer` | Each running environment, CPU and memory with their limits |
 | 6 | Near a limit | `dev-developer` | Memory at 90% or more stands out in red |
 | 7 | Charts | `dev-viewer` | Five charts, CPU and memory with their limits, ranges switch |
+| 7a | Daily high | `dev-viewer` | An orange dashed line at the day before's highest value, and *Now above it.* when traffic goes higher |
 | 8 | Backend logs | `dev-viewer` | `/api/ping` logs `Ping received` with a **Trace** button |
 | 9 | Frontend logs | `dev-viewer` | Opening the page logs `GET / 200` |
 | 10 | Log filter | `dev-viewer` | Filtering by a trace ID leaves that request's lines |
@@ -392,7 +403,7 @@ Start them again with `docker compose -f infra/local/compose.yaml run --rm start
 | Command | Covers | Needs | Last result |
 |---|---|---|---|
 | `npm run typecheck` | Every package and app | Nothing | Clean |
-| `npm run test:unit` | See the next table | Nothing | 40 shared kernel, 485 API and 169 dashboard tests pass |
+| `npm run test:unit` | See the next table | Nothing | 40 shared kernel, 486 API and 172 dashboard tests pass |
 | `npm run test:integration` | The API against a throwaway PostgreSQL, Keycloak and Forgejo | Docker | 213 tests of the database suites pass |
 | `npm run test:scaffolds` | Every blueprint version: installed, linted, tested and built, run as a read-only non-root container. From 1.2.0 it also checks the metrics it sends, and from 1.3.0 that a request is logged in JSON with its trace, and for services, traced. | Docker and the internet | Not run: written without Docker |
 | `npm run test:e2e` | Sign-in to team management in a browser | The local stack and Chrome | Not run |
@@ -403,7 +414,7 @@ What `npm run test:unit` covers:
 - **The platform's telemetry settings** for containers
 - **The Docker runtime's** logs and limits
 - **The blueprints:** their contracts
-- **The dashboard's** Monitoring page, log view, trace timeline, charts and formatting
+- **The dashboard's** Monitoring page, log view, trace timeline, charts with their daily high, and formatting
 
 The new integration tests are `monitoring.integration.test.ts`. Against a real database, they prove:
 - **Settings:** containers get the telemetry settings.

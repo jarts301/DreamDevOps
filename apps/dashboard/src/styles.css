@@ -11,6 +11,8 @@
   --color-danger-text: #ffffff;
   --color-error-surface: #fbe9e7;
   --color-success-surface: #e6f4ea;
+  /* Orange: what's been normal lately, such as a metric's daily high. */
+  --color-warning: #ea580c;
   --radius: 8px;
 }
 
@@ -27,6 +29,7 @@
     --color-danger-text: #410002;
     --color-error-surface: #3d1a17;
     --color-success-surface: #17321f;
+    --color-warning: #fb923c;
   }
 }
 
@@ -915,4 +918,30 @@ tr[data-production='true'] > td:first-child {
 .cell-note[data-tone='danger'] {
   color: var(--color-danger);
   font-weight: 600;
+}
+
+/* Monitoring: the daily high is an orange dashed line, and values above it say so. */
+.metric-chart-daily-high {
+  stroke: var(--color-warning);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.metric-chart-daily-high-note {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.metric-chart-daily-high-note[data-above] {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.metric-chart-swatch {
+  display: inline-block;
+  width: 14px;
+  vertical-align: middle;
+  border-top: 2px dashed var(--color-warning);
 }

@@ -4,7 +4,7 @@ import { CatalogError } from '../../src/catalog/domain/errors.ts';
 import type { EnvironmentLogLine, EnvironmentLogs } from '../../src/environments/application/environment-logs.ts';
 import type { RunningEnvironment, RunningEnvironments } from '../../src/environments/application/running-environments.ts';
 import type { MetricKey, MetricValues } from '../../src/monitoring/domain/metrics.ts';
-import type { MetricsStore, MetricsWindow, Point, TraceStore } from '../../src/monitoring/application/ports.ts';
+import type { MetricsStore, MetricsWindow, Point, SeriesData, TraceStore } from '../../src/monitoring/application/ports.ts';
 import type { StoredTrace } from '../../src/monitoring/domain/traces.ts';
 
 /** Environments by company, answered in the current company only, as the real one does. */
@@ -61,6 +61,8 @@ function toView(application: { id: string; name: string; status: 'active' | 'arc
 export class FakeMetricsStore implements MetricsStore {
   readonly latestValues = new Map<string, MetricValues>();
   readonly seriesValues = new Map<string, Partial<Record<MetricKey, Point[]>>>();
+  /** Each environment's highest values in the day before a window. */
+  readonly dailyHighs = new Map<string, Partial<Record<MetricKey, number>>>();
   /** The environment IDs of each question, in order. */
   readonly asked: string[][] = [];
   readonly windows: MetricsWindow[] = [];
@@ -72,17 +74,13 @@ export class FakeMetricsStore implements MetricsStore {
     return new Map([...this.latestValues].filter(([id]) => environmentIds.includes(id)));
   }
 
-  async series(environmentId: string, window: MetricsWindow): Promise<Readonly<Record<MetricKey, readonly Point[]>>> {
+  async series(environmentId: string, window: MetricsWindow): Promise<Readonly<Record<MetricKey, SeriesData>>> {
     this.#ask([environmentId]);
     this.windows.push(window);
     const values = this.seriesValues.get(environmentId) ?? {};
-    return {
-      cpu: values.cpu ?? [],
-      memory: values.memory ?? [],
-      requests: values.requests ?? [],
-      responseTime: values.responseTime ?? [],
-      errors: values.errors ?? [],
-    };
+    const highs = this.dailyHighs.get(environmentId) ?? {};
+    const of = (key: MetricKey): SeriesData => ({ points: values[key] ?? [], dailyHigh: highs[key] ?? null });
+    return { cpu: of('cpu'), memory: of('memory'), requests: of('requests'), responseTime: of('responseTime'), errors: of('errors') };
   }
 
   #ask(environmentIds: readonly string[]): void {

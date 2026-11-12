@@ -73,3 +73,15 @@ export function windowOf(range: TimeRange, now: Date): { readonly start: Date; r
   const end = Math.floor(now.getTime() / stepMs) * stepMs;
   return { start: new Date(end - range.seconds * 1000), end: new Date(end), stepSeconds: range.stepSeconds };
 }
+
+/** How far back the daily high looks: a day, before the range a chart shows. */
+export const DAILY_HIGH_SECONDS = 24 * 60 * 60;
+
+/**
+ * The day a chart's values are measured against: the 24 hours before its range starts. Its
+ * highest value is what's been normal lately, and the range's values can go above it,
+ * which they couldn't if the day included them.
+ */
+export function dailyHighWindow(window: { readonly start: Date }): { readonly start: Date; readonly end: Date } {
+  return { start: new Date(window.start.getTime() - DAILY_HIGH_SECONDS * 1000), end: window.start };
+}

@@ -65,20 +65,26 @@ const overview = (overrides: Partial<MonitoringOverview> = {}): MonitoringOvervi
   ...overrides,
 });
 
-const series = (key: MetricSeries['key'], points: MetricSeries['points']): MetricSeries => ({
+const series = (key: MetricSeries['key'], points: MetricSeries['points'], dailyHigh: number | null = null): MetricSeries => ({
   ...METRICS.find((metric) => metric.key === key)!,
   points,
+  dailyHigh,
 });
 
 const charts = (range: EnvironmentMetrics['range']['key'] = '1h'): EnvironmentMetrics => ({
   environment: row(),
   range: { key: range, start: '2026-11-10T11:00:00.000Z', end: '2026-11-10T12:00:00.000Z', stepSeconds: 60 },
+  dailyHigh: { start: '2026-11-09T11:00:00.000Z', end: '2026-11-10T11:00:00.000Z' },
   series: [
-    series('cpu', [
-      { at: '2026-11-10T11:58:00.000Z', value: 10 },
-      { at: '2026-11-10T11:59:00.000Z', value: 20 },
-    ]),
-    series('memory', [{ at: '2026-11-10T11:59:00.000Z', value: 52_428_800 }]),
+    series(
+      'cpu',
+      [
+        { at: '2026-11-10T11:58:00.000Z', value: 10 },
+        { at: '2026-11-10T11:59:00.000Z', value: 20 },
+      ],
+      15,
+    ),
+    series('memory', [{ at: '2026-11-10T11:59:00.000Z', value: 52_428_800 }], 60 * 1024 * 1024),
     series('requests', []),
     series('responseTime', []),
     series('errors', []),
@@ -592,7 +598,13 @@ describe('a metric chart', () => {
 
     expect(element.querySelector('figcaption')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('CPU 25%');
     expect(lines(element)).toEqual(['0,76 5,4 10,40']);
-    expect(element.querySelector('svg')?.getAttribute('aria-label')).toBe('CPU: latest 25%, highest 50%, over 3 points');
+    expect(element.querySelector('svg')?.getAttribute('aria-label')).toBe(
+      'CPU: latest 25%, highest 50%, no daily high yet, over 3 points',
+    );
+    expect(element.querySelector('.metric-chart-daily-high')).toBeNull();
+    expect(element.querySelector('.metric-chart-daily-high-note')?.textContent?.trim()).toBe(
+      'No daily high yet: nothing was sent the day before.',
+    );
     expect(element.textContent).toContain('Highest 50%. How much of one CPU core it uses.');
   });
 
@@ -606,6 +618,73 @@ describe('a metric chart', () => {
     );
 
     expect(lines(element)).toEqual(['0,4 5,4', '150,4 152,4']);
+  });
+
+  it('marks the daily high with an orange line, where it sits among the points', async () => {
+    const element = await draw(
+      series(
+        'cpu',
+        [
+          { at: '2026-11-10T11:00:00.000Z', value: 10 },
+          { at: '2026-11-10T11:01:00.000Z', value: 50 },
+          { at: '2026-11-10T11:02:00.000Z', value: 20 },
+        ],
+        25,
+      ),
+    );
+
+    const line = element.querySelector('.metric-chart-daily-high')!;
+    // Halfway up the chart, as 25 is half of the highest point, 50.
+    expect([line.getAttribute('x1'), line.getAttribute('x2'), line.getAttribute('y1'), line.getAttribute('y2')]).toEqual([
+      '0',
+      '300',
+      '40',
+      '40',
+    ]);
+    expect(line.querySelector('title')?.textContent).toBe('Daily high: 25%');
+    const note = element.querySelector('.metric-chart-daily-high-note')!;
+    expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe('Daily high 25%. Went above it in this range.');
+    expect(note.getAttribute('data-above')).toBe('earlier');
+  });
+
+  it('says when the latest value is above the daily high', async () => {
+    const element = await draw(
+      series(
+        'memory',
+        [
+          { at: '2026-11-10T11:00:00.000Z', value: 100 * 1024 * 1024 },
+          { at: '2026-11-10T11:01:00.000Z', value: 300 * 1024 * 1024 },
+        ],
+        200 * 1024 * 1024,
+      ),
+    );
+
+    expect(element.querySelector('.metric-chart-daily-high-note')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Daily high 200.0 MiB. Now above it.',
+    );
+    expect(element.querySelector('svg')?.getAttribute('aria-label')).toBe(
+      'Memory: latest 300.0 MiB, highest 300.0 MiB, daily high 200.0 MiB, now above it, over 2 points',
+    );
+  });
+
+  it('fits a daily high above every point, so the line stays on the chart, and says nothing went above it', async () => {
+    const element = await draw(
+      series(
+        'requests',
+        [
+          { at: '2026-11-10T11:00:00.000Z', value: 1 },
+          { at: '2026-11-10T11:01:00.000Z', value: 2 },
+        ],
+        4,
+      ),
+    );
+
+    // The chart's top is the daily high, 4, so it sits at the top, and 2 sits halfway.
+    expect(element.querySelector('.metric-chart-daily-high')?.getAttribute('y1')).toBe('4');
+    expect(lines(element)).toEqual(['0,58 5,40']);
+    const note = element.querySelector('.metric-chart-daily-high-note')!;
+    expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe('Daily high 4.0/s.');
+    expect(note.hasAttribute('data-above')).toBe(false);
   });
 
   it('says when there’s nothing in the range', async () => {

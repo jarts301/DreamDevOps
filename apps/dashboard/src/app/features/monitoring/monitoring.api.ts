@@ -48,11 +48,15 @@ export interface MonitoringOverview {
 export interface MetricSeries extends MetricDefinition {
   /** Oldest first. Steps where the application sent nothing have no point. */
   readonly points: readonly { readonly at: string; readonly value: number }[];
+  /** The highest value in the day before the range, what's been normal lately, or null when it sent nothing then. */
+  readonly dailyHigh: number | null;
 }
 
 export interface EnvironmentMetrics {
   readonly environment: MonitoredEnvironment;
   readonly range: { readonly key: TimeRangeKey; readonly start: string; readonly end: string; readonly stepSeconds: number };
+  /** The day each series' daily high comes from: the 24 hours before the range. */
+  readonly dailyHigh: { readonly start: string; readonly end: string };
   readonly series: readonly MetricSeries[];
 }
 

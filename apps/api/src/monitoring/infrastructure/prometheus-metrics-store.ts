@@ -1,7 +1,7 @@
 import { isUuid } from '@dreamdevops/shared-kernel';
 import { ENVIRONMENT_ATTRIBUTE } from '../../environments/domain/telemetry.ts';
-import { METRIC_KEYS, type MetricKey, type MetricValues } from '../domain/metrics.ts';
-import { type MetricsStore, MetricsUnavailableError, type MetricsWindow, type Point } from '../application/ports.ts';
+import { DAILY_HIGH_SECONDS, METRIC_KEYS, type MetricKey, type MetricValues } from '../domain/metrics.ts';
+import { type MetricsStore, MetricsUnavailableError, type MetricsWindow, type SeriesData } from '../application/ports.ts';
 
 export interface PrometheusOptions {
   /** Such as http://localhost:9090. */
@@ -19,6 +19,8 @@ export const ENVIRONMENT_LABEL = ENVIRONMENT_ATTRIBUTE.replace(/[^A-Za-z0-9_]/g,
 
 /** The smallest window a rate is worked out over, so it always spans a few of an application's exports. */
 const MIN_RATE_WINDOW_SECONDS = 120;
+/** How often the daily high is sampled: often enough to catch what a chart shows, at most once a minute. */
+const MIN_DAILY_HIGH_RESOLUTION_SECONDS = 60;
 
 const HTTP_DURATION = 'http_server_request_duration_seconds';
 
@@ -90,30 +92,44 @@ export class PrometheusMetricsStore implements MetricsStore {
     return latest;
   }
 
-  async series(environmentId: string, window: MetricsWindow): Promise<Readonly<Record<MetricKey, readonly Point[]>>> {
+  async series(environmentId: string, window: MetricsWindow): Promise<Readonly<Record<MetricKey, SeriesData>>> {
     const selector = `${ENVIRONMENT_LABEL}="${checkedId(environmentId)}"`;
     const rateWindow = `${Math.max(MIN_RATE_WINDOW_SECONDS, window.stepSeconds)}s`;
-    const answers = await Promise.all(
-      METRIC_KEYS.map((key) =>
-        this.#ask('/api/v1/query_range', {
-          query: QUERIES[key](selector, rateWindow),
-          start: String(window.start.getTime() / 1000),
-          end: String(window.end.getTime() / 1000),
-          step: String(window.stepSeconds),
-        }),
+    // The day before is read as the chart's points are, with the same rate window, so a
+    // value above the daily high is really higher, not only less smoothed.
+    const resolution = `${Math.max(MIN_DAILY_HIGH_RESOLUTION_SECONDS, window.stepSeconds)}s`;
+    const [ranges, highs] = await Promise.all([
+      Promise.all(
+        METRIC_KEYS.map((key) =>
+          this.#ask('/api/v1/query_range', {
+            query: QUERIES[key](selector, rateWindow),
+            start: String(window.start.getTime() / 1000),
+            end: String(window.end.getTime() / 1000),
+            step: String(window.stepSeconds),
+          }),
+        ),
       ),
-    );
-    return Object.fromEntries(
-      METRIC_KEYS.map((key, index) => {
-        // Each query sums by environment, so it answers with one series at most.
-        const values = answers[index]!.data?.result?.find((result) => result.metric?.[ENVIRONMENT_LABEL] === environmentId)?.values ?? [];
-        const points = values.flatMap(([at, text]) => {
-          const value = numberOf(text);
-          return value === null ? [] : [{ at: new Date(at * 1000), value }];
-        });
-        return [key, points];
-      }),
-    ) as Record<MetricKey, Point[]>;
+      Promise.all(
+        METRIC_KEYS.map((key) =>
+          this.#ask('/api/v1/query', {
+            query: `max_over_time((${QUERIES[key](selector, rateWindow)})[${DAILY_HIGH_SECONDS}s:${resolution}])`,
+            time: String(window.start.getTime() / 1000),
+          }),
+        ),
+      ),
+    ]);
+    // Each query sums by environment, so it answers with one series at most.
+    const ours = (answer: PrometheusAnswer) =>
+      answer.data?.result?.find((result) => result.metric?.[ENVIRONMENT_LABEL] === environmentId);
+    const series = {} as Record<MetricKey, SeriesData>;
+    METRIC_KEYS.forEach((key, index) => {
+      const points = (ours(ranges[index]!)?.values ?? []).flatMap(([at, text]) => {
+        const value = numberOf(text);
+        return value === null ? [] : [{ at: new Date(at * 1000), value }];
+      });
+      series[key] = { points, dailyHigh: numberOf(ours(highs[index]!)?.value?.[1]) };
+    });
+    return series;
   }
 
   async #ask(path: string, parameters: Record<string, string>): Promise<PrometheusAnswer> {
