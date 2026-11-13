@@ -117,7 +117,22 @@ Run these commands from the repository root. They work in Bash and PowerShell.
 
    The API sets up Dummy Company, and adds each account to it with its role, every time it starts locally. It adds any account your Keycloak doesn't have yet, with the same password, and leaves alone what exists, such as a role you changed. To skip it, set `SAMPLE_DATA=off` in `infra/local/.env`.
 
+   Dummy Company also gets a sample application for each type, language and framework, 18 in all, such as *Axum Rust API* or *React TypeScript Frontend*, each with its repository and a **Test** environment on This machine, ready to build and deploy. The sample Tech Lead registers them, as a person would. The API adds any that are missing each time it starts, and leaves alone what exists, such as an application you archived. To skip them, set `SAMPLE_APPLICATIONS=off` in `infra/local/.env`. See [Sample applications](#sample-applications).
+
 To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally). Invitation and alert emails don't leave your machine: open them in Mailpit at <http://localhost:8025>.
+
+### Sample applications
+
+| Type | Applications |
+|---|---|
+| RESTful Service | Fastify TypeScript API, Express TypeScript API, NestJS TypeScript API, Express JavaScript API, Fastify JavaScript API, FastAPI Python API, Flask Python API, Axum Rust API, Actix Web Rust API, cpp-httplib C++ API |
+| Web Frontend | Angular TypeScript Frontend, React TypeScript Frontend, Vue TypeScript Frontend, Svelte TypeScript Frontend, React JavaScript Frontend, Vue JavaScript Frontend, Svelte JavaScript Frontend, PyScript Python Frontend |
+
+Each is named after its framework, language and type, starts from the newest version of its blueprint, and says which in its description. A new blueprint gets its own application the next time the API starts. To try one end to end, as `dev-tech-lead`:
+
+1. Open **Builds**, choose the application, and start a release. Its first candidate builds from the repository.
+2. Open **Environments**, and deploy the candidate to **Test**.
+3. Open **Monitoring** to see its metrics, logs and traces.
 
 ## Local services
 

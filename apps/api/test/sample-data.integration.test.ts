@@ -1,11 +1,14 @@
 import type { INestApplication } from '@nestjs/common';
 import { parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ApplicationCatalog } from '../src/catalog/application/application-catalog.ts';
+import { Environments } from '../src/environments/application/environments.ts';
 import { CompanyAccessService } from '../src/identity-access/application/company-access.service.ts';
 import { USER_DIRECTORY, type UserDirectory } from '../src/identity-access/application/ports.ts';
 import { toPrincipal } from '../src/identity-access/domain/access.ts';
 import type { SampleIdentity } from '../src/sample-data/keycloak-admin.ts';
 import { SAMPLE_ACCOUNTS } from '../src/sample-data/sample-accounts.ts';
+import { seedSampleApplications } from '../src/sample-data/sample-applications.ts';
 import { type SampleUsers, seedSampleCompany } from '../src/sample-data/sample-company.ts';
 import { CompaniesService } from '../src/tenancy/application/companies.service.ts';
 import { buildApp } from './test-app.ts';
@@ -155,5 +158,81 @@ describe('the sample company', () => {
     await expect(seed(new FakeSampleUsers([]))).rejects.toThrow(
       "dev-platform-admin isn't in Keycloak. Reset the local services, as the README explains.",
     );
+  });
+});
+
+describe('the sample applications', () => {
+  const seedApplications = (companyId: string, members: readonly { username: string; userId: string }[]) =>
+    seedSampleApplications(
+      {
+        directory: app.get<UserDirectory>(USER_DIRECTORY, { strict: false }),
+        catalog: app.get(ApplicationCatalog, { strict: false }),
+        environments: app.get(Environments, { strict: false }),
+      },
+      companyId,
+      members,
+    );
+  const catalog = () => app.get(ApplicationCatalog, { strict: false });
+  const environments = () => app.get(Environments, { strict: false });
+
+  it('are registered by the sample Tech Lead, one for each type, language and framework, each with a Test environment', async () => {
+    const company = await seed(new FakeSampleUsers(SAMPLE_ACCOUNTS.map((account) => account.username).concat('dev-platform-admin')));
+    const techLead = company.accounts.find((account) => account.username === 'dev-tech-lead')!;
+
+    const result = await seedApplications(company.companyId, [techLead]);
+
+    expect(result.registeredBy).toBe('dev-tech-lead');
+    expect(result.applications).toHaveLength(18);
+    expect(result.applications.every((application) => application.created && application.environmentCreated)).toBe(true);
+    await runWithCompany(parseCompanyId(company.companyId), async () => {
+      const registered = await catalog().list('active');
+      expect(registered.map((application) => `${application.name}: ${application.blueprint?.key}`)).toEqual(
+        expect.arrayContaining(['Axum Rust API: axum-rust-service', 'PyScript Python Frontend: pyscript-frontend']),
+      );
+      const axum = registered.find((application) => application.name === 'Axum Rust API')!;
+      expect(axum).toMatchObject({ type: { key: 'restful-service' }, slug: 'axum-rust-api' });
+      expect(await environments().list(axum.id, 'active')).toEqual([
+        expect.objectContaining({ name: 'Test', slug: 'test', production: false }),
+      ]);
+    });
+  });
+
+  it('are left as they are on the next start, archived ones included, and get back a missing Test environment', async () => {
+    const company = await seed(new FakeSampleUsers(SAMPLE_ACCOUNTS.map((account) => account.username).concat('dev-platform-admin')));
+    const techLead = company.accounts.find((account) => account.username === 'dev-tech-lead')!;
+    const principal = toPrincipal(
+      (await app.get<UserDirectory>(USER_DIRECTORY, { strict: false }).loadAccess(techLead.userId))!,
+      company.companyId,
+    );
+    await seedApplications(company.companyId, [techLead]);
+    // Someone archived the Flask API, and the Vue frontend's Test environment.
+    await runWithCompany(parseCompanyId(company.companyId), async () => {
+      const registered = await catalog().list('active');
+      await catalog().archive(principal, registered.find((application) => application.name === 'Flask Python API')!.id);
+      const vue = registered.find((application) => application.name === 'Vue TypeScript Frontend')!;
+      const [test] = await environments().list(vue.id, 'active');
+      await environments().archive(principal, test!.id, { version: test!.version });
+      // And the React frontend's Test environment was renamed, so it has none by that name.
+      const react = registered.find((application) => application.name === 'React TypeScript Frontend')!;
+      const [reactTest] = await environments().list(react.id, 'active');
+      await environments().update(principal, reactTest!.id, { name: 'QA', version: reactTest!.version });
+    });
+
+    const again = await seedApplications(company.companyId, [techLead]);
+
+    expect(again.applications.filter((application) => application.created)).toEqual([]);
+    expect(again.applications.filter((application) => application.environmentCreated).map((application) => application.name)).toEqual([
+      'React TypeScript Frontend',
+    ]);
+    await runWithCompany(parseCompanyId(company.companyId), async () => {
+      expect((await catalog().list('archived')).map((application) => application.name)).toEqual(['Flask Python API']);
+    });
+  });
+
+  it('are left out when no sample member may register applications', async () => {
+    const company = await seed(new FakeSampleUsers(SAMPLE_ACCOUNTS.map((account) => account.username).concat('dev-platform-admin')));
+    const viewer = company.accounts.find((account) => account.username === 'dev-viewer')!;
+
+    expect(await seedApplications(company.companyId, [viewer])).toEqual({ registeredBy: null, applications: [] });
   });
 });

@@ -39,6 +39,8 @@ export interface SampleCompanyResult {
     readonly actualRole: string;
     readonly accountCreated: boolean;
     readonly joinedNow: boolean;
+    /** The account's user in DreamDevOps. */
+    readonly userId: string;
   }[];
 }
 
@@ -110,8 +112,13 @@ export async function seedSampleCompany(dependencies: SampleCompanyDependencies)
   return { companyId, companyName: existing?.name ?? SAMPLE_COMPANY_NAME, companyCreated: existing === undefined, accounts: results };
 }
 
-function summary(person: { account: SampleAccount; identity: SampleIdentity }) {
-  return { username: person.account.username, role: person.account.role, accountCreated: person.identity.created };
+function summary(person: { account: SampleAccount; identity: SampleIdentity; userId: string }) {
+  return {
+    username: person.account.username,
+    role: person.account.role,
+    accountCreated: person.identity.created,
+    userId: person.userId,
+  };
 }
 
 /** The sample Company Admin, if they're a member already, or else the Platform Admin. */

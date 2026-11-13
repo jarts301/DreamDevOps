@@ -36,6 +36,7 @@ A guide to every flow DreamDevOps offers today, from signing in to watching a ru
 | Languages and frameworks | Web frontends in TypeScript, with Angular, React, Vue or Svelte, in JavaScript, with React, Vue or Svelte, and in Python, with PyScript, chosen when an application is registered | [Blueprints](../../blueprints/README.md#languages-and-frameworks) |
 | Service languages and frameworks | Services in TypeScript, with Fastify, Express or NestJS, in JavaScript, with Express or Fastify, in Python, with FastAPI or Flask, in Rust, with Axum or Actix Web, and in C++, with cpp-httplib. Each type names its default, so services still start on Fastify in TypeScript. | The same |
 | Service image fixes | Service images hold no npm or Yarn, and no `package.json` named after the application, so scans don't report npm's packages, or a published package the application is named like. Rust images build in less memory. A failed build shows why. | [Report](2026-11-service-image-fixes.md) |
+| Sample applications | Dummy Company gets an application for each type, language and framework, 18 in all, such as *Axum Rust API*, each with its repository and a **Test** environment, ready to build and deploy. `SAMPLE_APPLICATIONS=off` leaves them out. | [Sample applications](../../README.md#sample-applications) |
 | **Alerts** page and context | Alerts on any environment's metric, above or below a threshold for a number of minutes, checked every minute, emailing the members they name when they fire and when they're resolved, never anyone removed from the company, through Mailpit locally | [Alerts guide](../../apps/api/src/alerts/README.md) |
 | Daily high | Each chart has an orange dashed line at the metric's highest value in the 24 hours before the range, and says when values go above it | [Daily high](../../apps/api/src/monitoring/README.md#daily-high) |
 | Container limits | CPU and memory shown against what each container may use, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**, standing out from 90% | [Limits](../../apps/api/src/monitoring/README.md#limits) |
@@ -109,7 +110,7 @@ Run these from the repository root. Steps 3 and 4 matter for the latest change.
 
 ## Accounts and what each can do
 
-Every sample account's password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`. All but the Platform Admin belong to **Dummy Company**.
+Every sample account's password is `KEYCLOAK_DEV_USER_PASSWORD` in `infra/local/.env`. All but the Platform Admin belong to **Dummy Company**, which has a sample application for each type, language and framework, each with a **Test** environment. Use them to test builds, deployments and monitoring in any language without registering anything first.
 
 | Account | Role | Use it to test |
 |---|---|---|
@@ -438,13 +439,14 @@ Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-enviro
 | 19 | Removed members | `dev-company-admin` | A member removed on **Team** is taken off every alert, and gets no alert emails |
 | 20 | Languages and frameworks | `dev-tech-lead` | A web frontend registered in each language starts from the chosen framework, and its pipeline passes |
 | 20a | Service languages and frameworks | `dev-tech-lead` | A service registered in Python, Rust and C++ starts from the chosen framework, its pipeline passes, and, deployed, Monitoring shows its metrics, its `Ping received` line and its trace |
+| 20b | Sample applications | `dev-tech-lead` | After the API starts, **Applications** lists 18 sample applications, from *Actix Web Rust API* to *Vue TypeScript Frontend*, each with a ready repository and a **Test** environment. Restarting the API adds none twice. |
 
 ## Automated tests
 
 | Command | Covers | Needs | Last result |
 |---|---|---|---|
 | `npm run typecheck` | Every package and app | Nothing | Clean |
-| `npm run test:unit` | See the next table | Nothing | 45 shared kernel, 539 API and 185 dashboard tests pass |
+| `npm run test:unit` | See the next table | Nothing | 45 shared kernel, 540 API and 185 dashboard tests pass |
 | `npm run test:integration` | The API against a throwaway PostgreSQL, Keycloak and Forgejo | Docker | 230 tests of the database suites pass |
 | `npm run test:scaffolds` | Every blueprint version: its own pipeline, run step by step in a container of the pipeline's image, then its image built and run as a read-only non-root container. From 1.2.0 it also checks the metrics it sends, and from 1.3.0 that a request is logged in JSON with its trace, and for services, traced. | Docker and the internet | Not run: written without Docker |
 | `npm run test:e2e` | Sign-in to team management in a browser | The local stack and Chrome | Not run |

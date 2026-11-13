@@ -2,11 +2,14 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { InvalidConfigError, loadConfig } from '../src/config/app-config.ts';
+import { BlueprintLibrary } from '../src/blueprints/infrastructure/blueprint-library.ts';
 import { KeycloakAdmin } from '../src/sample-data/keycloak-admin.ts';
 import { SAMPLE_ACCOUNTS, SAMPLE_PLATFORM_ADMIN } from '../src/sample-data/sample-accounts.ts';
+import { sampleApplications } from '../src/sample-data/sample-applications.ts';
 import { HttpStub } from './support/http-stub.ts';
 
 const REALM = fileURLToPath(new URL('../../../infra/local/keycloak/dreamdevops-realm.json', import.meta.url));
+const BLUEPRINTS = fileURLToPath(new URL('../../../blueprints', import.meta.url));
 
 describe('the sample accounts', () => {
   it('cover every company role once', () => {
@@ -31,6 +34,45 @@ describe('the sample accounts', () => {
       expect(user!.credentials[0]!.value).toBe('${KEYCLOAK_DEV_USER_PASSWORD}');
     }
     expect(byName.get(SAMPLE_PLATFORM_ADMIN)!.realmRoles).toEqual(['platform-admin']);
+  });
+});
+
+describe('the sample applications', () => {
+  const library = BlueprintLibrary.load(BLUEPRINTS);
+  const types = [
+    { key: 'restful-service', name: 'RESTful Service' },
+    { key: 'web-frontend', name: 'Web Frontend' },
+  ].map((type) => ({ ...type, description: '', blueprint: library.forType(type.key)[0]!, blueprints: library.forType(type.key) }));
+
+  it('are one for each type, language and framework, named after them', () => {
+    const samples = sampleApplications(types);
+
+    expect(samples.map((sample) => `${sample.name} (${sample.blueprint})`)).toEqual([
+      'cpp-httplib C++ API (httplib-cpp-service)',
+      'Express JavaScript API (express-javascript-service)',
+      'Fastify JavaScript API (fastify-javascript-service)',
+      'FastAPI Python API (fastapi-python-service)',
+      'Flask Python API (flask-python-service)',
+      'Actix Web Rust API (actix-web-rust-service)',
+      'Axum Rust API (axum-rust-service)',
+      'Express TypeScript API (express-typescript-service)',
+      'NestJS TypeScript API (nestjs-typescript-service)',
+      'Fastify TypeScript API (node-service)',
+      'React JavaScript Frontend (react-javascript-frontend)',
+      'Svelte JavaScript Frontend (svelte-javascript-frontend)',
+      'Vue JavaScript Frontend (vue-javascript-frontend)',
+      'PyScript Python Frontend (pyscript-frontend)',
+      'Angular TypeScript Frontend (angular-frontend)',
+      'React TypeScript Frontend (react-typescript-frontend)',
+      'Svelte TypeScript Frontend (svelte-typescript-frontend)',
+      'Vue TypeScript Frontend (vue-typescript-frontend)',
+    ]);
+    // Every blueprint is covered once, and no two share a name.
+    expect(new Set(samples.map((sample) => sample.blueprint)).size).toBe(library.latest().length);
+    expect(new Set(samples.map((sample) => sample.name.toLowerCase())).size).toBe(samples.length);
+    expect(samples[6]!.description).toBe(
+      'A sample RESTful Service, in Rust with Axum 0.8 on Tokio, from the axum-rust-service blueprint. Build it, and deploy it to Test, to try DreamDevOps out.',
+    );
   });
 });
 
@@ -64,7 +106,11 @@ describe('sample data settings', () => {
       keycloakAdminUsername: 'platform-admin',
       keycloakAdminPassword: 'fake-dummy-keycloak-admin-password',
       password: 'fake-dummy-sample-user-password',
+      applications: true,
     });
+    // The sample applications, and their repositories, can be left out.
+    expect(loadConfig({ ...valid, ...sample, SAMPLE_APPLICATIONS: 'off' }).sampleData?.applications).toBe(false);
+    expect(() => loadConfig({ ...valid, ...sample, SAMPLE_APPLICATIONS: 'no' })).toThrow('SAMPLE_APPLICATIONS must be on or off.');
   });
 
   it('need Keycloak’s administrator and the sample password, and never run in production', () => {

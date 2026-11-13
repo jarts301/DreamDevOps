@@ -25,7 +25,7 @@ Open <http://localhost:4200> and sign in as a sample user. Their password is `KE
 | `dev-operator` | Operator of Dummy Company |
 | `dev-viewer` | Viewer of Dummy Company |
 
-To try a role, sign in as its account: Dummy Company is ready when the API starts. To see the whole flow, from starting a company to accepting an invitation, use a new company and a new account you register:
+To try a role, sign in as its account: Dummy Company is ready when the API starts, with a sample application for each type, language and framework, each with a **Test** environment. To see the whole flow, from starting a company to accepting an invitation, use a new company and a new account you register:
 
 1. Sign in as `dev-platform-admin`, open **Companies**, and enter a company name and the email of an account you'll register. The company shows **Active** once its Git organization is set up.
 2. Sign out, open the invitation email in [Mailpit](http://localhost:8025), follow its link, register with that email, and accept.

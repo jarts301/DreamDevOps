@@ -101,7 +101,7 @@ export interface AppConfig {
   readonly appTracesEndpoint: string | null;
   /**
    * Sample data for local development: a sample company with a sample account in each
-   * role. Never in production.
+   * role, and, unless turned off, a sample application of each kind. Never in production.
    */
   readonly sampleData: {
     /** Keycloak's own administrator, who can add sample accounts an older realm lacks. */
@@ -109,6 +109,11 @@ export interface AppConfig {
     readonly keycloakAdminPassword: string;
     /** The password new sample accounts get. */
     readonly password: string;
+    /**
+     * Whether the sample company gets an application for each type, language and framework,
+     * with a Test environment each.
+     */
+    readonly applications: boolean;
   } | null;
 }
 
@@ -168,6 +173,10 @@ export function loadConfig(env: Environment): AppConfig {
   }
   if (isProduction && sampleData === 'on') {
     throw new InvalidConfigError('SAMPLE_DATA is for local development only.');
+  }
+  const sampleApplications = env.SAMPLE_APPLICATIONS ?? 'on';
+  if (sampleApplications !== 'on' && sampleApplications !== 'off') {
+    throw new InvalidConfigError('SAMPLE_APPLICATIONS must be on or off.');
   }
   const forgejoWebhookSecret = required(env, 'FORGEJO_WEBHOOK_SECRET');
   if (isProduction) {
@@ -255,6 +264,7 @@ export function loadConfig(env: Environment): AppConfig {
             keycloakAdminUsername: required(env, 'KEYCLOAK_ADMIN_USERNAME'),
             keycloakAdminPassword: required(env, 'KEYCLOAK_ADMIN_PASSWORD'),
             password: required(env, 'KEYCLOAK_DEV_USER_PASSWORD'),
+            applications: sampleApplications === 'on',
           }
         : null,
   };

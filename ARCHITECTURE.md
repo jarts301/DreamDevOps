@@ -89,7 +89,7 @@ Folders that aren't contexts are the platform every context runs on:
 | `config/` | Settings, read and checked once at startup |
 | `session/`, `database/`, `health/` | Sessions, migrations and health checks |
 | `shared/` | Small helpers with no business meaning: slugs, names, step progress, running command-line tools, and the Forgejo HTTP client shared by three contexts' adapters |
-| `sample-data/` | Local development only: the sample company and accounts, set up through the contexts' own services when `SAMPLE_DATA` is on |
+| `sample-data/` | Local development only: the sample company and accounts, and a sample application for each blueprint with a Test environment, set up through the contexts' own services when `SAMPLE_DATA` is on |
 
 `app.module.ts` is the composition root. It lists the contexts' modules, the guards and the error filter, and nothing else.
 
