@@ -1,0 +1,28 @@
+{
+  "key": "fastapi-python-service",
+  "version": "1.0.1",
+  "applicationType": "restful-service",
+  "name": "FastAPI service in Python",
+  "description": "A Python HTTP API on FastAPI, with health checks, OpenTelemetry metrics, traces and logs, tests, linting and strict type checks.",
+  "language": "Python",
+  "framework": "FastAPI on Python 3",
+  "runtime": {
+    "port": 8080,
+    "livenessPath": "/health/live",
+    "readinessPath": "/health/ready",
+    "resources": {
+      "cpu": "250m",
+      "memory": "256Mi"
+    },
+    "configuration": "Environment variables"
+  },
+  "telemetry": "OpenTelemetry metrics and traces over OTLP: CPU, memory, HTTP response times and each request, and JSON logs with their trace",
+  "pipeline": ".forgejo/workflows/ci.yaml",
+  "strategies": [
+    "recreate",
+    "rolling",
+    "blue-green",
+    "canary",
+    "a-b"
+  ]
+}

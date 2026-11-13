@@ -1,0 +1,28 @@
+[package]
+name = "service"
+version = "0.1.0"
+edition = "2021"
+# The oldest Rust the service builds with. Alpine's, in the pipeline and the image, is at least
+# this, and dependencies are locked to versions that build with it. See README.md.
+rust-version = "1.83"
+publish = false
+
+[dependencies]
+actix-cors = "0.7"
+actix-web = { version = "4", default-features = false, features = ["macros"] }
+humantime = "2"
+opentelemetry = { version = "0.33", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "metrics", "http-proto", "reqwest-blocking-client"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "metrics"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "metrics", "testing"] }
+
+[profile.release]
+strip = true

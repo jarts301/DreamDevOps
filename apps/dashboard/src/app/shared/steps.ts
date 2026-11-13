@@ -110,7 +110,7 @@ export function currentStep(steps: readonly Step[]): Step | null {
             }
           </div>
           @if (step.summary) {
-            <p class="cell-note">{{ step.summary }}</p>
+            <p class="cell-note step-summary">{{ step.summary }}</p>
           }
           @if (step.checks.length > 0) {
             <ul class="check-list" [attr.aria-label]="'Checks for ' + step.name">

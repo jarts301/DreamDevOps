@@ -27,7 +27,7 @@ Each build runs these steps in order, and saves its progress after each one:
 |---|---|---|
 | Get the source | Downloads the exact commit the build was asked for, and unpacks it with the machine's `tar`, which Linux, macOS and Windows all have. Git for Windows' own `tar` works too. | |
 | Validate | Checks the version and what started the build, then the Dockerfile | Any check below fails |
-| Build | Builds the image, labelled with its version, commit and source | The Dockerfile doesn't build |
+| Build | Builds the image, labelled with its version, commit and source | The Dockerfile doesn't build. The step shows the instruction that failed, its last lines of output, such as a compiler's error, and Docker's summary. |
 | Check the image | Reads the built image's settings | It runs as root, or has no health check |
 | Scan | Scans for known vulnerabilities with Trivy | It has a critical vulnerability. High ones are warnings. |
 | Publish | Pushes the image to the registry, and records its digest | |

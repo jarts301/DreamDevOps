@@ -88,6 +88,23 @@ const FIRST_LOGGING_REQUESTED_PATH: Readonly<Record<string, string>> = {
   'svelte-javascript-frontend': '1.0.1',
   'pyscript-frontend': '1.0.1',
 };
+/**
+ * The first version of each service whose image holds neither npm nor Yarn, which come
+ * with the base image and bring packages scanners report, nor a package.json named after
+ * the application, which scanners take for the published package of that name.
+ */
+const FIRST_WITHOUT_NPM: Readonly<Record<string, string>> = {
+  'node-service': '1.3.1',
+  'express-typescript-service': '1.0.1',
+  'express-javascript-service': '1.0.1',
+  'fastify-javascript-service': '1.0.1',
+  'nestjs-typescript-service': '1.0.1',
+  'fastapi-python-service': '1.0.1',
+  'flask-python-service': '1.0.1',
+  'axum-rust-service': '1.0.1',
+  'actix-web-rust-service': '1.0.1',
+  'httplib-cpp-service': '1.0.1',
+};
 const since = (firsts: Readonly<Record<string, string>>, manifest: { key: string; version: string }) =>
   compareVersions(manifest.version, firsts[manifest.key] ?? '1.0.0') >= 0;
 
@@ -249,6 +266,12 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
       expect((await fetch(`${base}${manifest.runtime.readinessPath}`)).status).toBe(200);
       const user = run('docker', ['exec', container, 'id', '-u'], folder);
       expect(user).not.toBe('0');
+
+      if (manifest.applicationType === 'restful-service' && since(FIRST_WITHOUT_NPM, manifest)) {
+        const found = (command: string) => spawnSync('docker', ['exec', container, 'sh', '-c', command]).status === 0;
+        expect(found('command -v npm || command -v yarn || ls /usr/local/lib/node_modules')).toBe(false);
+        expect(found('grep -q \'"name"\' /app/package.json')).toBe(false);
+      }
 
       if (since(FIRST_WITH_METRICS, manifest)) {
         // A request that isn't a health check, so a service has a request to measure.

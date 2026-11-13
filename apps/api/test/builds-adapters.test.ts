@@ -8,7 +8,7 @@ import { join, posix, win32 } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { PermanentBuildError } from '../src/builds/application/ports.ts';
 import { SIGNATURE_ANNOTATION, SigningKey, signaturePayload, signatureTag } from '../src/builds/domain/signature.ts';
-import { DockerImageBuilder } from '../src/builds/infrastructure/docker-image-builder.ts';
+import { buildFailure, DockerImageBuilder } from '../src/builds/infrastructure/docker-image-builder.ts';
 import { DirectoryWorkspace, ForgejoBuildSource, insideFolder } from '../src/builds/infrastructure/forgejo-build-source.ts';
 import { OciRegistry } from '../src/builds/infrastructure/oci-registry.ts';
 import { loadSigningKey } from '../src/builds/infrastructure/signing-key-file.ts';
@@ -579,6 +579,49 @@ describe.skipIf(process.platform === 'win32')('the Docker image builder', () => 
     const outage = await down.build(request).catch((error: unknown) => error);
     expect(outage).toBeInstanceOf(Error);
     expect(outage).not.toBeInstanceOf(PermanentBuildError);
+  });
+
+  it("says why a step failed, from the step's own output, rather than only where", async () => {
+    // What BuildKit prints when a RUN step fails: its log, then the step's last lines
+    // again, an excerpt of the Dockerfile, and a summary.
+    const stderr = [
+      '#12 [build 6/6] RUN cargo build --release --locked',
+      '#12 0.512     Updating crates.io index',
+      '#12 61.20 error: could not compile `zerocopy` (lib)',
+      '#12 ERROR: process "/bin/sh -c cargo build --release --locked" did not complete successfully: exit code: 101',
+      '------',
+      ' > [build 6/6] RUN cargo build --release --locked:',
+      '0.512     Updating crates.io index',
+      '61.20 error: could not compile `zerocopy` (lib)',
+      '61.20 ',
+      '61.20 Caused by:',
+      '61.20   process didn\'t exit successfully: `rustc --crate-name zerocopy` (signal: 9, SIGKILL: kill)',
+      '------',
+      'Dockerfile:13',
+      '--------------------',
+      '  12 |     # Only the versions in Cargo.lock are built, each checked against its checksum.',
+      '  13 | >>> RUN cargo build --release --locked',
+      '  14 |',
+      '--------------------',
+      'ERROR: failed to build: failed to solve: process "/bin/sh -c cargo build --release --locked" did not complete successfully: exit code: 101',
+    ].join('\n');
+
+    expect(buildFailure(stderr)).toBe(
+      [
+        '[build 6/6] RUN cargo build --release --locked',
+        '    Updating crates.io index',
+        'error: could not compile `zerocopy` (lib)',
+        'Caused by:',
+        "  process didn't exit successfully: `rustc --crate-name zerocopy` (signal: 9, SIGKILL: kill)",
+        'ERROR: failed to build: failed to solve: process "/bin/sh -c cargo build --release --locked" did not complete successfully: exit code: 101',
+      ].join('\n'),
+    );
+    const builder = new DockerImageBuilder({ registry, buildTimeoutMs: 10_000, docker: fakeDocker({ build: { code: 1, stderr } }).script });
+    await expect(builder.build({ directory: '/src', image: 'dreamdevops-build:abc', labels: {} })).rejects.toThrow(
+      "The image didn't build: [build 6/6] RUN cargo build --release --locked\n",
+    );
+    // Output Docker didn't repeat, such as from an older Docker, is shown as it ends.
+    expect(buildFailure('step 3/5\nnpm ERR! missing script: build\n')).toBe('step 3/5\nnpm ERR! missing script: build');
   });
 
   it('pushes with its own throwaway credentials, only to the platform registry', async () => {

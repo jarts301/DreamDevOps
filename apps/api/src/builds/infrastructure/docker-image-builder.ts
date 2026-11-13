@@ -56,7 +56,7 @@ export class DockerImageBuilder implements ImageBuilder {
       this.#options.buildTimeoutMs,
     );
     if (result.code !== 0) {
-      const log = lastLines(result.stderr);
+      const log = buildFailure(result.stderr);
       // A failing Dockerfile step fails again next time, so only engine or network trouble is retried.
       if (TEMPORARY.some((sign) => log.includes(sign))) {
         throw new Error(`Docker couldn't build the image: ${log}`);
@@ -134,6 +134,35 @@ export class DockerImageBuilder implements ImageBuilder {
       throw error;
     }
   }
+}
+
+/** The most lines of a failed step's output kept, and the most characters of the whole. */
+const FAILURE_LINES = 15;
+const FAILURE_LENGTH = 2_000;
+
+/**
+ * Why a build failed, for people: the step that failed, its last lines of output, such as
+ * a compiler's error, and Docker's own summary. Docker ends with an excerpt of the
+ * Dockerfile, which says where a build failed but not why, so the step's output, which
+ * Docker repeats just before it, is what's kept.
+ */
+export function buildFailure(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trimEnd());
+  const summary = lines.findLast((line) => line.startsWith('ERROR:'));
+  // Such as " > [build 6/6] RUN cargo build --release --locked:", then the step's last lines.
+  const start = lines.findLastIndex((line) => /^ > \[[^\]]+\] .*:$/.test(line));
+  if (start === -1) {
+    return lastLines(stderr);
+  }
+  const end = lines.findIndex((line, index) => index > start && line.startsWith('------'));
+  const output = lines
+    .slice(start + 1, end === -1 ? undefined : end)
+    // Each line starts with the seconds since the step started, which don't help.
+    .map((line) => line.replace(/^\d+(\.\d+)?( |$)/, ''))
+    .filter((line) => line.trim() !== '')
+    .slice(-FAILURE_LINES);
+  const step = lines[start]!.trim().replace(/^> /, '').replace(/:$/, '');
+  return [step, ...output, ...(summary === undefined ? [] : [summary])].join('\n').slice(-FAILURE_LENGTH);
 }
 
 function assertReference(image: string): void {

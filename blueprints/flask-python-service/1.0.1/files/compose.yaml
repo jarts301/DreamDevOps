@@ -1,0 +1,10 @@
+# Runs the service locally as it runs on the platform: docker compose up --build
+services:
+  app:
+    build: .
+    image: __APP_SLUG__:local
+    read_only: true
+    environment:
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:8080:8080"

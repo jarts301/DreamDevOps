@@ -29,6 +29,14 @@ Every web frontend is served by nginx, with settings read at runtime, CPU and me
 
 Every scaffold pins its base images by digest, installs only what its lockfile says, checked against its checksums, and runs as a non-root user with a read-only file system. From version 1.1.0 of the first two, and from 1.0.0 of the others, their images also apply the security fixes Alpine released after the base image, with `apk upgrade`, so building again fixes vulnerabilities a newer package fixes. Applications started from 1.0.0 of the first two can add the same lines to their `Dockerfile`.
 
+### What service images hold
+
+From `node-service` 1.3.1 and 1.0.1 of the other services, a service's image holds only what it runs with. See [Fixing existing applications](#fixing-existing-applications) for applications started earlier.
+
+- **No npm or Yarn:** the Node.js base image brings npm, npx, Corepack and Yarn, with packages of their own, such as `undici` and `brace-expansion`. Scanners report their vulnerabilities, which `apk upgrade` can't fix, as they aren't Alpine packages. Services don't run them, so the image removes them. Services in Python, Rust and C++ don't need Node.js either, so it goes too.
+- **No `package.json` named after the application:** a project's `package.json` is named after the application, and an application can share its name with a published package, such as `fastify`. Scanners then report that package's vulnerabilities for it: an application called *Fastify* failed its scan with `CVE-2018-3711 in fastify 0.1.0`. Node.js only needs to know the code is ES modules, so the image gets a `package.json` that says only that.
+- **Rust builds that fit in memory:** the Rust services' images compile four crates at a time, about 1.2 GB at most, rather than one per CPU, which can take more memory than Docker gives builds on a laptop. They download their crates in a step of their own, and try again, one connection at a time, when the network drops some.
+
 ## Languages and frameworks
 
 | Language | How it's checked | Services | Web frontends |
@@ -76,6 +84,16 @@ Applications started from earlier versions can copy what they lack from the newe
 | `node-service` | `src/telemetry.ts`, `src/metrics.ts`, `src/logging.ts`, the logger settings in `src/app.ts`, and the `@opentelemetry/api` and `@opentelemetry/instrumentation-undici` dependencies |
 | `angular-frontend` | `nginx/send-metrics.sh` and its `Dockerfile` line, the `map` block and `log_format` in `nginx/default.conf`, and `src/app/trace-context.ts` with its line in `src/app/app.config.ts` |
 | The other web frontends, from 1.0.0 | The `map` block and `log_format` in `nginx/default.conf` |
+
+### Fixing existing applications
+
+Applications started from `node-service` 1.3.0 or earlier, or from 1.0.0 of the other services, keep their `Dockerfile`. To fix their images, replace their `Dockerfile` with the newest version's, through a pull request into `develop`, as with any change. Nothing else changes.
+
+| Blueprint | What the new `Dockerfile` fixes |
+|---|---|
+| Services in TypeScript and JavaScript | Scans report npm's and Yarn's packages, and, for an application named like a published package, that package's vulnerabilities |
+| Services in Python and C++ | Scans report npm's and Yarn's packages |
+| Services in Rust | The same, and builds that run out of memory or lose their downloads |
 
 ## Layout
 

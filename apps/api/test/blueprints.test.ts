@@ -163,6 +163,27 @@ describe('the published blueprints', () => {
     }
   });
 
+  it('keep only what each service runs with in its image: no npm or Yarn, and no package.json named after the application', () => {
+    for (const manifest of library.forType('restful-service')) {
+      const instructions = parseDockerfile(render(manifest)('Dockerfile'));
+      const lastStage = instructions.slice(instructions.findLastIndex((instruction) => instruction.keyword === 'FROM'));
+      const removed = lastStage
+        .filter((instruction) => instruction.keyword === 'RUN' && instruction.args.startsWith('rm -rf '))
+        .flatMap((instruction) => instruction.args.split(/\s+/));
+      // The base image's npm brings packages of its own, such as undici, which scanners report.
+      for (const path of ['/usr/local/bin/npm', '/usr/local/bin/npx', '/usr/local/lib/node_modules', '/opt/yarn-*']) {
+        expect(removed, `${manifest.key} ${path}`).toContain(path);
+      }
+      // Services in other languages don't need Node.js itself either.
+      expect(removed.includes('/usr/local/bin/node'), manifest.key).toBe(!['TypeScript', 'JavaScript'].includes(manifest.language));
+      // An application named like a published package, such as fastify, would be reported with that package's vulnerabilities.
+      expect(
+        lastStage.some((instruction) => instruction.keyword === 'COPY' && /package(-lock)?\.json/.test(instruction.args)),
+        manifest.key,
+      ).toBe(false);
+    }
+  });
+
   it('give every web frontend the same runtime: JSON request logs, metrics started by nginx, and settings read at startup', () => {
     const angular = render(library.latestOf('angular-frontend')!);
     for (const manifest of library.forType('web-frontend')) {
