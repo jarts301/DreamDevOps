@@ -53,6 +53,21 @@ const FIRST_WITH_METRICS: Readonly<Record<string, string>> = { 'node-service': '
  * and, for services, sends traces. The first blueprints gained them in 1.3.0.
  */
 const FIRST_WITH_TRACES: Readonly<Record<string, string>> = { 'node-service': '1.3.0', 'angular-frontend': '1.3.0' };
+/**
+ * The first version of each web frontend that logs the path a browser asked for. Earlier
+ * versions log nginx's $uri, which is /index.html whenever nginx serves the app's page, such
+ * as for / or one of the app's routes. Published versions never change, so they still do.
+ */
+const FIRST_LOGGING_REQUESTED_PATH: Readonly<Record<string, string>> = {
+  'angular-frontend': '1.3.1',
+  'react-typescript-frontend': '1.0.1',
+  'react-javascript-frontend': '1.0.1',
+  'vue-typescript-frontend': '1.0.1',
+  'vue-javascript-frontend': '1.0.1',
+  'svelte-typescript-frontend': '1.0.1',
+  'svelte-javascript-frontend': '1.0.1',
+  'pyscript-frontend': '1.0.1',
+};
 const since = (firsts: Readonly<Record<string, string>>, manifest: { key: string; version: string }) =>
   compareVersions(manifest.version, firsts[manifest.key] ?? '1.0.0') >= 0;
 
@@ -135,11 +150,15 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Containers are removed while they may be sending metrics, which can leave a request
+  // open that close() would wait for, so every connection is ended first.
+  metricsSink.closeAllConnections();
   await new Promise<void>((resolve) => metricsSink.close(() => resolve()));
+  // Each test removes its own project. This only catches what a failure left behind.
   for (const folder of folders) {
     rmSync(folder, { recursive: true, force: true });
   }
-});
+}, 120_000);
 
 describe.each(library.all())('the $key $version blueprint', (manifest) => {
   it('makes a project that passes its own checks and runs as a healthy container', async () => {
@@ -200,13 +219,24 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
         if (service) {
           expect(logs).toContainEqual(expect.objectContaining({ msg: 'Ping received', trace_id: traceId }));
           expect(await sentSpanOf(traceId)).toBe(true);
+        } else if (since(FIRST_LOGGING_REQUESTED_PATH, manifest)) {
+          expect(logs).toContainEqual(expect.objectContaining({ msg: 'GET / 200', path: '/', traceparent }));
+          // One of the app's own routes, which nginx answers with the app's page, keeps its
+          // path, and its query string, which can hold secrets, isn't logged.
+          expect((await fetch(`${base}/orders/42?token=secret`)).status).toBe(200);
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          const later = jsonLogsOf(container, folder);
+          expect(later).toContainEqual(expect.objectContaining({ msg: 'GET /orders/42 200', path: '/orders/42' }));
+          expect(JSON.stringify(later)).not.toContain('secret');
         } else {
-          expect(logs).toContainEqual(expect.objectContaining({ msg: 'GET / 200', traceparent }));
+          expect(logs).toContainEqual(expect.objectContaining({ msg: 'GET /index.html 200', traceparent }));
         }
       }
     } finally {
       spawnSync('docker', ['rm', '-f', container]);
       spawnSync('docker', ['rmi', '-f', image]);
+      // Removed as soon as it's checked: every project has its own node_modules, which add up.
+      rmSync(folder, { recursive: true, force: true });
     }
   }, 900_000);
 });

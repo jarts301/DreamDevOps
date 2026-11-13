@@ -142,7 +142,7 @@ Only needed to test company separation, in [Flow 12](#flow-12-company-separation
    - *Reports*, in **Python** with **PyScript**
 3. Wait until each repository shows as ready.
 
-**Expect:** the form offers TypeScript, JavaScript and Python for a web frontend, and TypeScript only for a service, and starts a web frontend on TypeScript with Angular, as before. The list shows each application's framework and language, such as *React 19 · TypeScript*. **Blueprints** shows `node-service 1.3.0` and `angular-frontend 1.3.0` as the newest of the first two, and the seven new blueprints at `1.0.0`, and new repositories start from them. Each new frontend's repository has the same `nginx/` folder as Angular's, and `src/App.tsx`, `src/App.vue` or `src/main.py`. Deploy *Reports* as in Flow 4: its page says *Your web frontend is running.*, and, a few seconds later, once its Python starts, **Check the API** can be clicked. In Forgejo, the backend repository has:
+**Expect:** the form offers TypeScript, JavaScript and Python for a web frontend, and TypeScript only for a service, and starts a web frontend on TypeScript with Angular, as before. The list shows each application's framework and language, such as *React 19 · TypeScript*. **Blueprints** shows `node-service 1.3.0` and `angular-frontend 1.3.1` as the newest of the first two, and the seven new blueprints at `1.0.1`, and new repositories start from them. Each new frontend's repository has the same `nginx/` folder as Angular's, and `src/App.tsx`, `src/App.vue` or `src/main.py`. Deploy *Reports* as in Flow 4: its page says *Your web frontend is running.*, and, a few seconds later, once its Python starts, **Check the API** can be clicked. In Forgejo, the backend repository has:
 - `src/logging.ts`
 - `GET /api/ping` in `src/app.ts`
 - `@opentelemetry/instrumentation-undici` in `package.json`
@@ -419,7 +419,7 @@ Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-enviro
 | 7 | Charts | `dev-viewer` | Five charts, CPU and memory with their limits, ranges switch |
 | 7a | Daily high | `dev-viewer` | An orange dashed line at the day before's highest value, and *Now above it.* when traffic goes higher |
 | 8 | Backend logs | `dev-viewer` | `/api/ping` logs `Ping received` with a **Trace** button |
-| 9 | Frontend logs | `dev-viewer` | Opening the page logs `GET / 200` |
+| 9 | Frontend logs | `dev-viewer` | Opening the page logs `GET / 200`, and one of its routes, such as `/orders/42`, logs that path, for frontends from `angular-frontend` 1.3.1 and 1.0.1 of the others. Earlier versions log `GET /index.html 200`. |
 | 10 | Log filter | `dev-viewer` | Filtering by a trace ID leaves that request's lines |
 | 11 | Traces | `dev-viewer` | `/api/ping` shows as a trace, and opens as a timeline |
 | 12 | Frontend to backend | `dev-tech-lead` | **Check the API** answers, and its trace ID finds the backend's line and trace |

@@ -47,6 +47,10 @@ Applications send what the dashboard shows under [Monitoring](../apps/api/src/mo
 
 Health checks are neither counted, logged nor traced.
 
+### Paths in frontends' logs
+
+Each web frontend logs the path a browser asked for, such as `GET /orders/42 200`, without its query string, which can hold secrets, from `angular-frontend` 1.3.1 and 1.0.1 of the others. Earlier versions log nginx's `$uri`, which is the file nginx ends up serving, so every visit to the app's page, at `/` or at one of its routes, shows as `GET /index.html 200`. Applications started from them can copy the `map` block and the `log_format` from the newest version's `nginx/default.conf`.
+
 Metrics and traces go nowhere unless the platform says where, with `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, which it sets when it deploys them, along with the environment's ID in `OTEL_RESOURCE_ATTRIBUTES`. Logs go to standard output, where the platform reads them. Each scaffold's README lists its settings.
 
 Applications started from earlier versions can copy what they lack from the newest version:
@@ -54,7 +58,8 @@ Applications started from earlier versions can copy what they lack from the newe
 | Blueprint | Files |
 |---|---|
 | `node-service` | `src/telemetry.ts`, `src/metrics.ts`, `src/logging.ts`, the logger settings in `src/app.ts`, and the `@opentelemetry/api` and `@opentelemetry/instrumentation-undici` dependencies |
-| `angular-frontend` | `nginx/send-metrics.sh` and its `Dockerfile` line, the `log_format` in `nginx/default.conf`, and `src/app/trace-context.ts` with its line in `src/app/app.config.ts` |
+| `angular-frontend` | `nginx/send-metrics.sh` and its `Dockerfile` line, the `map` block and `log_format` in `nginx/default.conf`, and `src/app/trace-context.ts` with its line in `src/app/app.config.ts` |
+| The other web frontends, from 1.0.0 | The `map` block and `log_format` in `nginx/default.conf` |
 
 ## Layout
 

@@ -38,6 +38,8 @@ export default defineConfig({
           name: 'scaffolds',
           include: ['test/**/*.scaffold.test.ts'],
           testTimeout: 900_000,
+          // Cleaning up removes every project's node_modules, and stops the metrics sink.
+          hookTimeout: 120_000,
         },
       },
     ],

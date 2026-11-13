@@ -123,7 +123,7 @@ describe('the published blueprints', () => {
     expect(library.forType('mobile-app')).toEqual([]);
     // Applications that choose nothing start from the first by key, as they always have.
     expect(library.latestForType('web-frontend')?.key).toBe('angular-frontend');
-    expect(library.latestOf('vue-typescript-frontend')).toMatchObject({ version: '1.0.0', language: 'TypeScript' });
+    expect(library.latestOf('vue-typescript-frontend')).toMatchObject({ version: '1.0.1', language: 'TypeScript' });
     expect(library.latestOf('cobol-frontend')).toBeNull();
   });
 
@@ -141,6 +141,18 @@ describe('the published blueprints', () => {
         expect.objectContaining({ keyword: 'COPY', args: '--chmod=0755 nginx/send-metrics.sh /docker-entrypoint.d/50-send-metrics.sh' }),
       );
       expect(instructions.at(-1), manifest.key).toMatchObject({ keyword: 'HEALTHCHECK' });
+    }
+  });
+
+  it('log the path each request asked for, without its query string, rather than the file nginx served', () => {
+    for (const manifest of library.forType('web-frontend')) {
+      const conf = render(manifest)('nginx/default.conf');
+      const format = conf.slice(conf.indexOf('log_format json'), conf.indexOf(';', conf.indexOf('log_format json')));
+      // nginx's $uri becomes /index.html whenever it serves the app's page, such as for / or /orders/42.
+      expect(format, manifest.key).not.toContain('$uri');
+      expect(format, manifest.key).toContain('"msg":"$request_method $request_path $status"');
+      expect(format, manifest.key).toContain('"path":"$request_path"');
+      expect(conf, manifest.key).toContain('map $request_uri $request_path {\n  "~^(?<path>[^?]*)" $path;\n}');
     }
   });
 

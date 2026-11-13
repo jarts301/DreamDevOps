@@ -125,7 +125,7 @@ describe('application types', () => {
       }),
       expect.objectContaining({
         key: 'web-frontend',
-        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.3.0' }),
+        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.3.1' }),
       }),
     ]);
     // A web frontend can start from any of several languages and frameworks.
@@ -144,7 +144,7 @@ describe('application types', () => {
     ]);
     expect(frontend.blueprints[0]).toEqual({
       key: 'react-javascript-frontend',
-      version: '1.0.0',
+      version: '1.0.1',
       name: 'React frontend in JavaScript',
       description: expect.stringContaining('React'),
       language: 'JavaScript',
@@ -172,6 +172,7 @@ describe('the blueprint library', () => {
     const { body } = await admin.get('/api/v1/blueprints').expect(200);
 
     expect(body.map((blueprint: { key: string; version: string }) => `${blueprint.key}@${blueprint.version}`)).toEqual([
+      'angular-frontend@1.3.1',
       'angular-frontend@1.3.0',
       'angular-frontend@1.2.0',
       'angular-frontend@1.1.0',
@@ -180,12 +181,19 @@ describe('the blueprint library', () => {
       'node-service@1.2.0',
       'node-service@1.1.0',
       'node-service@1.0.0',
+      'pyscript-frontend@1.0.1',
       'pyscript-frontend@1.0.0',
+      'react-javascript-frontend@1.0.1',
       'react-javascript-frontend@1.0.0',
+      'react-typescript-frontend@1.0.1',
       'react-typescript-frontend@1.0.0',
+      'svelte-javascript-frontend@1.0.1',
       'svelte-javascript-frontend@1.0.0',
+      'svelte-typescript-frontend@1.0.1',
       'svelte-typescript-frontend@1.0.0',
+      'vue-javascript-frontend@1.0.1',
       'vue-javascript-frontend@1.0.0',
+      'vue-typescript-frontend@1.0.1',
       'vue-typescript-frontend@1.0.0',
     ]);
   });
@@ -234,7 +242,7 @@ describe('registering an application', () => {
     expect(python.blueprint).toMatchObject({ key: 'pyscript-frontend', language: 'Python' });
     await eventually(async () => expect((await repositoryOf(admin, vue.id))?.status).toBe('ready'));
     await eventually(async () => expect((await repositoryOf(admin, python.id))?.status).toBe('ready'));
-    expect((await repositoryOf(admin, vue.id))?.blueprint).toEqual({ key: 'vue-typescript-frontend', version: '1.0.0' });
+    expect((await repositoryOf(admin, vue.id))?.blueprint).toEqual({ key: 'vue-typescript-frontend', version: '1.0.1' });
     const vueFiles = host.repositories.get(`${organization}/checkout`)!.files;
     expect(vueFiles.find((file) => file.path === 'src/App.vue')).toBeDefined();
     expect(JSON.parse(vueFiles.find((file) => file.path === 'package.json')!.content.toString()).name).toBe('checkout');

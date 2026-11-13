@@ -1,0 +1,28 @@
+{
+  "key": "pyscript-frontend",
+  "version": "1.0.1",
+  "applicationType": "web-frontend",
+  "name": "PyScript frontend in Python",
+  "description": "A Python app that runs in the browser with PyScript, on Pyodide, served by nginx with its Python runtime included, and settings read at runtime so one image serves every environment.",
+  "language": "Python",
+  "framework": "PyScript 0.7, on Pyodide 314",
+  "runtime": {
+    "port": 8080,
+    "livenessPath": "/healthz",
+    "readinessPath": "/healthz",
+    "resources": {
+      "cpu": "100m",
+      "memory": "64Mi"
+    },
+    "configuration": "Environment variables written to /config.json"
+  },
+  "telemetry": "Request logs from nginx in JSON, CPU and memory over OTLP, and a trace started for each call to its API",
+  "pipeline": ".forgejo/workflows/ci.yaml",
+  "strategies": [
+    "recreate",
+    "rolling",
+    "blue-green",
+    "canary",
+    "a-b"
+  ]
+}
