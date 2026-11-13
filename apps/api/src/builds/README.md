@@ -22,11 +22,13 @@ The pipeline is defined once, in [`pipelines/build.yaml`](../../../../pipelines/
 | Job | What it does |
 |---|---|
 | `secrets` | Gitleaks scans the source |
-| `test` | Runs `npm ci` and `npm test`, if the project has a `package.json` |
+| `test` | Runs the tests for the project's language, found from its files: `cargo test` for Rust (`Cargo.toml`), CMake and CTest for C++ (`CMakeLists.txt`), `pytest` for Python (`pyproject.toml` or `requirements-dev.txt`), and `npm ci` and `npm test` for JavaScript and TypeScript (`package.json`). A project with none of these has no tests to run. |
 | `image` | Builds the image with rootless BuildKit on the image runner, then uploads it to the platform |
 | `scan` | Trivy scans the image the platform stored |
 | `sbom` | Syft lists the stored image's contents as a CycloneDX SBOM |
 | `failed` | Runs only when a job failed, and tells the platform which, so the build doesn't wait for the timeout |
+
+The test job's commands live in [`pipelines/run-tests.sh`](../../../../pipelines/run-tests.sh), which the API puts into both workflows, where `__RUN_TESTS__` stands, when it starts. Every blueprint builds on the same `node:24-alpine` image as the job and adds its language's tools from Alpine's packages, so the tests run with the tools the image is built with. `npm run test:scaffolds` runs the job on every blueprint version.
 
 Every tool image is pinned by digest. Each job tells the platform when it starts, at `/pipeline/builds/:id/jobs/:job/started`, so the dashboard shows every job waiting, running, passed, failed or skipped while the build runs.
 

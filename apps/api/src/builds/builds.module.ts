@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
@@ -15,6 +13,7 @@ import { BuildsController } from './http/builds.controller.ts';
 import { PipelineController } from './http/pipeline.controller.ts';
 import { ForgejoPipelineHost } from './infrastructure/forgejo-pipeline-host.ts';
 import { OciRegistry } from './infrastructure/oci-registry.ts';
+import { loadPipelines } from './infrastructure/pipeline-files.ts';
 import { BuildsSubscriptions } from './messaging/builds-subscriptions.ts';
 
 /** Builds, checks and signs each application's images on the company's isolated runners. */
@@ -52,13 +51,7 @@ export class BuildsModule {
                   workDir: config.buildWorkDir,
                   timeoutMinutes: config.buildTimeoutMinutes,
                   // Read once at startup, so every build in a run uses the same pipeline.
-                  pipelines: {
-                    'build.yaml': readFileSync(join(config.pipelinesDir, 'build.yaml'), 'utf8').replaceAll(
-                      '__IMAGE_RUNNER_LABEL__',
-                      config.imageRunnerLabel,
-                    ),
-                    'check.yaml': readFileSync(join(config.pipelinesDir, 'check.yaml'), 'utf8'),
-                  },
+                  pipelines: loadPipelines(config.pipelinesDir, config.imageRunnerLabel),
                 }),
               inject: [TenantDatabase, ApplicationCatalog, REPOSITORY_LOOKUP, SOURCE_HOST, IMAGE_REGISTRY, PIPELINE_HOST, SigningKeys],
             },

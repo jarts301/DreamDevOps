@@ -1,0 +1,4 @@
+# Adding or updating a dependency picks the newest version that builds with the package's
+# rust-version, rather than the newest of all.
+[resolver]
+incompatible-rust-versions = "fallback"

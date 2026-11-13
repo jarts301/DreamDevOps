@@ -1,0 +1,14 @@
+{
+  "include": [
+    "src",
+    "tests"
+  ],
+  "extraPaths": [
+    "src"
+  ],
+  "stubPath": "typings",
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "strict",
+  "reportMissingModuleSource": "none"
+}

@@ -56,13 +56,8 @@ jobs:
           wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" --post-data '' "$BUILD_URL/jobs/test/started" || true
           mkdir -p /tmp/source && cd /tmp/source
           wget -qO- --header "Authorization: Bearer $BUILD_TOKEN" "$BUILD_URL/source" | tar -xzf - --strip-components=1
-          if [ -f package.json ]; then
-            (npm ci && npm test) > /tmp/tests.log 2>&1
-            code=$?
-          else
-            echo "This project has no package.json, so there were no tests to run." > /tmp/tests.log
-            code=0
-          fi
+          # The platform puts pipelines/run-tests.sh here, which runs the tests for the project's language.
+          __RUN_TESTS__
           tail -c 60000 /tmp/tests.log > /tmp/tests-tail.log
           passed=$([ "$code" -eq 0 ] && echo true || echo false)
           wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \

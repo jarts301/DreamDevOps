@@ -1,35 +1,23 @@
 import type { INestApplication } from '@nestjs/common';
 import pg from 'pg';
-import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { PermanentSourceError, SOURCE_HOST } from '../src/source-governance/application/ports.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider, FakeSourceHost } from './fakes.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { type Agent, eventually as waitUntil, signIn as signInAs, unique } from './support/integration.ts';
 
 let database: TestDatabase;
 let ownerPool: pg.Pool;
 let app: INestApplication;
 const host = new FakeSourceHost();
 
-const eventually = (assertion: () => Promise<void> | void) => vi.waitFor(assertion, { timeout: 20_000, interval: 150 });
+const eventually = (assertion: () => Promise<void> | void) => waitUntil(assertion);
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
-type Agent = Awaited<ReturnType<typeof signIn>>;
+const signIn = (user: string) => signInAs(app, user);
 
-let counter = 0;
-const unique = (prefix: string) => {
-  counter += 1;
-  return `${prefix}-${'abcdefghijklmnopqrstuvwxyz'[Math.floor(counter / 26) % 26]}${'abcdefghijklmnopqrstuvwxyz'[counter % 26]}`;
-};
 /** The fake login gives each person this subject, which is also their Git username. */
 const gitUser = (name: string) => `fake|${name}`;
 
@@ -68,10 +56,11 @@ const addMember = async (admin: Agent, role: string) => {
   return { agent, name, userId: me.body.userId as string };
 };
 
-const register = async (agent: Agent, name: string, type = 'restful-service') =>
-  (await agent.post('/api/v1/company/applications').send({ name, type }).expect(201)).body as {
+const register = async (agent: Agent, name: string, type = 'restful-service', blueprint?: string) =>
+  (await agent.post('/api/v1/company/applications').send({ name, type, blueprint }).expect(201)).body as {
     id: string;
     slug: string;
+    blueprint: { key: string; name: string; language: string; framework: string } | null;
   };
 
 const repositoryOf = async (agent: Agent, applicationId: string) => {
@@ -132,13 +121,72 @@ describe('application types', () => {
     expect(body).toEqual([
       expect.objectContaining({
         key: 'restful-service',
-        blueprint: expect.objectContaining({ key: 'node-service', version: '1.0.0', language: 'TypeScript' }),
+        blueprint: expect.objectContaining({ key: 'node-service', version: '1.3.1', language: 'TypeScript' }),
       }),
       expect.objectContaining({
         key: 'web-frontend',
-        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.0.0' }),
+        blueprint: expect.objectContaining({ key: 'angular-frontend', version: '1.3.1' }),
       }),
     ]);
+    // A web frontend can start from any of several languages and frameworks.
+    const frontend = (body as { key: string; blueprints: { key: string; language: string; framework: string }[] }[]).find(
+      (type) => type.key === 'web-frontend',
+    )!;
+    expect(frontend.blueprints.map((blueprint) => `${blueprint.language}: ${blueprint.framework}`)).toEqual([
+      'JavaScript: React 19',
+      'JavaScript: Svelte 5',
+      'JavaScript: Vue 3',
+      'Python: PyScript 0.7, on Pyodide 314',
+      'TypeScript: Angular 22',
+      'TypeScript: React 19',
+      'TypeScript: Svelte 5',
+      'TypeScript: Vue 3',
+    ]);
+    expect(frontend.blueprints[0]).toEqual({
+      key: 'react-javascript-frontend',
+      version: '1.0.1',
+      name: 'React frontend in JavaScript',
+      description: expect.stringContaining('React'),
+      language: 'JavaScript',
+      framework: 'React 19',
+    });
+    // So can a service, and it still starts from node-service when none is chosen, though
+    // others come before it by key.
+    const service = (body as { key: string; blueprints: { language: string; framework: string }[] }[]).find(
+      (type) => type.key === 'restful-service',
+    )!;
+    expect(service.blueprints.map((blueprint) => `${blueprint.language}: ${blueprint.framework}`)).toEqual([
+      'C++: cpp-httplib on C++20',
+      'JavaScript: Express 5 on Node.js 24',
+      'JavaScript: Fastify 5 on Node.js 24',
+      'Python: FastAPI on Python 3',
+      'Python: Flask 3 on Python 3',
+      'Rust: Actix Web 4',
+      'Rust: Axum 0.8 on Tokio',
+      'TypeScript: Express 5 on Node.js 24',
+      'TypeScript: NestJS 12 on Node.js 24',
+      'TypeScript: Fastify on Node.js 24',
+    ]);
+  });
+
+  it('start from the blueprint each type names, or its first by key when the type names none it has', async () => {
+    const { admin } = await createCompany();
+    const defaultOf = async (type: string) =>
+      ((await admin.get('/api/v1/company/application-types').expect(200)).body as { key: string; blueprint: { key: string } }[]).find(
+        (candidate) => candidate.key === type,
+      )!.blueprint.key;
+
+    try {
+      await ownerPool.query("UPDATE catalog.application_types SET default_blueprint = 'axum-rust-service' WHERE key = 'restful-service'");
+      expect(await defaultOf('restful-service')).toBe('axum-rust-service');
+      const application = await register(admin, 'Ledger');
+      expect(application.blueprint).toMatchObject({ key: 'axum-rust-service', language: 'Rust' });
+
+      await ownerPool.query("UPDATE catalog.application_types SET default_blueprint = 'angular-frontend' WHERE key = 'restful-service'");
+      expect(await defaultOf('restful-service')).toBe('actix-web-rust-service');
+    } finally {
+      await ownerPool.query("UPDATE catalog.application_types SET default_blueprint = 'node-service' WHERE key = 'restful-service'");
+    }
   });
 
   it('leave out a type with no blueprint, and refuse to register it', async () => {
@@ -161,8 +209,48 @@ describe('the blueprint library', () => {
     const { body } = await admin.get('/api/v1/blueprints').expect(200);
 
     expect(body.map((blueprint: { key: string; version: string }) => `${blueprint.key}@${blueprint.version}`)).toEqual([
+      'actix-web-rust-service@1.0.1',
+      'actix-web-rust-service@1.0.0',
+      'angular-frontend@1.3.1',
+      'angular-frontend@1.3.0',
+      'angular-frontend@1.2.0',
+      'angular-frontend@1.1.0',
       'angular-frontend@1.0.0',
+      'axum-rust-service@1.0.1',
+      'axum-rust-service@1.0.0',
+      'express-javascript-service@1.0.1',
+      'express-javascript-service@1.0.0',
+      'express-typescript-service@1.0.1',
+      'express-typescript-service@1.0.0',
+      'fastapi-python-service@1.0.1',
+      'fastapi-python-service@1.0.0',
+      'fastify-javascript-service@1.0.1',
+      'fastify-javascript-service@1.0.0',
+      'flask-python-service@1.0.1',
+      'flask-python-service@1.0.0',
+      'httplib-cpp-service@1.0.1',
+      'httplib-cpp-service@1.0.0',
+      'nestjs-typescript-service@1.0.1',
+      'nestjs-typescript-service@1.0.0',
+      'node-service@1.3.1',
+      'node-service@1.3.0',
+      'node-service@1.2.0',
+      'node-service@1.1.0',
       'node-service@1.0.0',
+      'pyscript-frontend@1.0.1',
+      'pyscript-frontend@1.0.0',
+      'react-javascript-frontend@1.0.1',
+      'react-javascript-frontend@1.0.0',
+      'react-typescript-frontend@1.0.1',
+      'react-typescript-frontend@1.0.0',
+      'svelte-javascript-frontend@1.0.1',
+      'svelte-javascript-frontend@1.0.0',
+      'svelte-typescript-frontend@1.0.1',
+      'svelte-typescript-frontend@1.0.0',
+      'vue-javascript-frontend@1.0.1',
+      'vue-javascript-frontend@1.0.0',
+      'vue-typescript-frontend@1.0.1',
+      'vue-typescript-frontend@1.0.0',
     ]);
   });
 });
@@ -180,7 +268,7 @@ describe('registering an application', () => {
       status: 'ready',
       fullName: `${organization}/billing-api`,
       url: `http://git.test/${organization}/billing-api`,
-      blueprint: { key: 'node-service', version: '1.0.0' },
+      blueprint: { key: 'node-service', version: '1.3.1' },
       lastError: null,
     });
     const stored = host.repositories.get(`${organization}/billing-api`)!;
@@ -198,6 +286,59 @@ describe('registering an application', () => {
     await eventually(async () => expect((await repositoryOf(admin, application.id))?.status).toBe('ready'));
     const files = host.repositories.get(`${organization}/storefront`)!.files;
     expect(files.find((file) => file.path === 'src/app/app-info.ts')!.content.toString()).toContain('"Storefront"');
+  });
+
+  it('starts from the language and framework chosen for it', async () => {
+    const { admin, organization } = await createCompany();
+
+    const vue = await register(admin, 'Checkout', 'web-frontend', 'vue-typescript-frontend');
+    const python = await register(admin, 'Dashboard', 'web-frontend', 'pyscript-frontend');
+
+    expect(vue.blueprint).toEqual({ key: 'vue-typescript-frontend', name: 'Vue frontend in TypeScript', language: 'TypeScript', framework: 'Vue 3' });
+    expect(python.blueprint).toMatchObject({ key: 'pyscript-frontend', language: 'Python' });
+    await eventually(async () => expect((await repositoryOf(admin, vue.id))?.status).toBe('ready'));
+    await eventually(async () => expect((await repositoryOf(admin, python.id))?.status).toBe('ready'));
+    expect((await repositoryOf(admin, vue.id))?.blueprint).toEqual({ key: 'vue-typescript-frontend', version: '1.0.1' });
+    const vueFiles = host.repositories.get(`${organization}/checkout`)!.files;
+    expect(vueFiles.find((file) => file.path === 'src/App.vue')).toBeDefined();
+    expect(JSON.parse(vueFiles.find((file) => file.path === 'package.json')!.content.toString()).name).toBe('checkout');
+    const pythonFiles = host.repositories.get(`${organization}/dashboard`)!.files;
+    expect(pythonFiles.find((file) => file.path === 'src/app_info.py')!.content.toString()).toContain('APP_NAME: str = "Dashboard"');
+    // What each started from stays on the application, as the type does.
+    const { body: listed } = await admin.get('/api/v1/company/applications').expect(200);
+    expect(listed.map((application: { name: string; blueprint: { framework: string } }) => `${application.name}: ${application.blueprint.framework}`)).toEqual([
+      'Checkout: Vue 3',
+      'Dashboard: PyScript 0.7, on Pyodide 314',
+    ]);
+  });
+
+  it('starts a service from the language and framework chosen for it', async () => {
+    const { admin, organization } = await createCompany();
+
+    const rust = await register(admin, 'Ledger', 'restful-service', 'axum-rust-service');
+    const cpp = await register(admin, 'Pricing', 'restful-service', 'httplib-cpp-service');
+
+    expect(rust.blueprint).toEqual({ key: 'axum-rust-service', name: 'Axum service in Rust', language: 'Rust', framework: 'Axum 0.8 on Tokio' });
+    await eventually(async () => expect((await repositoryOf(admin, rust.id))?.status).toBe('ready'));
+    await eventually(async () => expect((await repositoryOf(admin, cpp.id))?.status).toBe('ready'));
+    const rustFiles = host.repositories.get(`${organization}/ledger`)!.files;
+    expect(rustFiles.find((file) => file.path === 'src/telemetry.rs')!.content.toString()).toContain('SERVICE_NAME: &str = "ledger";');
+    expect(rustFiles.find((file) => file.path === 'Cargo.lock')).toBeDefined();
+    const cppFiles = host.repositories.get(`${organization}/pricing`)!.files;
+    expect(cppFiles.find((file) => file.path === 'README.md')!.content.toString()).toMatch(/^# Pricing\n/);
+  });
+
+  it('refuses a framework its type doesn’t offer', async () => {
+    const { admin } = await createCompany();
+
+    for (const blueprint of ['node-service', 'cobol-frontend', 42]) {
+      const { body } = await admin
+        .post('/api/v1/company/applications')
+        .send({ name: 'Storefront', type: 'web-frontend', blueprint })
+        .expect(400);
+      expect(body.detail).toBe('Choose one of the languages and frameworks this type offers.');
+    }
+    expect((await admin.get('/api/v1/company/applications').expect(200)).body).toEqual([]);
   });
 
   it('tries again after a temporary failure', async () => {

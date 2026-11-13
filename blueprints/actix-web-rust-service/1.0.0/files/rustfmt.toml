@@ -1,0 +1,2 @@
+# Lines of up to 120 characters, as in the platform's other services.
+max_width = 120

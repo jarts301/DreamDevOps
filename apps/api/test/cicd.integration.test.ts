@@ -329,6 +329,9 @@ describe('feature images', () => {
     expect(workflows['build.yaml']).toContain('runs-on: test-image-runner');
     expect(workflows['build.yaml']).not.toContain('__IMAGE_RUNNER_LABEL__');
     expect(workflows['check.yaml']).not.toContain('test-image-runner');
+    // Both run the tests for the project's language.
+    expect(workflows['build.yaml']).toContain('cargo test --locked');
+    expect(workflows['check.yaml']).toContain('cargo test --locked');
     expect(pipelines.runs.find((run) => run.inputs.build === build!.id)?.workflow).toBe('build.yaml');
     await eventually(async () => expect(await auditTypes(setup.admin)).toEqual(expect.arrayContaining(['BuildRequested', 'BuildSucceeded'])));
   });

@@ -1,0 +1,8 @@
+.git
+.forgejo
+node_modules
+dist
+coverage
+__pycache__
+*.log
+.env*

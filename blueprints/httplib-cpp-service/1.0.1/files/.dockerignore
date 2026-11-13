@@ -1,0 +1,6 @@
+.git
+.forgejo
+build
+tests
+*.log
+.env*

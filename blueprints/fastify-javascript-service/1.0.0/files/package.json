@@ -1,0 +1,35 @@
+{
+  "name": "__APP_SLUG__",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node --watch --import ./src/telemetry.js src/main.js",
+    "start": "node --import ./src/telemetry.js src/main.js",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "typecheck": "tsc -p jsconfig.json"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.301.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
+    "@opentelemetry/instrumentation": "^0.301.0",
+    "@opentelemetry/instrumentation-http": "^0.301.0",
+    "@opentelemetry/instrumentation-undici": "^0.34.0",
+    "@opentelemetry/sdk-metrics": "^3.1.0",
+    "@opentelemetry/sdk-node": "^0.301.0",
+    "fastify": "^5.12.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0"
+  }
+}

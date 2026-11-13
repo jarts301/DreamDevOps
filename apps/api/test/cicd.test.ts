@@ -1,5 +1,7 @@
 import { createHmac, generateKeyPairSync } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 import {
   countComponents,
   evaluate,
@@ -10,6 +12,7 @@ import {
   summarizeSecrets,
 } from '../src/builds/domain/build.ts';
 import { signaturePayload, signatureTag, signPayload, verifyPayload } from '../src/builds/domain/cosign.ts';
+import { fillPipeline, loadPipelines } from '../src/builds/infrastructure/pipeline-files.ts';
 import {
   branchFor,
   parseVersion,
@@ -250,5 +253,40 @@ describe('release versions', () => {
     expect(branchFor('hotfix', '1.0.1')).toBe('hotfix/1.0.1');
     expect(releaseBranch('release/2.0.0')).toEqual({ kind: 'release', version: '2.0.0' });
     expect(releaseBranch('feature/release')).toBeNull();
+  });
+});
+
+describe('the platform pipelines', () => {
+  const PIPELINES = fileURLToPath(new URL('../../../pipelines', import.meta.url));
+  const testStep = (workflow: string) =>
+    (parse(workflow) as { jobs: { test: { steps: { run: string }[] } } }).jobs.test.steps[0]!.run;
+
+  it('run each language’s tests in both workflows, which stay valid YAML', () => {
+    const pipelines = loadPipelines(PIPELINES, 'secret-image-runner');
+
+    for (const workflow of Object.values(pipelines)) {
+      const run = testStep(workflow);
+      expect(run).toContain('cargo test --locked');
+      expect(run).toContain('ctest --test-dir /tmp/build');
+      expect(run).toContain('/tmp/venv/bin/pytest');
+      expect(run).toContain('npm ci && npm test');
+      // The script's result decides the report and the job's exit code.
+      expect(run.indexOf('code=$?')).toBeLessThan(run.indexOf('passed=$('));
+      expect(workflow).not.toContain('__RUN_TESTS__');
+    }
+    expect(pipelines['build.yaml']).toContain('runs-on: secret-image-runner');
+  });
+
+  it('indent the test script as the line it replaces', () => {
+    const filled = fillPipeline('run: |\n  echo before\n  __RUN_TESTS__\n  echo after\n', {
+      imageRunnerLabel: 'unused',
+      testScript: 'one\n\n  two\n',
+    });
+
+    expect(filled).toBe('run: |\n  echo before\n  one\n\n    two\n  echo after\n');
+  });
+
+  it('refuse a pipeline with a placeholder left over', () => {
+    expect(() => fillPipeline('a: __RUN_TESTS__ here', { imageRunnerLabel: 'x', testScript: 'y' })).toThrow('placeholder');
   });
 });

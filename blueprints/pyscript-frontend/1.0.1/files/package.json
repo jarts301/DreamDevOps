@@ -1,0 +1,21 @@
+{
+  "name": "__APP_SLUG__",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/build.mjs && node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "pyright"
+  },
+  "dependencies": {
+    "@pyscript/core": "0.7.31",
+    "pyodide": "314.0.5"
+  },
+  "devDependencies": {
+    "@astral-sh/ruff-wasm-nodejs": "^0.17.3",
+    "pyright": "^1.1.414"
+  }
+}
