@@ -150,6 +150,43 @@ describe('application types', () => {
       language: 'JavaScript',
       framework: 'React 19',
     });
+    // So can a service, and it still starts from node-service when none is chosen, though
+    // others come before it by key.
+    const service = (body as { key: string; blueprints: { language: string; framework: string }[] }[]).find(
+      (type) => type.key === 'restful-service',
+    )!;
+    expect(service.blueprints.map((blueprint) => `${blueprint.language}: ${blueprint.framework}`)).toEqual([
+      'C++: cpp-httplib on C++20',
+      'JavaScript: Express 5 on Node.js 24',
+      'JavaScript: Fastify 5 on Node.js 24',
+      'Python: FastAPI on Python 3',
+      'Python: Flask 3 on Python 3',
+      'Rust: Actix Web 4',
+      'Rust: Axum 0.8 on Tokio',
+      'TypeScript: Express 5 on Node.js 24',
+      'TypeScript: NestJS 12 on Node.js 24',
+      'TypeScript: Fastify on Node.js 24',
+    ]);
+  });
+
+  it('start from the blueprint each type names, or its first by key when the type names none it has', async () => {
+    const { admin } = await createCompany();
+    const defaultOf = async (type: string) =>
+      ((await admin.get('/api/v1/company/application-types').expect(200)).body as { key: string; blueprint: { key: string } }[]).find(
+        (candidate) => candidate.key === type,
+      )!.blueprint.key;
+
+    try {
+      await ownerPool.query("UPDATE catalog.application_types SET default_blueprint = 'axum-rust-service' WHERE key = 'restful-service'");
+      expect(await defaultOf('restful-service')).toBe('axum-rust-service');
+      const application = await register(admin, 'Ledger');
+      expect(application.blueprint).toMatchObject({ key: 'axum-rust-service', language: 'Rust' });
+
+      await ownerPool.query("UPDATE catalog.application_types SET default_blueprint = 'angular-frontend' WHERE key = 'restful-service'");
+      expect(await defaultOf('restful-service')).toBe('actix-web-rust-service');
+    } finally {
+      await ownerPool.query("UPDATE catalog.application_types SET default_blueprint = 'node-service' WHERE key = 'restful-service'");
+    }
   });
 
   it('leave out a type with no blueprint, and refuse to register it', async () => {
@@ -172,11 +209,20 @@ describe('the blueprint library', () => {
     const { body } = await admin.get('/api/v1/blueprints').expect(200);
 
     expect(body.map((blueprint: { key: string; version: string }) => `${blueprint.key}@${blueprint.version}`)).toEqual([
+      'actix-web-rust-service@1.0.0',
       'angular-frontend@1.3.1',
       'angular-frontend@1.3.0',
       'angular-frontend@1.2.0',
       'angular-frontend@1.1.0',
       'angular-frontend@1.0.0',
+      'axum-rust-service@1.0.0',
+      'express-javascript-service@1.0.0',
+      'express-typescript-service@1.0.0',
+      'fastapi-python-service@1.0.0',
+      'fastify-javascript-service@1.0.0',
+      'flask-python-service@1.0.0',
+      'httplib-cpp-service@1.0.0',
+      'nestjs-typescript-service@1.0.0',
       'node-service@1.3.0',
       'node-service@1.2.0',
       'node-service@1.1.0',
@@ -254,6 +300,22 @@ describe('registering an application', () => {
       'Checkout: Vue 3',
       'Dashboard: PyScript 0.7, on Pyodide 314',
     ]);
+  });
+
+  it('starts a service from the language and framework chosen for it', async () => {
+    const { admin, organization } = await createCompany();
+
+    const rust = await register(admin, 'Ledger', 'restful-service', 'axum-rust-service');
+    const cpp = await register(admin, 'Pricing', 'restful-service', 'httplib-cpp-service');
+
+    expect(rust.blueprint).toEqual({ key: 'axum-rust-service', name: 'Axum service in Rust', language: 'Rust', framework: 'Axum 0.8 on Tokio' });
+    await eventually(async () => expect((await repositoryOf(admin, rust.id))?.status).toBe('ready'));
+    await eventually(async () => expect((await repositoryOf(admin, cpp.id))?.status).toBe('ready'));
+    const rustFiles = host.repositories.get(`${organization}/ledger`)!.files;
+    expect(rustFiles.find((file) => file.path === 'src/telemetry.rs')!.content.toString()).toContain('SERVICE_NAME: &str = "ledger";');
+    expect(rustFiles.find((file) => file.path === 'Cargo.lock')).toBeDefined();
+    const cppFiles = host.repositories.get(`${organization}/pricing`)!.files;
+    expect(cppFiles.find((file) => file.path === 'README.md')!.content.toString()).toMatch(/^# Pricing\n/);
   });
 
   it('refuses a framework its type doesn’t offer', async () => {

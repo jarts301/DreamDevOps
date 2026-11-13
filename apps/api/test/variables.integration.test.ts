@@ -91,7 +91,7 @@ describe('variables and secrets', () => {
         [staging.id],
       );
       const events = await client.query<{ payload: object }>(
-        "SELECT payload FROM kernel.outbox WHERE event_type LIKE 'EnvironmentVariable%'",
+        "SELECT payload FROM kernel.outbox WHERE event_type LIKE 'EnvironmentVariable%' ORDER BY sequence",
       );
       return { stored: stored.rows, events: events.rows };
     });

@@ -34,6 +34,7 @@ A guide to every flow DreamDevOps offers today, from signing in to watching a ru
 |---|---|---|
 | **Monitoring** page and context | Each running application's CPU, memory, requests, response times and server errors, now and charted over 15 minutes to 24 hours | [Monitoring guide](../../apps/api/src/monitoring/README.md) |
 | Languages and frameworks | Web frontends in TypeScript, with Angular, React, Vue or Svelte, in JavaScript, with React, Vue or Svelte, and in Python, with PyScript, chosen when an application is registered | [Blueprints](../../blueprints/README.md#languages-and-frameworks) |
+| Service languages and frameworks | Services in TypeScript, with Fastify, Express or NestJS, in JavaScript, with Express or Fastify, in Python, with FastAPI or Flask, in Rust, with Axum or Actix Web, and in C++, with cpp-httplib. Each type names its default, so services still start on Fastify in TypeScript. | The same |
 | **Alerts** page and context | Alerts on any environment's metric, above or below a threshold for a number of minutes, checked every minute, emailing the members they name when they fire and when they're resolved, never anyone removed from the company, through Mailpit locally | [Alerts guide](../../apps/api/src/alerts/README.md) |
 | Daily high | Each chart has an orange dashed line at the metric's highest value in the 24 hours before the range, and says when values go above it | [Daily high](../../apps/api/src/monitoring/README.md#daily-high) |
 | Container limits | CPU and memory shown against what each container may use, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**, standing out from 90% | [Limits](../../apps/api/src/monitoring/README.md#limits) |
@@ -91,7 +92,7 @@ Run these from the repository root. Steps 3 and 4 matter for the latest change.
    ```bash
    docker compose -f infra/local/compose.yaml run --rm smoke-test
    ```
-4. **Apply the migrations.** This adds `0015_record-container-limits`, `0016_create-alerts`, `0017_alert-recipients-are-members` and `0018_record-application-blueprint`, which the API needs:
+4. **Apply the migrations.** This adds `0015_record-container-limits`, `0016_create-alerts`, `0017_alert-recipients-are-members`, `0018_record-application-blueprint` and `0019_application-type-default-blueprint`, which the API needs:
    ```bash
    npm run db:migrate
    ```
@@ -140,9 +141,13 @@ Only needed to test company separation, in [Flow 12](#flow-12-company-separation
    - *Shop*, in **TypeScript** with **React 19**
    - *Admin*, in **JavaScript** with **Vue 3**
    - *Reports*, in **Python** with **PyScript**
-3. Wait until each repository shows as ready.
+3. Register three more services, choosing their **Language** and **Framework**:
+   - *Orders API*, in **Python** with **FastAPI on Python 3**
+   - *Ledger API*, in **Rust** with **Axum 0.8 on Tokio**
+   - *Pricing API*, in **C++** with **cpp-httplib on C++20**
+4. Wait until each repository shows as ready.
 
-**Expect:** the form offers TypeScript, JavaScript and Python for a web frontend, and TypeScript only for a service, and starts a web frontend on TypeScript with Angular, as before. The list shows each application's framework and language, such as *React 19 · TypeScript*. **Blueprints** shows `node-service 1.3.0` and `angular-frontend 1.3.1` as the newest of the first two, and the seven new blueprints at `1.0.1`, and new repositories start from them. Each new frontend's repository has the same `nginx/` folder as Angular's, and `src/App.tsx`, `src/App.vue` or `src/main.py`. Deploy *Reports* as in Flow 4: its page says *Your web frontend is running.*, and, a few seconds later, once its Python starts, **Check the API** can be clicked. In Forgejo, the backend repository has:
+**Expect:** the form offers TypeScript, JavaScript and Python for a web frontend, and C++, JavaScript, Python, Rust and TypeScript for a service, and starts a web frontend on TypeScript with Angular, and a service on TypeScript with Fastify, as before. The list shows each application's framework and language, such as *React 19 · TypeScript*. **Blueprints** shows `node-service 1.3.0` and `angular-frontend 1.3.1` as the newest of the first two, the seven new frontends at `1.0.1`, and the nine new services at `1.0.0`, and new repositories start from them. Each new service's repository has its language's lockfile, such as `requirements.txt`, `Cargo.lock` or `third_party/SHA256SUMS`, and its pipeline passes on its first push. Deploy *Ledger API* as in Flow 4, and **Check the API** from *Web*, with `CORS_ORIGINS` set: Monitoring shows its metrics, its `Ping received` log line and its trace, as for *Billing API*. Each new frontend's repository has the same `nginx/` folder as Angular's, and `src/App.tsx`, `src/App.vue` or `src/main.py`. Deploy *Reports* as in Flow 4: its page says *Your web frontend is running.*, and, a few seconds later, once its Python starts, **Check the API** can be clicked. In Forgejo, the backend repository has:
 - `src/logging.ts`
 - `GET /api/ping` in `src/app.ts`
 - `@opentelemetry/instrumentation-undici` in `package.json`
@@ -431,15 +436,16 @@ Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-enviro
 | 18 | Alerts for viewers | `dev-viewer` | Alerts and history shown, without whom they email or buttons |
 | 19 | Removed members | `dev-company-admin` | A member removed on **Team** is taken off every alert, and gets no alert emails |
 | 20 | Languages and frameworks | `dev-tech-lead` | A web frontend registered in each language starts from the chosen framework, and its pipeline passes |
+| 20a | Service languages and frameworks | `dev-tech-lead` | A service registered in Python, Rust and C++ starts from the chosen framework, its pipeline passes, and, deployed, Monitoring shows its metrics, its `Ping received` line and its trace |
 
 ## Automated tests
 
 | Command | Covers | Needs | Last result |
 |---|---|---|---|
 | `npm run typecheck` | Every package and app | Nothing | Clean |
-| `npm run test:unit` | See the next table | Nothing | 40 shared kernel, 486 API and 172 dashboard tests pass |
-| `npm run test:integration` | The API against a throwaway PostgreSQL, Keycloak and Forgejo | Docker | 213 tests of the database suites pass |
-| `npm run test:scaffolds` | Every blueprint version: installed, linted, tested and built, run as a read-only non-root container. From 1.2.0 it also checks the metrics it sends, and from 1.3.0 that a request is logged in JSON with its trace, and for services, traced. | Docker and the internet | Not run: written without Docker |
+| `npm run test:unit` | See the next table | Nothing | 45 shared kernel, 537 API and 185 dashboard tests pass |
+| `npm run test:integration` | The API against a throwaway PostgreSQL, Keycloak and Forgejo | Docker | 230 tests of the database suites pass |
+| `npm run test:scaffolds` | Every blueprint version: its own pipeline, run step by step in a container of the pipeline's image, then its image built and run as a read-only non-root container. From 1.2.0 it also checks the metrics it sends, and from 1.3.0 that a request is logged in JSON with its trace, and for services, traced. | Docker and the internet | Not run: written without Docker |
 | `npm run test:e2e` | Sign-in to team management in a browser | The local stack and Chrome | Not run |
 
 What `npm run test:unit` covers:
@@ -457,6 +463,16 @@ The new integration tests are `monitoring.integration.test.ts`. Against a real d
 - **Stopping:** stopped environments drop off the list.
 
 **Blueprints:** each scaffold's own checks run for both 1.3.0 blueprints: 19 tests for the service and 6 for the frontend, plus lint, type check and build.
+
+**New services, checked without Docker:** each one's pipeline steps, except installing Alpine's packages, ran on this machine, then the service ran against a stand-in for Prometheus and Jaeger, which checked its health routes, `/api/hello`, CORS, its `Ping received` line with the caller's trace ID, its span continuing the caller's span, its three metrics with the environment's ID, and that health checks are neither logged nor traced. All nine passed.
+
+| Service | Pipeline checks | Tests |
+|---|---|---|
+| Express, NestJS, in TypeScript | ESLint, TypeScript, Vitest, build | 21 and 22 |
+| Express, Fastify, in JavaScript | ESLint, TypeScript on the JSDoc, Vitest | 21 and 19 |
+| FastAPI, Flask | Ruff, Ruff's formatter, strict mypy, pytest | 21 and 22 |
+| Axum, Actix Web | rustfmt, Clippy with warnings as errors, `cargo test`, with Rust 1.83, 1.87, 1.91 and the newest | 22 each |
+| cpp-httplib | Checksums, a build with warnings as errors, with GCC 13 and 14, and compiled with GCC 15 and 16 too | 38 |
 
 **Checked by hand:**
 - A built 1.3.0 service, called with `fetch` by a second process, produced one trace across both, and its log lines carried that trace ID.
@@ -490,6 +506,7 @@ The new integration tests are `monitoring.integration.test.ts`. Against a real d
 - **The tools' own pages show every company.** Prometheus's and Jaeger's pages are for whoever runs the machine. Applications on This machine can reach them, which is one more reason This machine is for trying things out and small teams.
 - **Docker Desktop only, for sending.** Containers reach Prometheus and Jaeger through `host.docker.internal`. With Docker Engine on Linux, they can't, as with Forgejo's webhooks.
 - **Only This machine deploys,** so only it is monitored. It's the only host whose logs can be read, and whose limits are recorded.
+- **The new services' images weren't built here.** Their pipelines and services ran on this machine, without Docker, so installing Python, Rust or GCC from Alpine's packages, and building their images, is first checked by `npm run test:scaffolds`. They build and run on the platform's one pinned Alpine image, and each `Dockerfile` says how to move to an official image of its language.
 
 ## Reference
 
@@ -548,4 +565,4 @@ Alerts' routes also need the `monitoring` feature. Seeing them needs `dashboards
 | Limits | `apps/api/src/environments/infrastructure/local-docker-runtime.ts` (`CONTAINER_LIMITS`), `migrations/0015_record-container-limits.sql` |
 | Dashboard | `apps/dashboard/src/app/features/monitoring/`, `apps/dashboard/src/app/features/alerts/` |
 | Local tools | `infra/local/compose.yaml`, `infra/local/prometheus/prometheus.yml`, `infra/local/ops/smoke-test.sh` |
-| Blueprints | `blueprints/node-service/1.3.0/`, `blueprints/angular-frontend/1.3.0/`, and the new frontends at `1.0.0`, such as `blueprints/pyscript-frontend/1.0.0/` |
+| Blueprints | `blueprints/node-service/1.3.0/`, `blueprints/angular-frontend/1.3.0/`, the new frontends at `1.0.0`, such as `blueprints/pyscript-frontend/1.0.0/`, and the new services at `1.0.0`, such as `blueprints/axum-rust-service/1.0.0/` |

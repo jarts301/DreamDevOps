@@ -80,7 +80,7 @@ export class BlueprintLibrary implements BlueprintCatalog {
       .sort((left, right) => left.key.localeCompare(right.key) || compareVersions(right.version, left.version));
   }
 
-  /** The blueprint an application type starts from unless another is chosen: its first by key. */
+  /** An application type's first blueprint by key, for a type whose default is named nowhere. */
   latestForType(applicationType: string): BlueprintManifest | null {
     return (
       this.latest()

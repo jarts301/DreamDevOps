@@ -1,0 +1,28 @@
+{
+  "key": "fastify-javascript-service",
+  "version": "1.0.0",
+  "applicationType": "restful-service",
+  "name": "Fastify service in JavaScript",
+  "description": "A JavaScript HTTP API on Fastify, with health checks, OpenTelemetry metrics, traces and logs, tests, linting and types checked from JSDoc.",
+  "language": "JavaScript",
+  "framework": "Fastify 5 on Node.js 24",
+  "runtime": {
+    "port": 8080,
+    "livenessPath": "/health/live",
+    "readinessPath": "/health/ready",
+    "resources": {
+      "cpu": "250m",
+      "memory": "256Mi"
+    },
+    "configuration": "Environment variables"
+  },
+  "telemetry": "OpenTelemetry metrics and traces over OTLP: CPU, memory, HTTP response times and each request, and JSON logs with their trace",
+  "pipeline": ".forgejo/workflows/ci.yaml",
+  "strategies": [
+    "recreate",
+    "rolling",
+    "blue-green",
+    "canary",
+    "a-b"
+  ]
+}

@@ -9,8 +9,9 @@ export const BLUEPRINT_CATALOG = Symbol('BLUEPRINT_CATALOG');
  */
 export interface BlueprintCatalog {
   /**
-   * The blueprint an application type starts from unless another is chosen: the first of
-   * its blueprints by key, in its newest version, or null if it has none.
+   * The first of an application type's blueprints by key, in its newest version, or null if
+   * it has none. Which one a type starts from when none is chosen is the catalog's to say;
+   * this is only what's left when it names none.
    */
   latestForType(applicationType: string): BlueprintManifest | null;
   /** Every blueprint an application type can start from, each in its newest version, by language and name. */

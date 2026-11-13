@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { appendFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +13,7 @@ import {
 import { BlueprintLibrary } from '../src/blueprints/infrastructure/blueprint-library.ts';
 import { parseDockerfile } from '../src/builds/domain/dockerfile-policy.ts';
 import { GIT_FLOW, planTeamChanges, teamFor, type TeamKey } from '../src/source-governance/domain/git-flow.ts';
+import { pipelineOf } from './support/pipeline.ts';
 
 const BLUEPRINTS = fileURLToPath(new URL('../../../blueprints', import.meta.url));
 const file = (path: string, content: string) => ({ path, content: Buffer.from(content) });
@@ -25,8 +27,8 @@ describe('the published blueprints', () => {
   };
 
   it('cover both starter types, each with a pipeline, health checks and all five strategies', () => {
-    expect(library.latestForType('restful-service')?.key).toBe('node-service');
-    expect(library.latestForType('web-frontend')?.key).toBe('angular-frontend');
+    expect(library.forType('restful-service')).not.toEqual([]);
+    expect(library.forType('web-frontend')).not.toEqual([]);
     for (const manifest of library.latest()) {
       expect(manifest.pipeline).toBe('.forgejo/workflows/ci.yaml');
       expect(manifest.runtime.port).toBe(8080);
@@ -34,16 +36,20 @@ describe('the published blueprints', () => {
     }
   });
 
-  it('pin base images by digest and run as a non-root user', () => {
+  it('pin base images by digest, lock their dependencies, and run as a non-root user', () => {
     for (const manifest of library.latest()) {
       const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
       const dockerfile = files.find((candidate) => candidate.path === 'Dockerfile')!.content.toString();
       for (const line of dockerfile.split('\n').filter((candidate) => candidate.startsWith('FROM '))) {
         expect(line).toMatch(/@sha256:[0-9a-f]{64}/);
       }
-      expect(files.some((candidate) => candidate.path === 'package-lock.json')).toBe(true);
+      // Each language locks its dependencies in its own way, and the pipeline runs in the image the Dockerfile builds on.
+      const lockfiles = ['package-lock.json', 'requirements.txt', 'Cargo.lock', 'third_party/SHA256SUMS'];
+      expect(files.filter((candidate) => lockfiles.includes(candidate.path)), manifest.key).toHaveLength(1);
       expect(files.some((candidate) => candidate.path === '.dockerignore')).toBe(true);
       expect(files.some((candidate) => candidate.path === 'compose.yaml')).toBe(true);
+      const workflow = files.find((candidate) => candidate.path === manifest.pipeline)!.content.toString();
+      expect(dockerfile, manifest.key).toContain(`FROM ${pipelineOf(workflow).image}`);
     }
   });
 
@@ -71,34 +77,32 @@ describe('the published blueprints', () => {
       }
       expect(manifest.telemetry, manifest.key).toMatch(/CPU.* memory/);
     }
-    // Services also measure every request, which gives requests, response times and errors.
-    const service = library.latestForType('restful-service')!;
-    const telemetry = library
-      .render(service.key, service.version, { name: 'Probe', slug: 'probe' })
-      .find((candidate) => candidate.path === 'src/telemetry.ts')!
-      .content.toString();
-    expect(telemetry).toContain('new HttpInstrumentation(');
+    // Services also measure every request, which gives requests, response times and errors:
+    // with OpenTelemetry's instrumentation of HTTP or of their framework, or by themselves.
+    for (const manifest of library.forType('restful-service')) {
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      const code = files
+        .filter((candidate) => /^(src|service)\//.test(candidate.path))
+        .map((candidate) => candidate.content.toString())
+        .join('\n');
+      expect(code, manifest.key).toMatch(/new HttpInstrumentation\(|Instrumentor\b|"http\.server\.request\.duration"/);
+    }
   });
 
   it('log in JSON with the trace each line belongs to, and pass traces on to the applications they call', () => {
-    const render = (type: string) => {
-      const manifest = library.latestForType(type)!;
-      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
-      return (path: string) => files.find((candidate) => candidate.path === path)!.content.toString();
-    };
-    const service = render('restful-service');
+    const service = render(library.latestOf('node-service')!);
     expect(service('src/app.ts')).toContain('mixin: currentTraceFields');
     expect(service('src/app.ts')).toContain("'/api/ping'");
     expect(service('src/telemetry.ts')).toContain('new UndiciInstrumentation()');
     expect(service('src/config.ts')).toContain('CORS_ORIGINS');
-    const frontend = render('web-frontend');
+    const frontend = render(library.latestOf('angular-frontend')!);
     expect(frontend('nginx/default.conf')).toMatch(/log_format json escape=json/);
     expect(frontend('nginx/default.conf')).toContain('access_log /var/log/nginx/access.log json;');
     expect(frontend('src/app/app.config.ts')).toContain('withInterceptors([traceContextInterceptor])');
   });
 
   it('start the frontend’s metrics with nginx, which runs every script in its entrypoint folder', () => {
-    const frontend = library.latestForType('web-frontend')!;
+    const frontend = library.latestOf('angular-frontend')!;
     const files = library.render(frontend.key, frontend.version, { name: 'Probe', slug: 'probe' });
     const instructions = parseDockerfile(files.find((candidate) => candidate.path === 'Dockerfile')!.content.toString());
 
@@ -119,12 +123,44 @@ describe('the published blueprints', () => {
       'TypeScript: Svelte 5',
       'TypeScript: Vue 3',
     ]);
-    expect(library.forType('restful-service').map((manifest) => manifest.key)).toEqual(['node-service']);
     expect(library.forType('mobile-app')).toEqual([]);
-    // Applications that choose nothing start from the first by key, as they always have.
-    expect(library.latestForType('web-frontend')?.key).toBe('angular-frontend');
     expect(library.latestOf('vue-typescript-frontend')).toMatchObject({ version: '1.0.1', language: 'TypeScript' });
     expect(library.latestOf('cobol-frontend')).toBeNull();
+  });
+
+  it('offer RESTful services in TypeScript, JavaScript, Python, Rust and C++, each on a popular open-source framework', () => {
+    expect(library.forType('restful-service').map((manifest) => `${manifest.language}: ${manifest.framework}`)).toEqual([
+      'C++: cpp-httplib on C++20',
+      'JavaScript: Express 5 on Node.js 24',
+      'JavaScript: Fastify 5 on Node.js 24',
+      'Python: FastAPI on Python 3',
+      'Python: Flask 3 on Python 3',
+      'Rust: Actix Web 4',
+      'Rust: Axum 0.8 on Tokio',
+      'TypeScript: Express 5 on Node.js 24',
+      'TypeScript: NestJS 12 on Node.js 24',
+      'TypeScript: Fastify on Node.js 24',
+    ]);
+    // Which one an application starts from when none is chosen is the catalog's to say, not the order of keys.
+    expect(library.latestForType('restful-service')?.key).not.toBe('node-service');
+  });
+
+  it('give every service the same contract: its routes, JSON logs with their trace, and settings from the environment', () => {
+    for (const manifest of library.forType('restful-service')) {
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      const code = files
+        .filter((candidate) => /^(src|service)\//.test(candidate.path))
+        .map((candidate) => candidate.content.toString())
+        .join('\n');
+      // Routes are written whole, such as /api/ping, or in parts, such as NestJS's @Controller('api') and @Get('ping').
+      for (const expected of ['health', 'live', 'ready', 'ping', 'hello', 'Ping received', 'CORS_ORIGINS', 'traceparent']) {
+        expect(code, `${manifest.key} ${expected}`).toContain(expected);
+      }
+      expect(code, manifest.key).toMatch(/trace_id|currentTraceFields/);
+      const readme = files.find((candidate) => candidate.path === 'README.md')!.content.toString();
+      expect(readme, manifest.key).toMatch(/^# Probe\n/);
+      expect(readme, manifest.key).toContain('| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` |');
+    }
   });
 
   it('give every web frontend the same runtime: JSON request logs, metrics started by nginx, and settings read at startup', () => {
@@ -169,19 +205,91 @@ describe('the published blueprints', () => {
     }
   });
 
-  it('give every scaffold the checks the pipeline runs: lint, typecheck, test and build', () => {
+  it('give every scaffold the checks the pipeline runs, in its language: lint, types or warnings, and tests', () => {
+    const checks: Readonly<Record<string, readonly string[]>> = {
+      'package.json': ['npm ci', 'npm run lint', 'npm run typecheck', 'npm test'],
+      'pyproject.toml': [
+        '.venv/bin/pip install --require-hashes --only-binary=:all: -r requirements-dev.txt',
+        '.venv/bin/ruff check .',
+        '.venv/bin/ruff format --check .',
+        '.venv/bin/mypy',
+        '.venv/bin/pytest',
+      ],
+      'Cargo.toml': ['cargo fmt --check', 'cargo clippy --locked --all-targets -- -D warnings', 'cargo test --locked'],
+      'CMakeLists.txt': [
+        'sha256sum -c third_party/SHA256SUMS',
+        'cmake -S . -B build -DWARNINGS_AS_ERRORS=ON',
+        'cmake --build build --parallel',
+        'ctest --test-dir build --output-on-failure',
+      ],
+    };
     for (const manifest of library.latest()) {
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      const project = Object.keys(checks).filter((path) => files.some((candidate) => candidate.path === path));
+      expect(project, manifest.key).toHaveLength(1);
+      const { steps } = pipelineOf(render(manifest)(manifest.pipeline));
+      for (const step of checks[project[0]!]!) {
+        expect(steps.some((candidate) => candidate.endsWith(step)), `${manifest.key} ${step}`).toBe(true);
+      }
+      if (project[0] === 'package.json') {
+        const packageJson = JSON.parse(render(manifest)('package.json')) as { scripts: Record<string, string> };
+        expect(Object.keys(packageJson.scripts), manifest.key).toEqual(expect.arrayContaining(['lint', 'typecheck', 'test']));
+        // What's built, such as TypeScript, is built by the pipeline too. JavaScript services run their sources as they are.
+        expect(steps.includes('npm run build'), manifest.key).toBe(packageJson.scripts['build'] !== undefined);
+      }
+    }
+  });
+
+  it('lock Python, Rust and C++ dependencies with their checksums, and install only what was locked', () => {
+    const locked = (manifest: { key: string; version: string }, lockfile: string) =>
+      library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' }).some((candidate) => candidate.path === lockfile);
+    const python = library.latest().filter((manifest) => locked(manifest, 'requirements.txt'));
+    const rust = library.latest().filter((manifest) => locked(manifest, 'Cargo.lock'));
+    const cpp = library.latest().filter((manifest) => locked(manifest, 'third_party/SHA256SUMS'));
+    expect([python, rust, cpp].map((manifests) => manifests.length)).toEqual([2, 2, 1]);
+
+    for (const manifest of python) {
       const file = render(manifest);
-      const packageJson = JSON.parse(file('package.json')) as { scripts: Record<string, string> };
-      expect(Object.keys(packageJson.scripts), manifest.key).toEqual(expect.arrayContaining(['lint', 'typecheck', 'test', 'build']));
-      for (const step of ['npm ci', 'npm run lint', 'npm run typecheck', 'npm test', 'npm run build']) {
-        expect(file('.forgejo/workflows/ci.yaml'), `${manifest.key} ${step}`).toContain(`- run: ${step}`);
+      for (const lockfile of ['requirements.txt', 'requirements-dev.txt']) {
+        const requirements = file(lockfile).split(/\n(?!\s)/).filter((entry) => /^[a-z0-9]/i.test(entry));
+        expect(requirements.length, `${manifest.key} ${lockfile}`).toBeGreaterThan(5);
+        for (const requirement of requirements) {
+          expect(requirement, `${manifest.key} ${lockfile}`).toMatch(/^\S+==\S+/);
+          expect(requirement, `${manifest.key} ${lockfile}`).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+        }
+      }
+      expect(file('Dockerfile'), manifest.key).toContain('--require-hashes --only-binary=:all: -r requirements.txt');
+    }
+    for (const manifest of rust) {
+      const file = render(manifest);
+      const packages = file('Cargo.lock').split('[[package]]').slice(1);
+      const fromRegistry = packages.filter((entry) => entry.includes('source = "registry+'));
+      expect(fromRegistry.length, manifest.key).toBe(packages.length - 1);
+      for (const entry of fromRegistry) {
+        expect(entry, manifest.key).toMatch(/checksum = "[0-9a-f]{64}"/);
+      }
+      expect(file('Cargo.toml'), manifest.key).toMatch(/^rust-version = "1\.\d+"$/m);
+      expect(file('Dockerfile'), manifest.key).toContain('cargo build --release --locked');
+    }
+    for (const manifest of cpp) {
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      const sums = render(manifest)('third_party/SHA256SUMS').trim().split('\n');
+      expect(sums.length, manifest.key).toBeGreaterThan(0);
+      for (const line of sums) {
+        const [sum, path] = line.split(/\s+/);
+        const vendored = files.find((candidate) => candidate.path === path);
+        expect(vendored, `${manifest.key} ${path}`).toBeDefined();
+        expect(createHash('sha256').update(vendored!.content).digest('hex'), `${manifest.key} ${path}`).toBe(sum);
       }
     }
   });
 
   it('lock every platform’s native packages, so images build on Alpine, and people build on any computer', () => {
-    for (const manifest of library.latest()) {
+    const npm = library.latest().filter((manifest) =>
+      library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' }).some((candidate) => candidate.path === 'package-lock.json'),
+    );
+    expect(npm.length).toBeGreaterThan(10);
+    for (const manifest of npm) {
       const lock = JSON.parse(render(manifest)('package-lock.json')) as {
         packages: Record<string, { optionalDependencies?: Record<string, string>; integrity?: string; link?: boolean }>;
       };
@@ -236,7 +344,8 @@ describe('the published blueprints', () => {
   });
 });
 
-describe('the blueprint library', () => {
+// Each test copies every blueprint, which takes a second or more, and longer on a busy machine.
+describe('the blueprint library', { timeout: 30_000 }, () => {
   let copy: string;
 
   const loadCopy = () => BlueprintLibrary.load(copy);

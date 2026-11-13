@@ -47,6 +47,14 @@ export interface ApplicationView {
   readonly archivedAt: string | null;
 }
 
+interface TypeRow {
+  key: string;
+  name: string;
+  description: string;
+  /** The blueprint applications of the type start from when none is chosen, or null for its first by key. */
+  default_blueprint: string | null;
+}
+
 interface ApplicationRow {
   id: string;
   name: string;
@@ -79,18 +87,28 @@ export class ApplicationCatalog {
   async types(): Promise<ApplicationType[]> {
     currentCompanyId();
     const rows = await this.#database.transaction(async (tx) => {
-      const { rows: types } = await tx.query<{ key: string; name: string; description: string }>(
-        `SELECT key, name, description FROM catalog.application_types
+      const { rows: types } = await tx.query<TypeRow>(
+        `SELECT key, name, description, default_blueprint FROM catalog.application_types
          WHERE available ORDER BY sort_order, name`,
       );
       return types;
     });
-    return rows.flatMap((type) => {
-      const blueprint = this.#blueprints.latestForType(type.key);
+    return rows.flatMap(({ default_blueprint: defaultKey, ...type }) => {
+      const blueprint = this.#defaultBlueprint(type.key, defaultKey);
       return blueprint === null
         ? []
         : [{ ...type, blueprint: choiceOf(blueprint), blueprints: this.#blueprints.forType(type.key).map(choiceOf) }];
     });
+  }
+
+  /**
+   * The blueprint a type starts from when none is chosen: the one the type names, or, for
+   * a type that names none, its first by key.
+   */
+  #defaultBlueprint(type: string, defaultKey: string | null): BlueprintManifest | null {
+    return (
+      this.#blueprints.forType(type).find((blueprint) => blueprint.key === defaultKey) ?? this.#blueprints.latestForType(type)
+    );
   }
 
   async list(statusValue: unknown): Promise<ApplicationView[]> {
@@ -129,30 +147,30 @@ export class ApplicationCatalog {
       // One registration per company at a time, so two people can't take the same name or short name.
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalog:' || $1, 0))", [companyId]);
       const type = await availableType(tx, input.type);
-      const blueprint = this.#chosenBlueprint(type, input.blueprint);
+      const blueprint = this.#chosenBlueprint(type.key, type.defaultBlueprint, input.blueprint);
       await assertNameFree(tx, name, null);
       const slug = await freeSlug(tx, name);
       await tx.query(
         `INSERT INTO catalog.applications (id, company_id, name, slug, type_key, blueprint_key, description, status, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)`,
-        [id, companyId, name, slug, type, blueprint.key, description, actor.userId],
+        [id, companyId, name, slug, type.key, blueprint.key, description, actor.userId],
       );
       await appendToOutbox(tx, [
         createDomainEvent<'ApplicationRegistered', ApplicationRegisteredPayload>({
           eventType: 'ApplicationRegistered',
           companyId,
           actorId: actor.userId,
-          payload: { applicationId: id, name, slug, type, blueprint: blueprint.key },
+          payload: { applicationId: id, name, slug, type: type.key, blueprint: blueprint.key },
         }),
       ]);
       return this.#toView(await findOrFail(tx, id));
     });
   }
 
-  /** The blueprint chosen for a type, or its first one when none is chosen. */
-  #chosenBlueprint(type: string, value: unknown): BlueprintManifest {
+  /** The blueprint chosen for a type, or its default when none is chosen. */
+  #chosenBlueprint(type: string, defaultKey: string | null, value: unknown): BlueprintManifest {
     if (value === undefined || value === null || value === '') {
-      const blueprint = this.#blueprints.latestForType(type);
+      const blueprint = this.#defaultBlueprint(type, defaultKey);
       if (blueprint === null) {
         throw new CatalogError('invalid', 'Choose one of the available application types.');
       }
@@ -267,11 +285,14 @@ async function findOrFail(tx: TenantTransaction, id: string, options: { lock?: b
   return rows[0];
 }
 
-async function availableType(tx: TenantTransaction, value: unknown): Promise<string> {
+async function availableType(tx: TenantTransaction, value: unknown): Promise<{ key: string; defaultBlueprint: string | null }> {
   if (typeof value === 'string') {
-    const { rows } = await tx.query('SELECT 1 FROM catalog.application_types WHERE key = $1 AND available', [value]);
-    if (rows.length > 0) {
-      return value;
+    const { rows } = await tx.query<{ default_blueprint: string | null }>(
+      'SELECT default_blueprint FROM catalog.application_types WHERE key = $1 AND available',
+      [value],
+    );
+    if (rows[0] !== undefined) {
+      return { key: value, defaultBlueprint: rows[0].default_blueprint };
     }
   }
   throw new CatalogError('invalid', 'Choose one of the available application types.');

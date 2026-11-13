@@ -15,12 +15,14 @@ Types are shared by every company. A type marked as unavailable can't be chosen 
 
 ## Languages and frameworks
 
-A type can start from several blueprints, one for each language and framework, such as React in TypeScript or PyScript in Python for a web frontend. The types route lists them as `blueprints`, each with its `key`, `version`, `name`, `description`, `language` and `framework`, by language and name, and `blueprint` is the one an application starts from when none is chosen: the type's first by key.
+A type can start from several blueprints, one for each language and framework, such as Axum in Rust for a service, or React in TypeScript for a web frontend. The types route lists them as `blueprints`, each with its `key`, `version`, `name`, `description`, `language` and `framework`, by language and name, and `blueprint` is the one an application starts from when none is chosen: its type's default.
 
-| Type | Languages and frameworks |
-|---|---|
-| RESTful Service | TypeScript: Fastify |
-| Web Frontend | TypeScript: Angular, React, Vue, Svelte. JavaScript: React, Vue, Svelte. Python: PyScript. |
+| Type | Default | Languages and frameworks |
+|---|---|---|
+| RESTful Service | `node-service` | C++: cpp-httplib. JavaScript: Express, Fastify. Python: FastAPI, Flask. Rust: Actix Web, Axum. TypeScript: Express, NestJS, Fastify. |
+| Web Frontend | `angular-frontend` | JavaScript: React, Vue, Svelte. Python: PyScript. TypeScript: Angular, React, Vue, Svelte. |
+
+Each type names its default in `default_blueprint`, added by migration `0019`, so adding a blueprint never changes which one applications start from. A type that names none, or a blueprint it doesn't have, starts from its first blueprint by key.
 
 ## Applications
 

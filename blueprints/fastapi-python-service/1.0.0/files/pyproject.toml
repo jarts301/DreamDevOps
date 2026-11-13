@@ -1,0 +1,32 @@
+[project]
+name = "__APP_SLUG__"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.162.2",
+  "uvicorn>=0.54.0",
+  "opentelemetry-sdk>=1.45.1",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.1",
+  "opentelemetry-instrumentation-fastapi>=0.66b1",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.2.0", "httpx2>=2.16.0", "ruff>=0.17.4", "mypy>=2.4.1"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# Errors, mistakes, imports, bugbear, newer syntax, simpler code and names.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "N"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["service", "tests"]
+
+[tool.mypy]
+strict = true
+files = ["service", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

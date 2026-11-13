@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { compareVersions } from '../src/blueprints/domain/blueprint.ts';
 import { BlueprintLibrary } from '../src/blueprints/infrastructure/blueprint-library.ts';
+import { pipelineOf } from './support/pipeline.ts';
 
-// Checks that every blueprint version produces a project that installs, passes its own
-// checks, builds an image, and starts healthy as a read-only, non-root container. It also
-// checks the container sends its metrics where the platform says, and logs and traces a
-// request, for every version that does.
+// Checks that every blueprint version produces a project that passes its own pipeline,
+// run in the pipeline's own container as Forgejo runs it, builds an image, and starts
+// healthy as a read-only, non-root container. It also checks the container sends its
+// metrics where the platform says, and logs and traces a request, for every version that does.
 // It's slow and needs Docker and the internet: npm run test:scaffolds
 
 const BLUEPRINTS = fileURLToPath(new URL('../../../blueprints', import.meta.url));
@@ -20,11 +21,30 @@ const library = BlueprintLibrary.load(BLUEPRINTS);
 const folders: string[] = [];
 
 function run(command: string, args: string[], cwd: string): string {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', shell: process.platform === 'win32' });
+  // Pipelines and builds print a lot, such as every crate Cargo compiles.
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 256 * 1024 * 1024 });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed:\n${result.stdout}\n${result.stderr}`.slice(-4_000));
   }
   return result.stdout.trim();
+}
+
+/**
+ * Runs a project's pipeline as Forgejo does: each step in turn, in a container of the
+ * pipeline's image, with the project's files in it. So what's checked is the pipeline
+ * itself, with the tools it installs, on any machine with Docker.
+ */
+function runPipeline(workflow: string, folder: string): void {
+  const { image, steps } = pipelineOf(workflow);
+  const container = run('docker', ['run', '-d', '--entrypoint', 'sleep', image, 'infinity'], folder);
+  try {
+    run('docker', ['cp', `${folder}/.`, `${container}:/app`], folder);
+    for (const step of steps) {
+      run('docker', ['exec', '-w', '/app', container, 'sh', '-ec', step], folder);
+    }
+  } finally {
+    spawnSync('docker', ['rm', '-f', container]);
+  }
 }
 
 async function waitForHealth(url: string): Promise<number> {
@@ -71,24 +91,49 @@ const FIRST_LOGGING_REQUESTED_PATH: Readonly<Record<string, string>> = {
 const since = (firsts: Readonly<Record<string, string>>, manifest: { key: string; version: string }) =>
   compareVersions(manifest.version, firsts[manifest.key] ?? '1.0.0') >= 0;
 
-/** What containers send over OTLP, as the platform's metrics store would receive it. */
-const received: string[] = [];
+/**
+ * What containers send over OTLP, as the platform's metrics and trace stores would receive
+ * it: JSON, or protobuf, which OpenTelemetry's Python exporters send, as Prometheus and
+ * Jaeger accept both.
+ */
+interface Received {
+  /** Where it was sent, such as /v1/traces, which says what it holds. */
+  readonly path: string;
+  readonly json: unknown;
+  readonly raw: Buffer;
+}
+const received: Received[] = [];
 const metricsSink = createServer((request, response) => {
-  let body = '';
-  request.setEncoding('utf8');
-  request.on('data', (chunk: string) => (body += chunk));
+  const chunks: Buffer[] = [];
+  request.on('data', (chunk: Buffer) => chunks.push(chunk));
   request.on('end', () => {
-    received.push(body);
-    response.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
+    const raw = Buffer.concat(chunks);
+    const json = (request.headers['content-type'] ?? '').includes('json') ? (JSON.parse(raw.toString('utf8')) as unknown) : null;
+    received.push({ path: request.url ?? '', json, raw });
+    // Each format is answered in its own kind, and an empty message is valid in both.
+    response.writeHead(200, { 'Content-Type': json === null ? 'application/x-protobuf' : 'application/json' }).end(json === null ? '' : '{}');
   });
 });
+
+/**
+ * Whether a protobuf message holds these bytes. Protobuf keeps strings, such as metrics'
+ * names and attributes, and trace IDs, as they are, so they can be found without decoding.
+ */
+const holds = (message: Received, bytes: Buffer) => message.json === null && message.raw.includes(bytes);
 
 /** Whether a container sent a span of this trace, within a minute. */
 async function sentSpanOf(traceId: string): Promise<boolean> {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    const found = received.some((body) => {
-      const payload = JSON.parse(body) as { resourceSpans?: { scopeSpans?: { spans?: { traceId: string }[] }[] }[] };
+    // Only traces count: metrics can hold trace IDs too, in the exemplars of their histograms.
+    const found = received.some((message) => {
+      if (!message.path.endsWith('/traces')) {
+        return false;
+      }
+      if (message.json === null) {
+        return holds(message, Buffer.from(traceId, 'hex'));
+      }
+      const payload = message.json as { resourceSpans?: { scopeSpans?: { spans?: { traceId: string }[] }[] }[] };
       return (payload.resourceSpans ?? []).some((resource) =>
         (resource.scopeSpans ?? []).some((scope) => (scope.spans ?? []).some((span) => span.traceId === traceId)),
       );
@@ -120,8 +165,17 @@ async function metricsOf(environmentId: string, expected: readonly string[]): Pr
   let names = new Set<string>();
   while (Date.now() < deadline) {
     names = new Set(
-      received.flatMap((body) => {
-        const payload = JSON.parse(body) as {
+      received.flatMap((message) => {
+        if (!message.path.endsWith('/metrics')) {
+          return [];
+        }
+        if (message.json === null) {
+          // A message with this environment's attribute, and the names it holds.
+          return holds(message, Buffer.from(environmentId))
+            ? expected.filter((name) => holds(message, Buffer.from(name)))
+            : [];
+        }
+        const payload = message.json as {
           resourceMetrics?: {
             resource?: { attributes?: { key: string; value: { stringValue?: string } }[] };
             scopeMetrics?: { metrics?: { name: string }[] }[];
@@ -169,9 +223,7 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
       writeFileSync(join(folder, file.path), file.content);
     }
 
-    for (const script of [['ci'], ['run', 'lint'], ['run', 'typecheck'], ['test'], ['run', 'build']]) {
-      run('npm', script, folder);
-    }
+    runPipeline(readFileSync(join(folder, manifest.pipeline), 'utf8'), folder);
 
     const image = `dreamdevops-scaffold-check-${manifest.key}:${manifest.version}`;
     run('docker', ['build', '--quiet', '-t', image, '.'], folder);
@@ -238,5 +290,5 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
       // Removed as soon as it's checked: every project has its own node_modules, which add up.
       rmSync(folder, { recursive: true, force: true });
     }
-  }, 900_000);
+  }, 1_800_000);
 });

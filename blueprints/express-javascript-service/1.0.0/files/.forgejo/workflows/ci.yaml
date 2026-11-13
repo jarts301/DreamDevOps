@@ -1,0 +1,20 @@
+# The standard pipeline. It checks every push and pull request.
+# Building, scanning and publishing images is added by the platform's build step.
+name: CI
+
+on:
+  push:
+    branches: [develop, main, 'release/**', 'hotfix/**', 'feature/**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
