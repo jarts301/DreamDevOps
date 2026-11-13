@@ -1,9 +1,9 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import { Public } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { type TargetConfiguration, TargetConfigurations } from '../application/target-configuration.ts';
-import { type AgentCommand, Deployments } from '../../deployments/application/deployments.ts';
-import { type Registration, TargetAgents } from '../application/target-agents.ts';
+import { type TargetConfiguration, TargetConfigurations } from '../../environments/application/target-configuration.ts';
+import { type AgentCommand, Deployments } from '../application/deployments.ts';
+import { type Registration, TargetAgents } from '../../environments/application/target-agents.ts';
 
 const bearer = (request: ApiRequest): string | undefined =>
   /^Bearer (\S{1,200})$/.exec(request.headers.authorization ?? '')?.[1];

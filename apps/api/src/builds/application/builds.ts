@@ -15,7 +15,7 @@ import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamde
 import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import type { SourceHost } from '../../source-governance/application/ports.ts';
-import type { Repositories } from '../../source-governance/application/repositories.ts';
+import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
 import {
   type BuildKind,
   buildProgress,
@@ -133,7 +133,7 @@ export class Builds {
   readonly #logger = new Logger(Builds.name);
   readonly #database: TenantDatabase;
   readonly #catalog: ApplicationCatalog;
-  readonly #repositories: Repositories;
+  readonly #repositories: RepositoryLookup;
   readonly #source: SourceHost;
   readonly #registry: ImageRegistry;
   readonly #pipelines: PipelineHost;
@@ -143,7 +143,7 @@ export class Builds {
   constructor(
     database: TenantDatabase,
     catalog: ApplicationCatalog,
-    repositories: Repositories,
+    repositories: RepositoryLookup,
     source: SourceHost,
     registry: ImageRegistry,
     pipelines: PipelineHost,
@@ -339,6 +339,31 @@ export class Builds {
         [applicationId],
       );
       return rows.map(toView);
+    });
+  }
+
+  /** The status of each build, for other modules, such as releases. Unknown IDs are left out. */
+  async statuses(buildIds: readonly string[]): Promise<Map<string, BuildStatus>> {
+    if (buildIds.length === 0) {
+      return new Map();
+    }
+    return this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query<{ id: string; status: BuildStatus }>(
+        'SELECT id, status FROM builds.builds WHERE id = ANY($1)',
+        [buildIds],
+      );
+      return new Map(rows.map((row) => [row.id, row.status]));
+    });
+  }
+
+  /** Several builds by ID, for other modules, such as deployments. Unknown IDs are left out. */
+  async many(buildIds: readonly string[]): Promise<Map<string, BuildView>> {
+    if (buildIds.length === 0) {
+      return new Map();
+    }
+    return this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query<BuildRow>('SELECT * FROM builds.builds WHERE id = ANY($1)', [buildIds]);
+      return new Map(rows.map((row) => [row.id, toView(row)]));
     });
   }
 

@@ -1,11 +1,14 @@
-import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
+import { createDomainEvent, currentCompanyId, describeError } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { BlueprintLibrary } from '../../blueprints/infrastructure/blueprint-library.ts';
+import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
 import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
-import { CatalogError } from '../../catalog/domain/errors.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
+import type { CompanyDirectory, CompanyRecord } from '../../tenancy/application/company-directory.ts';
+import { SourceError } from '../domain/errors.ts';
+import type { RepositoryCreatedPayload, RepositoryRequestedPayload } from '../domain/events.ts';
 import { GIT_FLOW, WEBHOOK_EVENTS } from '../domain/git-flow.ts';
 import { PermanentSourceError, type RepositorySpec, type SourceHost } from './ports.ts';
+import type { RepositoryLocation, RepositoryLookup } from './repository-lookup.ts';
 
 /**
  * The version of the rules a repository gets. Raise it when the rules change, and
@@ -53,21 +56,24 @@ export interface RepositoriesOptions {
  * Creates each application's repository from its blueprint, with Git Flow branches and
  * rules. Every step is safe to repeat, so a retry carries on where the last one stopped.
  */
-export class Repositories {
+export class Repositories implements RepositoryLookup {
   readonly #database: TenantDatabase;
+  readonly #companies: CompanyDirectory;
   readonly #host: SourceHost;
   readonly #catalog: ApplicationCatalog;
-  readonly #blueprints: BlueprintLibrary;
+  readonly #blueprints: BlueprintCatalog;
   readonly #options: RepositoriesOptions;
 
   constructor(
     database: TenantDatabase,
+    companies: CompanyDirectory,
     host: SourceHost,
     catalog: ApplicationCatalog,
-    blueprints: BlueprintLibrary,
+    blueprints: BlueprintCatalog,
     options: RepositoriesOptions,
   ) {
     this.#database = database;
+    this.#companies = companies;
     this.#host = host;
     this.#catalog = catalog;
     this.#blueprints = blueprints;
@@ -82,6 +88,14 @@ export class Repositories {
     });
   }
 
+  async find(applicationId: string): Promise<RepositoryLocation | null> {
+    return this.#locate('application_id = $1', [applicationId]);
+  }
+
+  async findByName(organization: string, name: string): Promise<RepositoryLocation | null> {
+    return this.#locate('organization = $1 AND name = $2', [organization, name]);
+  }
+
   /**
    * Asks for a repository to be created, or tried again after it failed. Applications
    * registered before repositories existed need this once.
@@ -89,19 +103,19 @@ export class Repositories {
   async request(actor: Principal, applicationId: unknown): Promise<void> {
     const application = await this.#catalog.get(applicationId);
     if (application.status === 'archived') {
-      throw new CatalogError('conflict', 'Restore the application first.');
+      throw new SourceError('conflict', 'Restore the application first.');
     }
     await this.#database.transaction(async (tx) => {
       const row = await lockRow(tx, application.id);
       if (row?.status === 'ready') {
-        throw new CatalogError('conflict', 'This application already has a repository.');
+        throw new SourceError('conflict', 'This application already has a repository.');
       }
       if (row?.status === 'creating') {
         return;
       }
-      await upsertCreating(tx, application.id, await organizationOf(tx), application.slug);
+      await upsertCreating(tx, application.id, (await this.#currentCompany()).slug, application.slug);
       await appendToOutbox(tx, [
-        createDomainEvent({
+        createDomainEvent<'RepositoryRequested', RepositoryRequestedPayload>({
           eventType: 'RepositoryRequested',
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -115,7 +129,7 @@ export class Repositories {
   async provision(applicationId: string): Promise<void> {
     const application = await this.#catalog.get(applicationId);
     const failure = await this.#database.transaction(async (tx) => {
-      const company = await companyOf(tx);
+      const company = await this.#currentCompany();
       let row = await lockRow(tx, applicationId);
       if (row?.status === 'ready') {
         return null;
@@ -133,7 +147,11 @@ export class Repositories {
         let blueprintKey = row.blueprint_key;
         let blueprintVersion = row.blueprint_version;
         if (blueprintKey === null || blueprintVersion === null) {
-          const blueprint = this.#blueprints.latestForType(application.type.key);
+          // The newest version of the blueprint chosen when the application was registered.
+          const blueprint =
+            application.blueprint === null
+              ? this.#blueprints.latestForType(application.type.key)
+              : this.#blueprints.latestOf(application.blueprint.key);
           if (blueprint === null) {
             throw new PermanentSourceError(`No blueprint exists for the ${application.type.name} type.`);
           }
@@ -167,7 +185,7 @@ export class Repositories {
           [applicationId, repository.id, POLICY_VERSION],
         );
         await appendToOutbox(tx, [
-          createDomainEvent({
+          createDomainEvent<'RepositoryCreated', RepositoryCreatedPayload>({
             eventType: 'RepositoryCreated',
             companyId: currentCompanyId(),
             payload: {
@@ -181,7 +199,7 @@ export class Repositories {
         ]);
         return null;
       } catch (error) {
-        const reason = describe(error);
+        const reason = describeError(error);
         const attempts = row.attempts + 1;
         const failed = error instanceof PermanentSourceError || attempts >= this.#options.maxAttempts;
         await tx.query(
@@ -246,13 +264,8 @@ export class Repositories {
 
   /** Where an application's repository is, for other modules. Null until it's ready. */
   async locate(applicationId: string): Promise<RepositorySpec | null> {
-    const row = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RepositoryRow>('SELECT * FROM source.repositories WHERE application_id = $1', [
-        applicationId,
-      ]);
-      return rows[0];
-    });
-    return row?.status === 'ready' ? { organization: row.organization, name: row.name, applicationId } : null;
+    const found = await this.find(applicationId);
+    return found?.status === 'ready' ? { organization: found.organization, name: found.name, applicationId } : null;
   }
 
   async #applyPolicy(spec: RepositorySpec): Promise<void> {
@@ -273,6 +286,30 @@ export class Repositories {
       return;
     }
     await this.#host.setArchived({ organization: row.organization, name: row.name, applicationId }, archived);
+  }
+
+  async #locate(where: string, values: readonly string[]): Promise<RepositoryLocation | null> {
+    return this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query<RepositoryRow>(`SELECT * FROM source.repositories WHERE ${where}`, [...values]);
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : {
+            applicationId: row.application_id,
+            organization: row.organization,
+            name: row.name,
+            status: row.status,
+            blueprint:
+              row.blueprint_key !== null && row.blueprint_version !== null
+                ? { key: row.blueprint_key, version: row.blueprint_version }
+                : null,
+          };
+    });
+  }
+
+  /** The company the work runs for. Its context is only ever set for a company that exists. */
+  async #currentCompany(): Promise<CompanyRecord> {
+    return (await this.#companies.find(currentCompanyId()))!;
   }
 
   #toView(row: RepositoryRow): RepositoryView {
@@ -308,20 +345,3 @@ async function upsertCreating(tx: TenantTransaction, applicationId: string, orga
   );
 }
 
-async function companyOf(tx: TenantTransaction): Promise<{ slug: string; status: string }> {
-  const { rows } = await tx.query<{ slug: string; status: string }>(
-    'SELECT slug, status FROM tenancy.companies WHERE id = $1',
-    [currentCompanyId()],
-  );
-  return rows[0]!;
-}
-
-async function organizationOf(tx: TenantTransaction): Promise<string> {
-  return (await companyOf(tx)).slug;
-}
-
-/** Error text from other tools is kept short, because people see it. */
-function describe(error: unknown): string {
-  const message = error instanceof Error ? error.message : 'Unknown error';
-  return message.slice(0, 300);
-}

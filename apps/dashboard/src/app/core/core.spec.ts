@@ -7,7 +7,7 @@ import { firstValueFrom } from 'rxjs';
 import { COMPANY_B, sampleUser, settle } from '../testing';
 import { errorMessage } from './api-error';
 import { BrowserNavigation } from './browser-navigation';
-import { authGuard, permissionGuard } from './guards';
+import { authGuard, companyGuard, permissionGuard } from './guards';
 import { permissionDescription, roleName } from './labels';
 import { PendingInvitation, SESSION_STORAGE } from './pending-invitation';
 import { sessionExpiredInterceptor } from './session-expired.interceptor';
@@ -149,6 +149,22 @@ describe('core', () => {
     it('redirects a user without the permission', async () => {
       const result = runGuard(permissionGuard('companies:manage'));
       answerMe(sampleUser());
+
+      expect(TestBed.inject(Router).serializeUrl((await result) as UrlTree)).toBe('/not-allowed');
+    });
+  });
+
+  describe('companyGuard', () => {
+    it('allows a user who acts for a company', async () => {
+      const result = runGuard(companyGuard);
+      answerMe(sampleUser());
+
+      await expect(result).resolves.toBe(true);
+    });
+
+    it('redirects a user with no company', async () => {
+      const result = runGuard(companyGuard);
+      answerMe(sampleUser({ companyId: null, companyName: null, role: null, memberships: [] }));
 
       expect(TestBed.inject(Router).serializeUrl((await result) as UrlTree)).toBe('/not-allowed');
     });

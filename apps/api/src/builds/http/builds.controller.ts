@@ -1,16 +1,16 @@
 import { Body, Controller, Get, Header, Inject, Param, Post, Req } from '@nestjs/common';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { Repositories } from '../../source-governance/application/repositories.ts';
+import { REPOSITORY_LOOKUP, type RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
 import { Builds } from '../application/builds.ts';
 
 /** Every member can see builds and versions. Users without a company are refused. */
 @Controller('company')
 export class BuildsController {
   readonly #builds: Builds;
-  readonly #repositories: Repositories;
+  readonly #repositories: RepositoryLookup;
 
-  constructor(@Inject(Builds) builds: Builds, @Inject(Repositories) repositories: Repositories) {
+  constructor(@Inject(Builds) builds: Builds, @Inject(REPOSITORY_LOOKUP) repositories: RepositoryLookup) {
     this.#builds = builds;
     this.#repositories = repositories;
   }

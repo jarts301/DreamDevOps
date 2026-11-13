@@ -5,7 +5,7 @@ import type { Builds } from '../../builds/application/builds.ts';
 import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import type { RepositorySpec, SourceHost } from '../../source-governance/application/ports.ts';
-import type { Repositories } from '../../source-governance/application/repositories.ts';
+import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
 import { RC_IMAGE_CHECK } from '../../source-governance/domain/git-flow.ts';
 import { ReleaseError } from '../domain/errors.ts';
 import {
@@ -78,14 +78,14 @@ export interface FinishedBuild {
 export class Releases {
   readonly #database: TenantDatabase;
   readonly #catalog: ApplicationCatalog;
-  readonly #repositories: Repositories;
+  readonly #repositories: RepositoryLookup;
   readonly #source: SourceHost;
   readonly #builds: Builds;
 
   constructor(
     database: TenantDatabase,
     catalog: ApplicationCatalog,
-    repositories: Repositories,
+    repositories: RepositoryLookup,
     source: SourceHost,
     builds: Builds,
   ) {
@@ -98,57 +98,58 @@ export class Releases {
 
   async list(applicationIdValue: unknown): Promise<{ releases: ReleaseView[]; suggestions: Record<ReleaseKind, string> }> {
     const application = await this.#catalog.get(applicationIdValue);
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<ReleaseRow & { final_build_status: string | null }>(
-        `SELECT r.*, b.status AS final_build_status
-         FROM releases.releases r
-         LEFT JOIN builds.builds b ON b.id = r.final_build_id
-         WHERE r.application_id = $1
-         ORDER BY r.created_at DESC`,
+    const { rows, candidates } = await this.#database.transaction(async (tx) => {
+      const { rows: releases } = await tx.query<ReleaseRow>(
+        'SELECT * FROM releases.releases WHERE application_id = $1 ORDER BY created_at DESC',
         [application.id],
       );
-      const { rows: candidates } = await tx.query<{
+      const { rows: found } = await tx.query<{
         release_id: string;
         number: number;
         commit_sha: string;
         tag: string;
         build_id: string | null;
-        build_status: string | null;
       }>(
-        `SELECT c.*, b.status AS build_status
-         FROM releases.candidates c
+        `SELECT c.* FROM releases.candidates c
          JOIN releases.releases r ON r.id = c.release_id
-         LEFT JOIN builds.builds b ON b.id = c.build_id
          WHERE r.application_id = $1
          ORDER BY c.number DESC`,
         [application.id],
       );
-      return {
-        releases: rows.map((row) => ({
-          id: row.id,
-          kind: row.kind,
-          version: row.version,
-          branch: row.branch,
-          status: row.status,
-          candidates: candidates
-            .filter((candidate) => candidate.release_id === row.id)
-            .map((candidate) => ({
-              number: candidate.number,
-              commit: candidate.commit_sha,
-              tag: candidate.tag,
-              buildId: candidate.build_id,
-              buildStatus: candidate.build_status,
-            })),
-          mergeBackPullRequest: row.merge_back_pull_request,
-          finalBuildId: row.final_build_id,
-          finalBuildStatus: row.final_build_status,
-          createdAt: row.created_at.toISOString(),
-          mergedAt: row.merged_at?.toISOString() ?? null,
-          publishedAt: row.published_at?.toISOString() ?? null,
-        })),
-        suggestions: suggestVersions(rows),
-      };
+      return { rows: releases, candidates: found };
     });
+    // Build statuses come from Builds, which owns them.
+    const statuses = await this.#builds.statuses(
+      [...rows.map((row) => row.final_build_id), ...candidates.map((candidate) => candidate.build_id)].filter(
+        (id): id is string => id !== null,
+      ),
+    );
+    const statusOf = (id: string | null) => (id === null ? null : (statuses.get(id) ?? null));
+    return {
+      releases: rows.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        version: row.version,
+        branch: row.branch,
+        status: row.status,
+        candidates: candidates
+          .filter((candidate) => candidate.release_id === row.id)
+          .map((candidate) => ({
+            number: candidate.number,
+            commit: candidate.commit_sha,
+            tag: candidate.tag,
+            buildId: candidate.build_id,
+            buildStatus: statusOf(candidate.build_id),
+          })),
+        mergeBackPullRequest: row.merge_back_pull_request,
+        finalBuildId: row.final_build_id,
+        finalBuildStatus: statusOf(row.final_build_id),
+        createdAt: row.created_at.toISOString(),
+        mergedAt: row.merged_at?.toISOString() ?? null,
+        publishedAt: row.published_at?.toISOString() ?? null,
+      })),
+      suggestions: suggestVersions(rows),
+    };
   }
 
   /** A Tech Lead starts a release from develop, or a hotfix from main. */

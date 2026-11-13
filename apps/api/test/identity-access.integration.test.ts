@@ -14,6 +14,7 @@ import { FakeIdentityProvider } from './fakes.ts';
 import { describeSessionStoreContract } from './session-store-contract.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { type Agent, signIn as signInAs } from './support/integration.ts';
 
 @Controller('sample')
 class SampleController {
@@ -59,14 +60,7 @@ let appPool: pg.Pool;
 let ownerPool: pg.Pool;
 let app: INestApplication;
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
-type Agent = Awaited<ReturnType<typeof signIn>>;
+const signIn = (user: string) => signInAs(app, user);
 
 let companyCounter = 0;
 const newCompany = () => {

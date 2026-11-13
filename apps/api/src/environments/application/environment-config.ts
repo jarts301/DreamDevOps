@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
+import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import type { EnvironmentKind } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
@@ -63,9 +64,11 @@ interface Row {
 export class EnvironmentConfig {
   readonly #database: TenantDatabase;
   readonly #secrets: SecretStore;
+  readonly #applications: ApplicationCatalog;
 
-  constructor(database: TenantDatabase, secrets: SecretStore) {
+  constructor(database: TenantDatabase, secrets: SecretStore, applications: ApplicationCatalog) {
     this.#database = database;
+    this.#applications = applications;
     this.#secrets = secrets;
   }
 
@@ -73,11 +76,11 @@ export class EnvironmentConfig {
   async view(environmentValue: unknown, applicationValue: unknown): Promise<EnvironmentConfigView> {
     const environmentId = parseId(environmentValue, 'environment');
     const applicationId = applicationValue === undefined || applicationValue === '' ? null : parseId(applicationValue, 'application');
+    if (applicationId !== null) {
+      await this.#applications.get(applicationId);
+    }
     return this.#database.transaction(async (tx) => {
       await findEnvironment(tx, environmentId);
-      if (applicationId !== null) {
-        await findApplication(tx, applicationId);
-      }
       const scoped = (table: 'variables' | 'secrets', columns: string) =>
         tx.query<Row>(
           `SELECT ${columns}, application_id, updated_at, updated_by FROM environments.${table}
@@ -226,10 +229,10 @@ export class EnvironmentConfig {
   ): Promise<void> {
     const environmentId = parseId(environmentValue, 'environment');
     const applicationId = applicationValue === undefined || applicationValue === null || applicationValue === '' ? null : parseId(applicationValue, 'application');
+    const application = applicationId === null ? null : await this.#applications.get(applicationId);
     await this.#database.transaction(async (tx) => {
       const environment = await findEnvironment(tx, environmentId);
       assertMayManage(actor, environment.kind);
-      const application = applicationId === null ? null : await findApplication(tx, applicationId);
       const { eventType, name } = await work(tx, environmentId, applicationId, application?.slug ?? null);
       // Only names: values never enter the history.
       await appendToOutbox(tx, [
@@ -292,13 +295,6 @@ async function findEnvironment(tx: TenantTransaction, id: string): Promise<{ nam
   return rows[0];
 }
 
-async function findApplication(tx: TenantTransaction, id: string): Promise<{ slug: string }> {
-  const { rows } = await tx.query<{ slug: string }>('SELECT slug FROM catalog.applications WHERE id = $1', [id]);
-  if (rows[0] === undefined) {
-    throw new EnvironmentError('not-found', 'This application does not exist.');
-  }
-  return rows[0];
-}
 
 async function assertNotSecret(tx: TenantTransaction, environmentId: string, applicationId: string | null, name: string): Promise<void> {
   const { rows } = await tx.query(

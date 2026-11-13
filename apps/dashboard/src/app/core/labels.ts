@@ -11,7 +11,9 @@ const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'audit:read-own': 'Read your own audit history',
   'editions:manage': "Set each company's edition",
   'company-users:manage': 'Manage company users and roles',
-  'targets:connect': 'Connect deployment targets',
+  'targets:connect': 'Connect hosting targets, where environments run',
+  'environments:manage': 'Manage environments',
+  'environments-production:manage': 'Change production environments, with their name typed and a reason',
   'applications:create': 'Register and manage applications',
   'code:push': 'Push code and open pull requests',
   'pull-requests:approve': 'Approve pull requests',
@@ -22,6 +24,7 @@ const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'dashboards:view': 'View dashboards and logs',
   'audit:read': 'Read the audit log',
   'notifications:manage': 'Manage chat notifications',
+  'alerts:manage': 'Manage alerts on metrics, and whom they email',
 };
 
 export function roleName(role: string | null): string {

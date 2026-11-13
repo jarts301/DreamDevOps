@@ -4,17 +4,24 @@ import { firstValueFrom } from 'rxjs';
 
 export type ApplicationStatus = 'active' | 'archived';
 
+/** A blueprint an application can start from: a language and a framework, such as TypeScript and React. */
+export interface BlueprintChoice {
+  readonly key: string;
+  readonly version: string;
+  readonly name: string;
+  readonly description: string;
+  readonly language: string;
+  readonly framework: string;
+}
+
 export interface ApplicationType {
   readonly key: string;
   readonly name: string;
   readonly description: string;
-  readonly blueprint: {
-    readonly key: string;
-    readonly version: string;
-    readonly name: string;
-    readonly language: string;
-    readonly framework: string;
-  };
+  /** The blueprint applications of this type start from unless another is chosen. */
+  readonly blueprint: BlueprintChoice;
+  /** Every blueprint applications of this type can start from, by language and name. */
+  readonly blueprints: readonly BlueprintChoice[];
 }
 
 export type RepositoryStatus = 'creating' | 'ready' | 'failed';
@@ -62,6 +69,8 @@ export interface Application {
   readonly name: string;
   readonly slug: string;
   readonly type: { readonly key: string; readonly name: string };
+  /** The blueprint it started from, chosen when it was registered. */
+  readonly blueprint: { readonly key: string; readonly name: string; readonly language: string; readonly framework: string } | null;
   readonly description: string;
   readonly status: ApplicationStatus;
   readonly createdAt: string;
@@ -81,7 +90,7 @@ export class CatalogApi {
     return firstValueFrom(this.#http.get<Application[]>('/api/v1/company/applications', { params: { status } }));
   }
 
-  register(input: { name: string; type: string; description: string }): Promise<Application> {
+  register(input: { name: string; type: string; blueprint: string; description: string }): Promise<Application> {
     return firstValueFrom(this.#http.post<Application>('/api/v1/company/applications', input));
   }
 

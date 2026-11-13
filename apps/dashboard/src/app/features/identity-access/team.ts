@@ -1,7 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { errorMessage } from '../../core/api-error';
+import { PageActivity } from '../../core/page-activity';
 import { roleName } from '../../core/labels';
 import { SessionService } from '../../core/session.service';
 import {
@@ -162,8 +162,9 @@ export class Team implements OnInit {
   protected readonly members = signal<Member[]>([]);
   protected readonly invitations = signal<Invitation[]>([]);
   protected readonly loading = signal(true);
-  protected readonly working = signal(false);
-  protected readonly error = signal<string | null>(null);
+  readonly #activity = new PageActivity('no-notice');
+  protected readonly working = this.#activity.working;
+  protected readonly error = this.#activity.error;
   protected readonly removing = signal<string | null>(null);
   protected readonly created = signal<{ invitation: CreatedInvitation; email: string } | null>(null);
   protected readonly currentUserId = computed(() => this.#session.user()?.userId);
@@ -174,7 +175,7 @@ export class Team implements OnInit {
   });
 
   async ngOnInit(): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       this.roles.set(await this.#api.roles());
       await this.#refresh();
     });
@@ -184,7 +185,7 @@ export class Team implements OnInit {
   protected async invite(): Promise<void> {
     const { email, role } = this.inviteForm.getRawValue();
     this.created.set(null);
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       const invitation = await this.#api.invite(email, role);
       this.created.set({ invitation, email });
       this.inviteForm.reset();
@@ -194,7 +195,7 @@ export class Team implements OnInit {
 
   protected async changeRole(member: Member, event: Event): Promise<void> {
     const select = event.target as HTMLSelectElement;
-    const succeeded = await this.#attempt(async () => {
+    const succeeded = await this.#activity.run(async () => {
       await this.#api.changeRole(member.userId, select.value);
       await this.#refresh();
       if (member.userId === this.currentUserId()) {
@@ -208,7 +209,7 @@ export class Team implements OnInit {
   }
 
   protected async remove(member: Member): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.removeMember(member.userId);
       this.removing.set(null);
       await this.#refresh();
@@ -216,7 +217,7 @@ export class Team implements OnInit {
   }
 
   protected async revoke(invitation: Invitation): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.revokeInvitation(invitation.id);
       await this.#refresh();
     });
@@ -226,19 +227,5 @@ export class Team implements OnInit {
     const [members, invitations] = await Promise.all([this.#api.members(), this.#api.invitations()]);
     this.members.set(members);
     this.invitations.set(invitations);
-  }
-
-  async #attempt(work: () => Promise<void>): Promise<boolean> {
-    this.error.set(null);
-    this.working.set(true);
-    try {
-      await work();
-      return true;
-    } catch (error) {
-      this.error.set(errorMessage(error));
-      return false;
-    } finally {
-      this.working.set(false);
-    }
   }
 }

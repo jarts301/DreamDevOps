@@ -8,7 +8,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from '../src/app.module.ts';
 import { BACKGROUND_PROCESSING, NoBackgroundProcessing } from '../src/background/background-processing.ts';
 import type { AppConfig } from '../src/config/app-config.ts';
-import { configureApp } from '../src/configure-app.ts';
+import { APP_CREATION_OPTIONS, configureApp } from '../src/configure-app.ts';
 import { IDENTITY_PROVIDER, USER_DIRECTORY } from '../src/identity-access/application/ports.ts';
 import { SESSION_STORE } from '../src/session/session-store.ts';
 import { DATABASE_POOL } from '../src/tokens.ts';
@@ -116,7 +116,7 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
         ...(options.overrides ?? []),
       ],
     }),
-    { bodyParser: false, rawBody: true, logger: false },
+    { ...APP_CREATION_OPTIONS, logger: false },
   );
   configureApp(app, config);
   await app.init();

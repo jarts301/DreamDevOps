@@ -33,6 +33,16 @@ process.env.RELAY_DATABASE_URL ??= roleUrl('relay', 'DREAMDEVOPS_DB_RELAY_PASSWO
 process.env.JOBS_DATABASE_URL ??= roleUrl('jobs', 'DREAMDEVOPS_DB_JOBS_PASSWORD');
 process.env.FORGEJO_URL ??= `http://localhost:${process.env.FORGEJO_HTTP_PORT ?? '3000'}`;
 process.env.FORGEJO_BOT_USERNAME ??= 'dreamdevops-bot';
+// Forgejo runs in Docker, so it reaches the API on this machine through Docker's name for it.
+process.env.FORGEJO_WEBHOOK_URL ??= `http://host.docker.internal:${apiPort}/api/v1/hooks/forgejo`;
+// Applications send their metrics to Prometheus, which they reach through Docker's name
+// for this machine, and the API reads them back for the Monitoring page.
+const prometheusPort = process.env.PROMETHEUS_PORT ?? '9090';
+process.env.PROMETHEUS_URL ??= `http://localhost:${prometheusPort}`;
+process.env.APP_METRICS_OTLP_ENDPOINT ??= `http://host.docker.internal:${prometheusPort}/api/v1/otlp/v1/metrics`;
+// Traces go to Jaeger the same way, and the API reads them back from its query API.
+process.env.JAEGER_URL ??= `http://localhost:${process.env.JAEGER_PORT ?? '16686'}`;
+process.env.APP_TRACES_OTLP_ENDPOINT ??= `http://host.docker.internal:${process.env.JAEGER_OTLP_PORT ?? '4318'}/v1/traces`;
 // Mailpit catches every email locally and sends nothing out.
 process.env.SMTP_HOST ??= 'localhost';
 process.env.SMTP_PORT ??= process.env.MAILPIT_SMTP_PORT ?? '1025';

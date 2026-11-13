@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { deadLetterQueueName } from '../application/ports.ts';
-import type { Job, JobHandler, JobQueue, QueueOptions } from '../application/ports.ts';
+import type { Job, JobHandler, JobQueue, QueueOptions, WorkOptions } from '../application/ports.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -10,6 +10,7 @@ export class InMemoryJobQueue implements JobQueue {
   readonly #handlers = new Map<string, JobHandler>();
   readonly #seenIds = new Set<string>();
   readonly #deadLetters = new Map<string, Job[]>();
+  readonly #schedules = new Map<string, { readonly cron: string; readonly data: object }>();
   #pending: Promise<void> = Promise.resolve();
 
   async createQueue(queue: string, options: QueueOptions = {}): Promise<void> {
@@ -31,14 +32,41 @@ export class InMemoryJobQueue implements JobQueue {
     return id;
   }
 
-  async work(queue: string, handler: JobHandler): Promise<void> {
+  /** Runs jobs one at a time, in the order they were sent, whatever the concurrency. */
+  async work(queue: string, handler: JobHandler, _options?: WorkOptions): Promise<void> {
     this.#assertQueueExists(queue);
     this.#handlers.set(queue, handler);
   }
 
-  /** Waits for all jobs sent so far to finish, including retries. */
+  /** Keeps the schedule. Nothing runs on its own: tests call runSchedules, as if its time came. */
+  async schedule(queue: string, cron: string, data: object = {}): Promise<void> {
+    this.#assertQueueExists(queue);
+    if (cron.trim().split(/\s+/).length !== 5) {
+      throw new Error(`"${cron}" isn't a cron expression of five fields.`);
+    }
+    this.#schedules.set(queue, { cron, data });
+  }
+
+  /** Each queue's schedule, by queue. */
+  schedulesOf(): ReadonlyMap<string, { readonly cron: string; readonly data: object }> {
+    return this.#schedules;
+  }
+
+  /** Sends one job for every schedule, as when their time comes, and waits for them to finish. */
+  async runSchedules(): Promise<void> {
+    for (const [queue, { data }] of this.#schedules) {
+      await this.send(queue, data);
+    }
+    await this.drain();
+  }
+
+  /** Waits for all jobs sent so far to finish, including retries, and any jobs they send. */
   async drain(): Promise<void> {
-    await this.#pending;
+    let pending: Promise<void>;
+    do {
+      pending = this.#pending;
+      await pending;
+    } while (pending !== this.#pending);
   }
 
   deadLettersOf(queue: string): readonly Job[] {

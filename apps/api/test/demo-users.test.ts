@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { DEMO_USERS } from '../src/demo/demo-company.ts';
-import { loadConfig } from '../src/config/app-config.ts';
 
 const KEYCLOAK_INIT = readFileSync(new URL('../../../infra/local/ops/keycloak-init.sh', import.meta.url), 'utf8');
 

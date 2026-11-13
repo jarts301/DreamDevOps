@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
-import { errorMessage } from '../../core/api-error';
+import { PageActivity } from '../../core/page-activity';
 
 export interface NotificationRule {
   readonly id: string;
@@ -153,10 +153,11 @@ export class Notifications implements OnInit {
   protected readonly rules = signal<NotificationRule[]>([]);
   protected readonly eventTypes = signal<EventType[]>([]);
   protected readonly chosen = signal<ReadonlySet<string>>(new Set());
-  protected readonly working = signal(false);
+  readonly #activity = new PageActivity('clear-when-starting');
+  protected readonly working = this.#activity.working;
   protected readonly deleting = signal<string | null>(null);
-  protected readonly error = signal<string | null>(null);
-  protected readonly notice = signal<string | null>(null);
+  protected readonly error = this.#activity.error;
+  protected readonly notice = this.#activity.notice;
 
   protected readonly form = this.#forms.group({
     name: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(80)]],
@@ -165,7 +166,7 @@ export class Notifications implements OnInit {
   });
 
   async ngOnInit(): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       this.eventTypes.set(await firstValueFrom(this.#http.get<EventType[]>(`${BASE}/event-types`)));
       await this.#refresh();
     });
@@ -182,7 +183,7 @@ export class Notifications implements OnInit {
   }
 
   protected async create(): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await firstValueFrom(this.#http.post(BASE, { ...this.form.getRawValue(), eventTypes: [...this.chosen()] }));
       this.form.reset();
       this.chosen.set(new Set());
@@ -192,7 +193,7 @@ export class Notifications implements OnInit {
   }
 
   protected async test(rule: NotificationRule): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       const result = await firstValueFrom(
         this.#http.post<{ delivered: boolean; error: string | null }>(`${BASE}/${rule.id}/test`, {}),
       );
@@ -206,14 +207,14 @@ export class Notifications implements OnInit {
   }
 
   protected async toggle(rule: NotificationRule): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await firstValueFrom(this.#http.patch(`${BASE}/${rule.id}`, { enabled: !rule.enabled }));
       await this.#refresh();
     });
   }
 
   protected async remove(rule: NotificationRule): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await firstValueFrom(this.#http.delete(`${BASE}/${rule.id}`));
       this.deleting.set(null);
       await this.#refresh();
@@ -222,18 +223,5 @@ export class Notifications implements OnInit {
 
   async #refresh(): Promise<void> {
     this.rules.set(await firstValueFrom(this.#http.get<NotificationRule[]>(BASE)));
-  }
-
-  async #attempt(work: () => Promise<void>): Promise<void> {
-    this.error.set(null);
-    this.notice.set(null);
-    this.working.set(true);
-    try {
-      await work();
-    } catch (error) {
-      this.error.set(errorMessage(error));
-    } finally {
-      this.working.set(false);
-    }
   }
 }

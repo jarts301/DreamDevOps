@@ -1,4 +1,4 @@
-import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
+import { createDomainEvent, currentCompanyId, describeError } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { CompanyStatus } from '../domain/company.ts';
 import { type GitProvider, PermanentProvisioningError } from './ports.ts';
@@ -56,9 +56,9 @@ export class ProvisioningSaga {
         });
         await recordStep(tx, { status: 'ready', externalId, error: null });
       } catch (error) {
-        const attempts = await recordStep(tx, { status: 'failed', externalId: null, error: describe(error) });
+        const attempts = await recordStep(tx, { status: 'failed', externalId: null, error: describeError(error) });
         if (error instanceof PermanentProvisioningError || attempts >= this.#options.maxAttempts) {
-          await setStatus(tx, company, 'provisioning-failed', 'CompanyProvisioningFailed', { reason: describe(error) });
+          await setStatus(tx, company, 'provisioning-failed', 'CompanyProvisioningFailed', { reason: describeError(error) });
           return null;
         }
         return error;
@@ -109,10 +109,4 @@ async function setStatus(
     status,
   ]);
   await appendToOutbox(tx, [createDomainEvent({ eventType, companyId: currentCompanyId(), payload })]);
-}
-
-/** Error text from other tools is kept short, because platform admins see it. */
-function describe(error: unknown): string {
-  const message = error instanceof Error ? error.message : 'Unknown error';
-  return message.slice(0, 300);
 }

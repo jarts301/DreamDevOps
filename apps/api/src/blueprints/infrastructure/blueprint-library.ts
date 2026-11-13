@@ -11,6 +11,7 @@ import {
   type ScaffoldValues,
   unknownPlaceholders,
 } from '../domain/blueprint.ts';
+import type { BlueprintCatalog } from '../application/blueprint-catalog.ts';
 
 /** The file that lists every published version and its checksum. */
 export const PUBLISHED_FILE = 'published.json';
@@ -26,7 +27,7 @@ export interface Blueprint {
  * blueprint.json and a files folder with the scaffold. A version must be listed in
  * published.json with its checksum, so a published version can never change unnoticed.
  */
-export class BlueprintLibrary {
+export class BlueprintLibrary implements BlueprintCatalog {
   readonly #blueprints: readonly Blueprint[];
 
   private constructor(blueprints: readonly Blueprint[]) {
@@ -79,7 +80,7 @@ export class BlueprintLibrary {
       .sort((left, right) => left.key.localeCompare(right.key) || compareVersions(right.version, left.version));
   }
 
-  /** The newest blueprint for an application type, or null if none exists. */
+  /** An application type's first blueprint by key, for a type whose default is named nowhere. */
   latestForType(applicationType: string): BlueprintManifest | null {
     return (
       this.latest()
@@ -88,9 +89,21 @@ export class BlueprintLibrary {
     );
   }
 
+  /** Every blueprint of an application type, in its newest version, by language and name. */
+  forType(applicationType: string): BlueprintManifest[] {
+    return this.latest()
+      .filter((manifest) => manifest.applicationType === applicationType)
+      .sort((left, right) => left.language.localeCompare(right.language) || left.name.localeCompare(right.name));
+  }
+
   /** One version's manifest, or null if this platform doesn't have it. */
   manifest(key: string, version: string): BlueprintManifest | null {
     return this.#blueprints.find(({ manifest }) => manifest.key === key && manifest.version === version)?.manifest ?? null;
+  }
+
+  /** The newest version of one blueprint, or null if there's no such blueprint. */
+  latestOf(key: string): BlueprintManifest | null {
+    return this.latest().find((manifest) => manifest.key === key) ?? null;
   }
 
   /** The scaffold of one version, filled in for an application. */

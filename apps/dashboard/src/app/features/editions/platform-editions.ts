@@ -1,6 +1,6 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, type OnInit, signal } from '@angular/core';
-import { errorMessage } from '../../core/api-error';
+import { PageActivity } from '../../core/page-activity';
 import { type CompanyEditionRow, type Edition, EDITION_NAMES, EditionsApi, type EditionsOverview } from './editions.api';
 
 /** Each company's edition. Platform admins see names and editions, never company data. */
@@ -90,12 +90,13 @@ export class PlatformEditions implements OnInit {
 
   protected readonly editions: readonly Edition[] = ['community', 'commercial'];
   protected readonly data = signal<EditionsOverview | null>(null);
-  protected readonly working = signal(false);
-  protected readonly error = signal<string | null>(null);
-  protected readonly notice = signal<string | null>(null);
+  readonly #activity = new PageActivity('clear-when-starting');
+  protected readonly working = this.#activity.working;
+  protected readonly error = this.#activity.error;
+  protected readonly notice = this.#activity.notice;
 
   async ngOnInit(): Promise<void> {
-    await this.#attempt(() => this.#refresh());
+    await this.#activity.run(() => this.#refresh());
   }
 
   protected editionName(edition: Edition): string {
@@ -105,7 +106,7 @@ export class PlatformEditions implements OnInit {
   protected async choose(company: CompanyEditionRow, event: Event): Promise<void> {
     const select = event.target as HTMLSelectElement;
     const edition = select.value as Edition;
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       try {
         await this.#api.setEdition(company.companyId, edition);
         this.notice.set(`${company.companyName} now uses the ${EDITION_NAMES[edition]} Edition.`);
@@ -121,18 +122,5 @@ export class PlatformEditions implements OnInit {
 
   async #refresh(): Promise<void> {
     this.data.set(await this.#api.platform());
-  }
-
-  async #attempt(work: () => Promise<void>): Promise<void> {
-    this.error.set(null);
-    this.notice.set(null);
-    this.working.set(true);
-    try {
-      await work();
-    } catch (error) {
-      this.error.set(errorMessage(error));
-    } finally {
-      this.working.set(false);
-    }
   }
 }

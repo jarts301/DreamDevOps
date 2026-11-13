@@ -37,7 +37,10 @@ export default defineConfig({
           // Slow, and needs Docker and the internet, so it runs only on request.
           name: 'scaffolds',
           include: ['test/**/*.scaffold.test.ts'],
-          testTimeout: 900_000,
+          // Compiled services, such as in Rust, build twice: in their pipeline and in their image.
+          testTimeout: 1_800_000,
+          // Cleaning up removes every project's node_modules, and stops the metrics sink.
+          hookTimeout: 120_000,
         },
       },
     ],

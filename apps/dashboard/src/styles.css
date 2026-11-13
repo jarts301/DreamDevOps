@@ -12,6 +12,8 @@
   --color-error-surface: #fbe9e7;
   --color-success-surface: #e6f4ea;
   --color-success: #1e7a3a;
+  /* Orange: what's been normal lately, such as a metric's daily high. */
+  --color-warning: #ea580c;
   --radius: 8px;
 }
 
@@ -29,6 +31,7 @@
     --color-error-surface: #3d1a17;
     --color-success-surface: #17321f;
     --color-success: #7ad79a;
+    --color-warning: #fb923c;
   }
 }
 
@@ -204,6 +207,10 @@ a {
   background: var(--color-success-surface);
 }
 
+.alert-info {
+  border: 1px solid var(--color-primary);
+}
+
 .topbar + .alert {
   margin: 12px 24px;
 }
@@ -261,6 +268,13 @@ textarea {
   cursor: pointer;
 }
 
+/* Links that look like buttons, such as those that open another page. */
+a.button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 .button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -282,6 +296,10 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.form-row + .button-row {
+  margin-top: 16px;
 }
 
 .copy-row {
@@ -354,6 +372,12 @@ th {
   white-space: normal;
 }
 
+/* A step's summary can hold several lines, such as a failed build step's last output. */
+.step-summary {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .inline-form {
   display: flex;
   flex-wrap: wrap;
@@ -369,13 +393,15 @@ th {
   white-space: nowrap;
 }
 
-.status[data-status='active'] {
+.status[data-status='active'],
+.status[data-tone='success'] {
   background: var(--color-success-surface);
 }
 
 .status[data-status='provisioning-failed'],
 .status[data-status='suspended'],
-.status[data-status='target-lost'] {
+.status[data-status='target-lost'],
+.status[data-tone='danger'] {
   background: var(--color-error-surface);
 }
 
@@ -435,6 +461,10 @@ th {
   .step[data-state='running'] .step-marker {
     animation: none;
   }
+}
+
+.status[data-tone='progress'] {
+  border-color: var(--color-primary);
 }
 
 .cell-actions {
@@ -513,4 +543,499 @@ th {
   font-size: 0.8rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Builds: a build's progress through its steps. */
+.build-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.build-row {
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.build-row-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.build-row-header .status {
+  margin-left: 6px;
+}
+
+.build-progress {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.build-progress progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--color-primary);
+}
+
+.build-image {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.pipeline {
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pipeline-step {
+  position: relative;
+  padding: 0 0 14px 28px;
+  border-left: 2px solid var(--color-border);
+  margin-left: 9px;
+}
+
+.pipeline-step:last-child {
+  border-left-color: transparent;
+}
+
+.pipeline-step[data-status='passed'] {
+  border-left-color: var(--color-primary);
+}
+
+.pipeline-step-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.pipeline-symbol {
+  position: absolute;
+  left: -11px;
+  width: 20px;
+  height: 20px;
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  border-radius: 50%;
+  font-size: 0.75rem;
+  line-height: 16px;
+  text-align: center;
+}
+
+.pipeline-step[data-status='passed'] .pipeline-symbol {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.pipeline-step[data-status='failed'] .pipeline-symbol {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.pipeline-step[data-status='running'] .pipeline-symbol {
+  border-color: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pipeline-step[data-status='running'] .pipeline-symbol {
+    animation: pipeline-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes pipeline-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.pipeline-name {
+  font-weight: 600;
+}
+
+.check-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  padding: 2px 0;
+}
+
+.check-symbol {
+  width: 1em;
+  font-weight: 700;
+}
+
+.check-list li[data-outcome='passed'] .check-symbol {
+  color: var(--color-primary);
+}
+
+.check-list li[data-outcome='failed'] .check-symbol {
+  color: var(--color-danger);
+}
+
+.check-detail {
+  flex-basis: 100%;
+  margin: 0 0 0 calc(1em + 6px);
+}
+
+.fact-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+}
+
+.fact-list div {
+  display: contents;
+}
+
+.fact-list dt {
+  color: var(--color-muted);
+}
+
+.fact-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-block {
+  overflow-x: auto;
+  padding: 12px;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.versions-actions {
+  margin-top: 12px;
+}
+
+/* Environments: production is marked so nobody mistakes it for anything else. */
+.status[data-tone='production'] {
+  margin-left: 6px;
+  background: var(--color-error-surface);
+  border-color: var(--color-danger);
+  font-weight: 600;
+}
+
+tr[data-production='true'] > td:first-child {
+  box-shadow: inset 4px 0 0 var(--color-danger);
+}
+
+.production-confirmation {
+  padding: 12px 16px;
+  background: var(--color-error-surface);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+}
+
+.production-confirmation p {
+  margin: 0 0 8px;
+}
+
+.production-confirmation .field {
+  margin-bottom: 8px;
+}
+
+/* Deployments, on the Environments page */
+.deploy-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.deploy-panel:not(.production-confirmation) {
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.deploy-panel p {
+  margin: 0;
+}
+
+.history-row > td {
+  background: var(--color-background);
+}
+
+.deployment-history .build-list {
+  margin: 0;
+}
+
+/* Rows with many actions wrap them in groups, so the table fits. */
+.cell-actions-wrap {
+  min-width: 19rem;
+  white-space: normal;
+}
+
+.cell-actions-wrap .action-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cell-actions-wrap .action-group + .action-group {
+  margin-top: 8px;
+}
+
+.cell-actions-wrap .button + .button {
+  margin-left: 0;
+}
+
+/* Variables and secrets, on the Environments page */
+.variables-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.variables-panel p {
+  margin: 0;
+}
+
+.variables-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.variables-table .variable-value {
+  overflow-wrap: anywhere;
+}
+
+.variables-add {
+  margin-top: 8px;
+}
+
+.variables-add .field {
+  flex: 0 1 14rem;
+}
+
+.variables-add .variables-add-value {
+  flex: 1 1 16rem;
+}
+
+/* Monitoring: the latest values line up, and each metric gets a small chart. */
+.monitoring-table .metric-value {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.monitoring-charts-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.metric-chart {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.metric-chart figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.metric-chart-name {
+  color: var(--color-muted);
+}
+
+.metric-chart-plot {
+  display: block;
+  width: 100%;
+  height: 80px;
+  background: var(--color-background);
+  border-radius: 4px;
+}
+
+.metric-chart-plot polyline {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.metric-chart-empty {
+  margin: 0;
+  padding: 28px 0;
+  text-align: center;
+}
+
+/* Monitoring: logs read like a terminal, newest first, and errors stand out. */
+.card h3 {
+  margin: 20px 0 8px;
+  font-size: 1rem;
+}
+
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.log-lines {
+  max-height: 420px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.log-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.log-time {
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.log-level {
+  min-width: 3.5em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.log-line[data-level='warn'] .log-level,
+.log-line[data-level='error'] .log-level,
+.log-line[data-level='fatal'] .log-level,
+.log-line[data-level='stderr'] .log-level {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.log-message {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-trace {
+  padding: 0 8px;
+  font-size: 0.75rem;
+}
+
+/* Monitoring: a trace is a timeline, each span under the one it's part of. */
+.trace-spans {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-span {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 5em;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.trace-span-track {
+  position: relative;
+  height: 10px;
+  background: var(--color-background);
+  border-radius: 4px;
+}
+
+.trace-span-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  background: var(--color-primary);
+  border-radius: 4px;
+}
+
+.trace-span[data-error='true'] .trace-span-bar {
+  background: var(--color-danger);
+}
+
+.trace-span-duration {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Monitoring: a value close to its container's limit stands out. */
+.cell-note[data-tone='danger'] {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+/* Monitoring: the daily high is an orange dashed line, and values above it say so. */
+.metric-chart-daily-high {
+  stroke: var(--color-warning);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.metric-chart-daily-high-note {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.metric-chart-daily-high-note[data-above] {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.metric-chart-swatch {
+  display: inline-block;
+  width: 14px;
+  vertical-align: middle;
+  border-top: 2px dashed var(--color-warning);
 }

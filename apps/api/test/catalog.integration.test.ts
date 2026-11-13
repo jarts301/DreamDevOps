@@ -1,33 +1,21 @@
 import type { INestApplication } from '@nestjs/common';
 import pg from 'pg';
-import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider } from './fakes.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { type Agent, eventually as waitUntil, signIn as signInAs, unique } from './support/integration.ts';
 
 let database: TestDatabase;
 let ownerPool: pg.Pool;
 let app: INestApplication;
 
-const eventually = (assertion: () => Promise<void> | void) => vi.waitFor(assertion, { timeout: 20_000, interval: 150 });
+const eventually = (assertion: () => Promise<void> | void) => waitUntil(assertion);
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
-type Agent = Awaited<ReturnType<typeof signIn>>;
+const signIn = (user: string) => signInAs(app, user);
 
-let counter = 0;
-const unique = (prefix: string) => {
-  counter += 1;
-  return `${prefix}-${'abcdefghijklmnopqrstuvwxyz'[Math.floor(counter / 26) % 26]}${'abcdefghijklmnopqrstuvwxyz'[counter % 26]}`;
-};
 
 const createCompany = async () => {
   const platformAdmin = await signIn('platform-admin');

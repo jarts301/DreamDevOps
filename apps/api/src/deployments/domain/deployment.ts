@@ -31,7 +31,7 @@ export function isProgressive(strategy: Strategy): boolean {
 
 /** Test environments take feature images only when they accept them; production takes final images only. */
 export function assertAccepts(
-  environment: { readonly name: string; readonly kind: 'test' | 'production'; readonly accepts_feature_images: boolean },
+  environment: { readonly name: string; readonly kind: 'test' | 'production'; readonly acceptsFeatureImages: boolean },
   build: { readonly kind: string; readonly status: string },
 ): void {
   if (build.status !== 'succeeded') {
@@ -40,7 +40,7 @@ export function assertAccepts(
   if (environment.kind === 'production' && build.kind !== 'final') {
     throw new DeploymentError('conflict', 'Production takes final versions only.');
   }
-  if (build.kind === 'feature' && !environment.accepts_feature_images) {
+  if (build.kind === 'feature' && !environment.acceptsFeatureImages) {
     throw new DeploymentError('conflict', `${environment.name} doesn't accept feature images.`);
   }
   if (build.kind === 'check') {

@@ -2,7 +2,7 @@ import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, type OnDestroy, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { errorMessage } from '../../core/api-error';
+import { PageActivity } from '../../core/page-activity';
 import { SessionService } from '../../core/session.service';
 import {
   type Application,
@@ -59,6 +59,22 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
               }
             </select>
           </label>
+          <label class="field">
+            <span>Language</span>
+            <select formControlName="language" required>
+              @for (language of languages(); track language) {
+                <option [value]="language">{{ language }}</option>
+              }
+            </select>
+          </label>
+          <label class="field">
+            <span>Framework</span>
+            <select formControlName="blueprint" required>
+              @for (blueprint of frameworks(); track blueprint.key) {
+                <option [value]="blueprint.key">{{ blueprint.framework }}</option>
+              }
+            </select>
+          </label>
           <label class="field field-wide">
             <span>Description (optional)</span>
             <textarea formControlName="description" rows="2" maxlength="500"></textarea>
@@ -68,9 +84,12 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
           </button>
         </form>
         @if (chosenType(); as type) {
+          <p class="cell-note">{{ type.name }}: {{ type.description }}.</p>
+        }
+        @if (chosenBlueprint(); as blueprint) {
           <p class="cell-note">
-            {{ type.name }}: {{ type.description }}. It starts from the {{ type.blueprint.name }} blueprint
-            {{ type.blueprint.version }}, in {{ type.blueprint.language }} with {{ type.blueprint.framework }}.
+            It starts from the {{ blueprint.name }} blueprint {{ blueprint.version }}, in {{ blueprint.language }} with
+            {{ blueprint.framework }}. {{ blueprint.description }}
           </p>
         }
         <p class="cell-note">
@@ -139,8 +158,23 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' } | null
                     @if (application.description) {
                       <p class="cell-note">{{ application.description }}</p>
                     }
+                    @if (application.status === 'active') {
+                      <p class="cell-note">
+                        <a
+                          routerLink="/environments"
+                          [queryParams]="{ application: application.id }"
+                          [attr.aria-label]="'Environments of ' + application.name"
+                          >Environments</a
+                        >
+                      </p>
+                    }
                   </td>
-                  <td>{{ application.type.name }}</td>
+                  <td>
+                    {{ application.type.name }}
+                    @if (application.blueprint; as blueprint) {
+                      <p class="cell-note">{{ blueprint.framework }} · {{ blueprint.language }}</p>
+                    }
+                  </td>
                   <td><code>{{ application.slug }}</code></td>
                   <td>
                     @if (repository === undefined && isNew(application)) {
@@ -278,9 +312,10 @@ export class Applications implements OnInit, OnDestroy {
   protected readonly access = signal<SourceAccess | null>(null);
   protected readonly status = signal<ApplicationStatus>('active');
   protected readonly loading = signal(true);
-  protected readonly working = signal(false);
-  protected readonly error = signal<string | null>(null);
-  protected readonly notice = signal<string | null>(null);
+  readonly #activity = new PageActivity('clear-on-failure');
+  protected readonly working = this.#activity.working;
+  protected readonly error = this.#activity.error;
+  protected readonly notice = this.#activity.notice;
   protected readonly editing = signal<Editing>(null);
   protected readonly chosenTypeKey = signal('');
   protected readonly canBuildTestImages = computed(() => {
@@ -292,10 +327,25 @@ export class Applications implements OnInit, OnDestroy {
     return this.#session.can('applications:create');
   });
   protected readonly chosenType = computed(() => this.types().find((type) => type.key === this.chosenTypeKey()));
+  protected readonly chosenLanguage = signal('');
+  protected readonly chosenBlueprintKey = signal('');
+  /** The languages the chosen type can be written in, such as TypeScript, JavaScript and Python. */
+  protected readonly languages = computed(() => [
+    ...new Set((this.chosenType()?.blueprints ?? []).map((blueprint) => blueprint.language)),
+  ]);
+  /** The frameworks the chosen type offers in the chosen language. */
+  protected readonly frameworks = computed(() =>
+    (this.chosenType()?.blueprints ?? []).filter((blueprint) => blueprint.language === this.chosenLanguage()),
+  );
+  protected readonly chosenBlueprint = computed(() =>
+    this.frameworks().find((blueprint) => blueprint.key === this.chosenBlueprintKey()),
+  );
 
   protected readonly registerForm = this.#forms.group({
     name: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(80)]],
     type: ['', Validators.required],
+    language: ['', Validators.required],
+    blueprint: ['', Validators.required],
     description: ['', Validators.maxLength(500)],
   });
   protected readonly editForm = this.#forms.group({
@@ -304,11 +354,25 @@ export class Applications implements OnInit, OnDestroy {
   });
 
   constructor() {
-    this.registerForm.controls.type.valueChanges.subscribe((key) => this.chosenTypeKey.set(key));
+    const { type, language, blueprint } = this.registerForm.controls;
+    // A new type starts on its usual blueprint, and a new language on its first framework.
+    type.valueChanges.subscribe((key) => {
+      this.chosenTypeKey.set(key);
+      const usual = this.chosenType()?.blueprint;
+      language.setValue(usual?.language ?? '');
+      blueprint.setValue(usual?.key ?? '');
+    });
+    language.valueChanges.subscribe((value) => {
+      this.chosenLanguage.set(value);
+      if (!this.frameworks().some((candidate) => candidate.key === blueprint.value)) {
+        blueprint.setValue(this.frameworks()[0]?.key ?? '');
+      }
+    });
+    blueprint.valueChanges.subscribe((key) => this.chosenBlueprintKey.set(key));
   }
 
   async ngOnInit(): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       if (this.canManage()) {
         const types = await this.#api.types();
         this.types.set(types);
@@ -346,7 +410,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async checkAccess(): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       const access = await this.#api.syncSourceAccess();
       this.access.set(access);
       this.notice.set(
@@ -358,7 +422,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async requestRepository(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.requestRepository(application.id);
       this.notice.set(`The repository of ${application.name} is being created.`);
       await this.#refresh();
@@ -374,7 +438,7 @@ export class Applications implements OnInit, OnDestroy {
     this.status.set(status);
     this.editing.set(null);
     this.notice.set(null);
-    await this.#attempt(() => this.#refresh());
+    await this.#activity.run(() => this.#refresh());
   }
 
   protected startEdit(application: Application): void {
@@ -383,10 +447,11 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async register(): Promise<void> {
-    const { name, type, description } = this.registerForm.getRawValue();
-    await this.#attempt(async () => {
-      const application = await this.#api.register({ name, type, description });
-      this.registerForm.reset({ name: '', type, description: '' });
+    const { name, type, language, blueprint, description } = this.registerForm.getRawValue();
+    await this.#activity.run(async () => {
+      const application = await this.#api.register({ name, type, blueprint, description });
+      // The next one is likely of the same kind, so the choices stay.
+      this.registerForm.reset({ name: '', type, language, blueprint, description: '' });
       this.notice.set(`${application.name} is registered.`);
       this.status.set('active');
       await this.#refresh();
@@ -394,7 +459,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async save(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.update(application.id, this.editForm.getRawValue());
       this.editing.set(null);
       await this.#refresh();
@@ -402,7 +467,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async archive(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.archive(application.id);
       this.editing.set(null);
       this.notice.set(`${application.name} is archived. You can restore it from the archived list.`);
@@ -411,7 +476,7 @@ export class Applications implements OnInit, OnDestroy {
   }
 
   protected async restore(application: Application): Promise<void> {
-    await this.#attempt(async () => {
+    await this.#activity.run(async () => {
       await this.#api.restore(application.id);
       this.notice.set(`${application.name} is restored.`);
       await this.#refresh();
@@ -428,20 +493,7 @@ export class Applications implements OnInit, OnDestroy {
       (application) => this.isNew(application) && !this.repositories().has(application.id),
     );
     if (waiting || repositories.some((repository) => repository.status === 'creating')) {
-      this.#refreshTimer = setTimeout(() => void this.#attempt(() => this.#refresh()), REFRESH_MS);
-    }
-  }
-
-  async #attempt(work: () => Promise<void>): Promise<void> {
-    this.error.set(null);
-    this.working.set(true);
-    try {
-      await work();
-    } catch (error) {
-      this.notice.set(null);
-      this.error.set(errorMessage(error));
-    } finally {
-      this.working.set(false);
+      this.#refreshTimer = setTimeout(() => void this.#activity.run(() => this.#refresh()), REFRESH_MS);
     }
   }
 }

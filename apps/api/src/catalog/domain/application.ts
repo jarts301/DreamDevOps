@@ -1,3 +1,4 @@
+import { normalizeName } from '../../shared/names.ts';
 import { numberedSlug, slugFromName } from '../../shared/slug.ts';
 import { CatalogError } from './errors.ts';
 
@@ -9,9 +10,8 @@ const MAX_DESCRIPTION_LENGTH = 500;
 
 /** Names are trimmed, single-spaced and between 2 and 80 characters, without control characters. */
 export function normalizeApplicationName(value: unknown): string {
-  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  // eslint-disable-next-line no-control-regex
-  if (name.length < 2 || name.length > 80 || /[\u0000-\u001f\u007f]/.test(name)) {
+  const name = normalizeName(value, { minLength: 2, maxLength: 80, refuseControlCharacters: true });
+  if (name === null) {
     throw new CatalogError('invalid', 'Enter an application name between 2 and 80 characters.');
   }
   return name;

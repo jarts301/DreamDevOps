@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { type CompanyId, createDomainEvent, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { BlueprintLibrary } from '../../blueprints/infrastructure/blueprint-library.ts';
+import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
+import type { Builds, BuildView } from '../../builds/application/builds.ts';
+import type { ApplicationCatalog, ApplicationView } from '../../catalog/application/application-catalog.ts';
 import type { Entitlements } from '../../editions/application/entitlements.ts';
 import type { EnvironmentConfig } from '../../environments/application/environment-config.ts';
+import type { Environments, EnvironmentView } from '../../environments/application/environments.ts';
 import type { EnvironmentRepositories, FileChange } from '../../environments/application/ports.ts';
 import type { TargetConfigurations } from '../../environments/application/target-configuration.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
+import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
 import {
-  ACTIVE_STATUSES,
   advance,
   assertAccepts,
   type DeploymentStatus,
@@ -64,7 +67,8 @@ export interface DeploymentsOptions {
   readonly targetRegistryHost: string;
 }
 
-interface Row {
+/** A deployment as its own table has it. */
+interface DeploymentRow {
   id: string;
   environment_id: string;
   application_id: string;
@@ -82,6 +86,10 @@ interface Row {
   created_at: Date;
   updated_at: Date;
   finished_at: Date | null;
+}
+
+/** A deployment with what other modules know of its application, environment and version. */
+interface Row extends DeploymentRow {
   application_name: string;
   application_slug: string;
   environment_name: string;
@@ -89,25 +97,12 @@ interface Row {
   build_kind: string;
   image_tag: string;
   build_version: string | null;
+  image_ref: string | null;
+  digest: string | null;
 }
 
-interface EnvironmentRow {
-  id: string;
-  name: string;
-  slug: string;
-  kind: 'test' | 'production';
-  accepts_feature_images: boolean;
-  requires_approval: boolean;
-  status: string;
-}
-
-const SELECT = `
-  SELECT d.*, a.name AS application_name, a.slug AS application_slug, e.name AS environment_name,
-         e.kind AS environment_kind, b.kind AS build_kind, b.image_tag, b.version AS build_version
-  FROM deployments.deployments_view() d
-  JOIN catalog.applications a ON a.id = d.application_id
-  JOIN environments.environments e ON e.id = d.environment_id
-  JOIN builds.builds b ON b.id = d.build_id`;
+/** Deployments with the names of who asked and who approved. */
+const SELECT = 'SELECT d.* FROM deployments.deployments_view() d';
 
 /**
  * Runs versions of applications in environments. A deployment is a commit to the
@@ -119,7 +114,11 @@ export class Deployments {
   readonly #configurations: TargetConfigurations;
   readonly #repositories: EnvironmentRepositories;
   readonly #config: EnvironmentConfig;
-  readonly #blueprints: BlueprintLibrary;
+  readonly #environments: Environments;
+  readonly #applications: ApplicationCatalog;
+  readonly #builds: Builds;
+  readonly #sources: RepositoryLookup;
+  readonly #blueprints: BlueprintCatalog;
   readonly #entitlements: Entitlements;
   readonly #options: DeploymentsOptions;
 
@@ -128,11 +127,19 @@ export class Deployments {
     configurations: TargetConfigurations,
     repositories: EnvironmentRepositories,
     config: EnvironmentConfig,
-    blueprints: BlueprintLibrary,
+    environments: Environments,
+    applications: ApplicationCatalog,
+    builds: Builds,
+    sources: RepositoryLookup,
+    blueprints: BlueprintCatalog,
     entitlements: Entitlements,
     options: DeploymentsOptions,
   ) {
     this.#database = database;
+    this.#environments = environments;
+    this.#applications = applications;
+    this.#builds = builds;
+    this.#sources = sources;
     this.#configurations = configurations;
     this.#repositories = repositories;
     this.#config = config;
@@ -152,16 +159,17 @@ export class Deployments {
       values.push(parseId(filter.environment, 'environment'));
       conditions.push(`d.environment_id = $${values.length}`);
     }
-    return this.#database.transaction(async (tx) => {
+    const rows = await this.#database.transaction(async (tx) => {
       const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
-      const { rows } = await tx.query<Row>(`${SELECT} ${where} ORDER BY d.created_at DESC LIMIT 50`, values);
-      return rows.map(toView);
+      const { rows } = await tx.query<DeploymentRow>(`${SELECT} ${where} ORDER BY d.created_at DESC LIMIT 50`, values);
+      return rows;
     });
+    return (await this.#enrich(rows)).map(toView);
   }
 
   async get(idValue: unknown): Promise<DeploymentView> {
     const id = parseId(idValue, 'deployment');
-    return this.#database.transaction(async (tx) => toView(await findOrFail(tx, id)));
+    return toView(await this.#database.transaction((tx) => this.#findOrFail(tx, id)));
   }
 
   /** Asks to run a version in an environment. Production may need a second person's approval first. */
@@ -188,43 +196,31 @@ export class Deployments {
     input: { applicationId: string; environmentId: string; buildId: string; strategy: Strategy; rollbackOf: string | null },
   ): Promise<DeploymentView> {
     const id = randomUUID();
-    return this.#database.transaction(async (tx) => {
-      const environment = await findEnvironment(tx, input.environmentId);
-      assertMayDeploy(actor, environment.kind);
-      if (environment.status !== 'active') {
-        throw new DeploymentError('conflict', 'Restore the environment first.');
-      }
-      const { rows: applications } = await tx.query<{ status: string }>('SELECT status FROM catalog.applications WHERE id = $1', [
-        input.applicationId,
-      ]);
-      if (applications[0] === undefined) {
-        throw new DeploymentError('not-found', 'This application does not exist.');
-      }
-      if (applications[0].status !== 'active') {
-        throw new DeploymentError('conflict', 'Restore the application first.');
-      }
-      const { rows: builds } = await tx.query<{ kind: string; status: string; application_id: string }>(
-        'SELECT kind, status, application_id FROM builds.builds WHERE id = $1',
-        [input.buildId],
+    const environment = await this.#environments.get(input.environmentId);
+    assertMayDeploy(actor, environment.kind);
+    if (environment.status !== 'active') {
+      throw new DeploymentError('conflict', 'Restore the environment first.');
+    }
+    const application = await this.#applications.get(input.applicationId);
+    if (application.status !== 'active') {
+      throw new DeploymentError('conflict', 'Restore the application first.');
+    }
+    const build = (await this.#builds.many([input.buildId])).get(input.buildId);
+    if (build === undefined || build.applicationId !== input.applicationId) {
+      throw new DeploymentError('not-found', 'This version does not exist.');
+    }
+    assertAccepts(environment, build);
+    if (environment.target?.status !== 'connected') {
+      throw new DeploymentError(
+        'conflict',
+        environment.target?.status === 'lost'
+          ? `The target of ${environment.name} isn't reporting, so nothing can be deployed there now.`
+          : `${environment.name} has no connected target yet.`,
       );
-      if (builds[0] === undefined || builds[0].application_id !== input.applicationId) {
-        throw new DeploymentError('not-found', 'This version does not exist.');
-      }
-      assertAccepts(environment, builds[0]);
-      const { rows: targets } = await tx.query<{ status: string }>(
-        "SELECT status FROM environments.targets WHERE environment_id = $1 AND status <> 'revoked'",
-        [input.environmentId],
-      );
-      if (targets[0]?.status !== 'connected') {
-        throw new DeploymentError(
-          'conflict',
-          targets[0]?.status === 'lost'
-            ? `The target of ${environment.name} isn't reporting, so nothing can be deployed there now.`
-            : `${environment.name} has no connected target yet.`,
-        );
-      }
+    }
+    await this.#database.transaction(async (tx) => {
       // Rollbacks restore a version that already ran, so they don't wait for approval.
-      const needsApproval = environment.requires_approval && input.rollbackOf === null;
+      const needsApproval = environment.requiresApproval && input.rollbackOf === null;
       const status: DeploymentStatus = needsApproval ? 'awaiting-approval' : 'queued';
       try {
         await tx.query(
@@ -257,8 +253,8 @@ export class Deployments {
         }),
         ...(needsApproval ? [] : [queued(id, actor.userId)]),
       ]);
-      return toView(await findOrFail(tx, id));
     });
+    return this.get(id);
   }
 
   /** A second person with production rights approves; the one who asked can't. */
@@ -273,7 +269,7 @@ export class Deployments {
   #decide(actor: Principal, idValue: unknown, approved: boolean): Promise<void> {
     const id = parseId(idValue, 'deployment');
     return this.#database.transaction(async (tx) => {
-      const deployment = await findOrFail(tx, id, { lock: true });
+      const deployment = await this.#findOrFail(tx, id, { lock: true });
       if (!actor.permissions.includes('deployments-production:run')) {
         throw new DeploymentError('forbidden', 'Only Tech Leads and Operators approve production deployments.');
       }
@@ -304,7 +300,7 @@ export class Deployments {
 
   /** Writes the version to the environment's repository. Runs in the background. */
   async commit(idValue: string): Promise<void> {
-    const deployment = await this.#database.transaction((tx) => findOrFail(tx, idValue));
+    const deployment = await this.#database.transaction((tx) => this.#findOrFail(tx, idValue));
     if (deployment.status !== 'queued') {
       return;
     }
@@ -334,8 +330,8 @@ export class Deployments {
 
   /** After a failed or aborted rollout, Git goes back to the last version that ran well, so Flux keeps it. */
   async restorePrevious(idValue: string): Promise<void> {
-    const deployment = await this.#database.transaction((tx) => findOrFail(tx, idValue));
-    const previous = await this.#database.transaction((tx) => previousSuccess(tx, deployment));
+    const deployment = await this.#database.transaction((tx) => this.#findOrFail(tx, idValue));
+    const previous = await this.#database.transaction((tx) => this.#previousSuccess(tx, deployment));
     const repository = await this.#configurations.repositoryOf(deployment.environment_id);
     if (previous === null) {
       // Nothing ran here before: the application's folder goes, and with it what was applied.
@@ -371,8 +367,8 @@ export class Deployments {
   async rollback(actor: Principal, idValue: unknown): Promise<DeploymentView> {
     const id = parseId(idValue, 'deployment');
     const { deployment, previous } = await this.#database.transaction(async (tx) => {
-      const deployment = await findOrFail(tx, id);
-      return { deployment, previous: await previousSuccess(tx, deployment) };
+      const deployment = await this.#findOrFail(tx, id);
+      return { deployment, previous: await this.#previousSuccess(tx, deployment) };
     });
     if (!['succeeded', 'superseded', 'failed', 'aborted'].includes(deployment.status)) {
       throw new DeploymentError('conflict', 'Only a finished deployment can be rolled back.');
@@ -397,7 +393,7 @@ export class Deployments {
   ): Promise<void> {
     const id = parseId(idValue, 'deployment');
     await this.#database.transaction(async (tx) => {
-      const deployment = await findOrFail(tx, id, { lock: true });
+      const deployment = await this.#findOrFail(tx, id, { lock: true });
       assertMayDeploy(actor, deployment.environment_kind);
       check(deployment);
       const { rows } = await tx.query("SELECT 1 FROM deployments.commands WHERE deployment_id = $1 AND action = $2 AND status IN ('pending', 'sent')", [id, action]);
@@ -433,11 +429,11 @@ export class Deployments {
     const workloads = parseWorkloads(report.workloads);
     return runWithCompany(companyId, () =>
       this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<Row>(
+        const { rows } = await tx.query<DeploymentRow>(
           `${SELECT} WHERE d.environment_id = $1 AND d.status = ANY($2)`,
           [environmentId, ROLLING_OUT],
         );
-        for (const deployment of rows) {
+        for (const deployment of await this.#enrich(rows)) {
           const next = advance(
             { status: deployment.status, commitSha: deployment.commit_sha },
             workloads.find((workload) => workload.deploymentId === deployment.id),
@@ -476,14 +472,19 @@ export class Deployments {
             );
           }
         }
-        const { rows: commands } = await tx.query<{ id: string; action: 'promote' | 'abort'; slug: string }>(
+        const { rows: commands } = await tx.query<{ id: string; action: 'promote' | 'abort'; application_id: string }>(
           `UPDATE deployments.commands c SET status = 'sent', updated_at = now()
-           FROM deployments.deployments d JOIN catalog.applications a ON a.id = d.application_id
+           FROM deployments.deployments d
            WHERE c.deployment_id = d.id AND c.environment_id = $1 AND c.status = 'pending'
-           RETURNING c.id, c.action, a.slug`,
+           RETURNING c.id, c.action, d.application_id`,
           [environmentId],
         );
-        return commands.map((command) => ({ id: command.id, action: command.action, namespace: command.slug, name: command.slug }));
+        const applications = await this.#applicationsById(commands.map((command) => command.application_id));
+        return commands.map((command) => {
+          // Each application runs in a namespace named after it, as its rollout is.
+          const slug = applications.get(command.application_id)!.slug;
+          return { id: command.id, action: command.action, namespace: slug, name: slug };
+        });
       }),
     );
   }
@@ -517,7 +518,7 @@ export class Deployments {
     for (const { deployment_id: id, company_id: company } of stalled) {
       await runWithCompany(parseCompanyId(company), () =>
         this.#database.transaction(async (tx) => {
-          const deployment = await findOrFail(tx, id, { lock: true });
+          const deployment = await this.#findOrFail(tx, id, { lock: true });
           if (!['queued', 'committed', 'progressing'].includes(deployment.status) || deployment.updated_at >= cutoff) {
             return;
           }
@@ -537,30 +538,22 @@ export class Deployments {
 
   /** Files for a deployment's version, with the environment's values as they are now. */
   async #render(tx: TenantTransaction, deployment: Row): Promise<Map<string, string>> {
-    const environment = await findEnvironment(tx, deployment.environment_id);
-    const { rows: builds } = await tx.query<{ image_ref: string; digest: string }>(
-      'SELECT image_ref, digest FROM builds.builds WHERE id = $1',
-      [deployment.build_id],
-    );
-    const { rows: repositories } = await tx.query<{ blueprint_key: string | null; blueprint_version: string | null }>(
-      'SELECT blueprint_key, blueprint_version FROM source.repositories WHERE application_id = $1',
-      [deployment.application_id],
-    );
-    const blueprint = repositories[0]?.blueprint_key && repositories[0].blueprint_version
-      ? this.#blueprints.manifest(repositories[0].blueprint_key, repositories[0].blueprint_version)
-      : null;
+    const environment = await this.#environments.get(deployment.environment_id);
+    // The application runs with the settings of the blueprint version it started from.
+    const source = (await this.#sources.find(deployment.application_id))?.blueprint ?? null;
+    const blueprint = source === null ? null : this.#blueprints.manifest(source.key, source.version);
     const runtime: Runtime = blueprint === null ? DEFAULT_RUNTIME : blueprint.runtime;
     const config = await this.#config.resolve(tx, deployment.environment_id, {
       id: deployment.application_id,
       slug: deployment.application_slug,
     });
     // Images are named as targets pull them, and by digest.
-    const path = builds[0]!.image_ref.replace(/^[^/]+\//, '').replace(/:[^/:]+$/, '');
+    const path = deployment.image_ref!.replace(/^[^/]+\//, '').replace(/:[^/:]+$/, '');
     return renderApplication({
       deploymentId: deployment.id,
       application: { slug: deployment.application_slug, name: deployment.application_name },
       environment: { slug: environment.slug, kind: environment.kind },
-      image: `${this.#options.targetRegistryHost}/${path}@${builds[0]!.digest}`,
+      image: `${this.#options.targetRegistryHost}/${path}@${deployment.digest}`,
       version: deployment.build_version ?? deployment.image_tag,
       strategy: deployment.strategy,
       runtime,
@@ -581,20 +574,83 @@ export class Deployments {
   ): Promise<string> {
     const folder = applicationFolder(deployment.application_slug);
     const existing = await this.#repositories.readFolder(repository, folder);
-    const deployed = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ slug: string }>(
-        `SELECT DISTINCT a.slug FROM deployments.deployments d JOIN catalog.applications a ON a.id = d.application_id
-         WHERE d.environment_id = $1 AND d.commit_sha IS NOT NULL AND a.id <> $2`,
+    const others = await this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query<{ application_id: string }>(
+        `SELECT DISTINCT application_id FROM deployments.deployments
+         WHERE environment_id = $1 AND commit_sha IS NOT NULL AND application_id <> $2`,
         [deployment.environment_id, deployment.application_id],
       );
-      return rows.map((row) => row.slug);
+      return rows.map((row) => row.application_id);
     });
+    const deployed = [...(await this.#applicationsById(others)).values()].map((application) => application.slug).sort();
     const changes: FileChange[] = [
       ...[...existing.keys()].filter((path) => !files.has(path)).map((path) => ({ path, content: null })),
       ...[...files].map(([path, content]) => ({ path, content })),
       { path: 'kustomization.yaml', content: renderRoot(files.size > 0 ? [...deployed, deployment.application_slug] : deployed) },
     ];
     return this.#repositories.commit(repository, message, changes);
+  }
+
+  /** The newest deployment of the same application and environment that ran well, before this one. */
+  async #previousSuccess(tx: TenantTransaction, deployment: Row): Promise<Row | null> {
+    const { rows } = await tx.query<DeploymentRow>(
+      `${SELECT} WHERE d.environment_id = $1 AND d.application_id = $2 AND d.status IN ('succeeded', 'superseded')
+         AND d.created_at < $3 AND d.build_id <> $4
+       ORDER BY d.created_at DESC LIMIT 1`,
+      [deployment.environment_id, deployment.application_id, deployment.created_at, deployment.build_id],
+    );
+    return (await this.#enrich(rows))[0] ?? null;
+  }
+
+  async #findOrFail(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<Row> {
+    if (options.lock) {
+      await tx.query('SELECT 1 FROM deployments.deployments WHERE id = $1 FOR UPDATE', [id]);
+    }
+    const { rows } = await tx.query<DeploymentRow>(`${SELECT} WHERE d.id = $1`, [id]);
+    if (rows[0] === undefined) {
+      throw new DeploymentError('not-found', 'This deployment does not exist.');
+    }
+    return (await this.#enrich(rows))[0]!;
+  }
+
+  /**
+   * Adds what the catalog, environments and builds know of each deployment. They keep
+   * their own tables, so this asks them, once per application, environment and version.
+   */
+  async #enrich(rows: readonly DeploymentRow[]): Promise<Row[]> {
+    if (rows.length === 0) {
+      return [];
+    }
+    const unique = (pick: (row: DeploymentRow) => string) => [...new Set(rows.map(pick))];
+    const [applications, environments, builds] = await Promise.all([
+      this.#applicationsById(unique((row) => row.application_id)),
+      Promise.all(unique((row) => row.environment_id).map((id) => this.#environments.get(id))).then(
+        (views) => new Map<string, EnvironmentView>(views.map((view) => [view.id, view])),
+      ),
+      this.#builds.many(unique((row) => row.build_id)),
+    ]);
+    return rows.map((row) => {
+      const application = applications.get(row.application_id)!;
+      const environment = environments.get(row.environment_id)!;
+      const build: BuildView = builds.get(row.build_id)!;
+      return {
+        ...row,
+        application_name: application.name,
+        application_slug: application.slug,
+        environment_name: environment.name,
+        environment_kind: environment.kind,
+        build_kind: build.kind,
+        image_tag: build.tag,
+        build_version: build.version,
+        image_ref: build.imageRef,
+        digest: build.digest,
+      };
+    });
+  }
+
+  async #applicationsById(ids: readonly string[]): Promise<Map<string, ApplicationView>> {
+    const views = await Promise.all([...new Set(ids)].map((id) => this.#applications.get(id)));
+    return new Map(views.map((view) => [view.id, view]));
   }
 }
 
@@ -614,9 +670,8 @@ function queued(deploymentId: string, actorId: string) {
 }
 
 function finishedEvent(deployment: Row, status: DeploymentStatus, message: string | null) {
-  const eventType = status === 'succeeded' ? 'DeploymentSucceeded' : status === 'aborted' ? 'DeploymentAborted' : 'DeploymentFailed';
   return createDomainEvent({
-    eventType,
+    eventType: status === 'succeeded' ? 'DeploymentSucceeded' : status === 'aborted' ? 'DeploymentAborted' : 'DeploymentFailed',
     companyId: currentCompanyId(),
     actorId: null,
     payload: {
@@ -629,39 +684,6 @@ function finishedEvent(deployment: Row, status: DeploymentStatus, message: strin
       ...(message !== null && status !== 'succeeded' && { reason: message }),
     },
   });
-}
-
-/** The newest deployment of the same application and environment that ran well, before this one. */
-async function previousSuccess(tx: TenantTransaction, deployment: Row): Promise<Row | null> {
-  const { rows } = await tx.query<Row>(
-    `${SELECT} WHERE d.environment_id = $1 AND d.application_id = $2 AND d.status IN ('succeeded', 'superseded')
-       AND d.created_at < $3 AND d.build_id <> $4
-     ORDER BY d.created_at DESC LIMIT 1`,
-    [deployment.environment_id, deployment.application_id, deployment.created_at, deployment.build_id],
-  );
-  return rows[0] ?? null;
-}
-
-async function findOrFail(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<Row> {
-  if (options.lock) {
-    await tx.query('SELECT 1 FROM deployments.deployments WHERE id = $1 FOR UPDATE', [id]);
-  }
-  const { rows } = await tx.query<Row>(`${SELECT} WHERE d.id = $1`, [id]);
-  if (rows[0] === undefined) {
-    throw new DeploymentError('not-found', 'This deployment does not exist.');
-  }
-  return rows[0];
-}
-
-async function findEnvironment(tx: TenantTransaction, id: string): Promise<EnvironmentRow> {
-  const { rows } = await tx.query<EnvironmentRow>(
-    'SELECT id, name, slug, kind, accepts_feature_images, requires_approval, status FROM environments.environments WHERE id = $1',
-    [id],
-  );
-  if (rows[0] === undefined) {
-    throw new DeploymentError('not-found', 'This environment does not exist.');
-  }
-  return rows[0];
 }
 
 function parseId(value: unknown, what: string): string {

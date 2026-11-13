@@ -1,7 +1,6 @@
 import { Controller, Get, type INestApplication } from '@nestjs/common';
 import pg from 'pg';
-import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ENTITLEMENT_PROVIDER, type EntitlementProvider, type ProviderStatus } from '../src/editions/application/ports.ts';
 import { RequireFeature } from '../src/editions/http/feature.guard.ts';
 import { Authenticated } from '../src/http/access.decorators.ts';
@@ -10,6 +9,7 @@ import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider } from './fakes.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { type Agent, eventually as waitUntil, signIn as signInAs, unique } from './support/integration.ts';
 
 /** Stands in for the private commercial code, which supplies its own provider. */
 class FakeCommercialProvider implements EntitlementProvider {
@@ -17,7 +17,12 @@ class FakeCommercialProvider implements EntitlementProvider {
   failing = false;
   features: ReadonlySet<string> = new Set(['progressive-deployments', 'audit-export']);
 
+  statusFailing = false;
+
   async status(): Promise<ProviderStatus> {
+    if (this.statusFailing) {
+      throw new Error('The license server is unavailable.');
+    }
     return { name: 'Test license', commercialAvailable: this.installed, detail: 'Valid for testing' };
   }
 
@@ -44,22 +49,10 @@ let ownerPool: pg.Pool;
 let app: INestApplication;
 const provider = new FakeCommercialProvider();
 
-const eventually = (assertion: () => Promise<void> | void) => vi.waitFor(assertion, { timeout: 20_000, interval: 150 });
+const eventually = (assertion: () => Promise<void> | void) => waitUntil(assertion);
 
-const signIn = async (user: string) => {
-  const agent = request.agent(app.getHttpServer());
-  const login = await agent.get(`/api/v1/auth/login?login_hint=${user}`).expect(302);
-  const callback = new URL(login.headers.location as string);
-  await agent.get(callback.pathname + callback.search).expect(302);
-  return agent;
-};
-type Agent = Awaited<ReturnType<typeof signIn>>;
+const signIn = (user: string) => signInAs(app, user);
 
-let counter = 0;
-const unique = (prefix: string) => {
-  counter += 1;
-  return `${prefix}-${'abcdefghijklmnopqrstuvwxyz'[Math.floor(counter / 26) % 26]}${'abcdefghijklmnopqrstuvwxyz'[counter % 26]}`;
-};
 
 const createCompany = async () => {
   const platformAdmin = await signIn('platform-admin');
@@ -130,6 +123,7 @@ afterAll(async () => {
 beforeEach(() => {
   provider.installed = true;
   provider.failing = false;
+  provider.statusFailing = false;
   provider.features = new Set(['progressive-deployments', 'audit-export']);
 });
 
@@ -235,6 +229,29 @@ describe('setting a company’s edition', () => {
     expect(body.companies).toContainEqual(
       expect.objectContaining({ companyId, edition: 'commercial', changedAt: expect.any(String) }),
     );
+  });
+
+  it('shows the provider as unavailable when it fails, and refuses the Commercial Edition meanwhile', async () => {
+    const { platformAdmin, companyId } = await createCompany();
+    provider.statusFailing = true;
+
+    const { body } = await platformAdmin.get('/api/v1/platform/editions').expect(200);
+
+    expect(body.provider).toEqual({
+      name: 'Unavailable',
+      commercialAvailable: false,
+      detail: 'The license could not be checked.',
+    });
+    await platformAdmin.put(`/api/v1/platform/editions/${companyId}`).send({ edition: 'commercial' }).expect(409);
+  });
+
+  it('changes nothing, and records nothing, when the company already has the edition', async () => {
+    const { platformAdmin, companyId } = await createCompany();
+
+    await platformAdmin.put(`/api/v1/platform/editions/${companyId}`).send({ edition: 'community' }).expect(204);
+
+    const { rows } = await ownerPool.query('SELECT 1 FROM editions.company_editions WHERE company_id = $1', [companyId]);
+    expect(rows).toEqual([]);
   });
 
   it('refuses bad input', async () => {

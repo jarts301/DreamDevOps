@@ -1,6 +1,7 @@
 import { currentCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { SigningKeys } from '../../builds/application/signing-keys.ts';
+import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
 import type { SealedBox } from '../../shared/sealed-box.ts';
 import { acceptedImageKinds, type EnvironmentKind } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
@@ -62,6 +63,7 @@ export function environmentRepositoryName(slug: string): string {
  */
 export class TargetConfigurations {
   readonly #database: TenantDatabase;
+  readonly #companies: CompanyDirectory;
   readonly #agents: TargetAgents;
   readonly #repositories: EnvironmentRepositories;
   readonly #pullAccounts: PullAccounts;
@@ -72,6 +74,7 @@ export class TargetConfigurations {
 
   constructor(
     database: TenantDatabase,
+    companies: CompanyDirectory,
     agents: TargetAgents,
     repositories: EnvironmentRepositories,
     pullAccounts: PullAccounts,
@@ -81,6 +84,7 @@ export class TargetConfigurations {
     options: TargetConfigurationOptions,
   ) {
     this.#database = database;
+    this.#companies = companies;
     this.#agents = agents;
     this.#repositories = repositories;
     this.#pullAccounts = pullAccounts;
@@ -148,16 +152,15 @@ export class TargetConfigurations {
 
   /** The environment's repository, made if missing. Call in the company's context. */
   async repositoryOf(environmentId: string): Promise<EnvironmentRepository> {
+    // The company's Git organization is named by its short name, which Tenancy knows.
+    const company = await this.#companies.find(currentCompanyId());
     const repository = await this.#database.transaction(async (tx) => {
       const environment = await findEnvironment(tx, environmentId);
-      const { rows } = await tx.query<{ slug: string }>('SELECT slug FROM tenancy.companies WHERE id = $1', [
-        currentCompanyId(),
-      ]);
       const name = environment.repository ?? environmentRepositoryName(environment.slug);
       if (environment.repository === null) {
         await tx.query('UPDATE environments.environments SET repository = $2 WHERE id = $1', [environmentId, name]);
       }
-      return { organization: rows[0]!.slug, name, environmentId };
+      return { organization: company!.slug, name, environmentId };
     });
     await this.#repositories.ensure(repository);
     return repository;

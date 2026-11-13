@@ -98,7 +98,7 @@ describe('manifests', () => {
 });
 
 describe('deployment rules', () => {
-  const environment = (kind: 'test' | 'production', acceptsFeatureImages = true) => ({ name: 'Env', kind, accepts_feature_images: acceptsFeatureImages });
+  const environment = (kind: 'test' | 'production', acceptsFeatureImages = true) => ({ name: 'Env', kind, acceptsFeatureImages });
 
   it('send only final versions to production, and feature images only where they are accepted', () => {
     expect(() => assertAccepts(environment('production'), { kind: 'rc', status: 'succeeded' })).toThrow('Production takes final versions only.');

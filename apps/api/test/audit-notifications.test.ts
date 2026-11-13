@@ -142,7 +142,7 @@ describe('invitation emails', () => {
 
 describe('webhook addresses', () => {
   const rules = (allowInsecureWebhooks: boolean) =>
-    new NotificationRules({} as never, { post: async () => {} }, { allowInsecureWebhooks });
+    new NotificationRules({} as never, {} as never, { post: async () => {} }, { allowInsecureWebhooks });
   const actor = { userId: 'u' } as never;
   const valid = { name: 'Team chat', kind: 'slack', url: 'https://hooks.example.com/abc', eventTypes: ['MemberRemoved'] };
 

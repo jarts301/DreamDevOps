@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
+import { createDomainEvent, currentCompanyId, isUuid } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { BlueprintLibrary } from '../../blueprints/infrastructure/blueprint-library.ts';
+import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
+import type { BlueprintManifest } from '../../blueprints/domain/blueprint.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import {
   type ApplicationStatus,
@@ -10,21 +11,26 @@ import {
   normalizeDescription,
 } from '../domain/application.ts';
 import { CatalogError } from '../domain/errors.ts';
+import type { ApplicationRegisteredPayload, ApplicationStatusPayload } from '../domain/events.ts';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A blueprint an application can start from: a language and a framework, such as TypeScript and React. */
+export interface BlueprintChoice {
+  readonly key: string;
+  readonly version: string;
+  readonly name: string;
+  readonly description: string;
+  readonly language: string;
+  readonly framework: string;
+}
 
 export interface ApplicationType {
   readonly key: string;
   readonly name: string;
   readonly description: string;
-  /** The blueprint new applications of this type start from. */
-  readonly blueprint: {
-    readonly key: string;
-    readonly version: string;
-    readonly name: string;
-    readonly language: string;
-    readonly framework: string;
-  };
+  /** The blueprint new applications of this type start from unless another is chosen. */
+  readonly blueprint: BlueprintChoice;
+  /** Every blueprint new applications of this type can start from, by language and name. */
+  readonly blueprints: readonly BlueprintChoice[];
 }
 
 export interface ApplicationView {
@@ -32,11 +38,21 @@ export interface ApplicationView {
   readonly name: string;
   readonly slug: string;
   readonly type: { readonly key: string; readonly name: string };
+  /** The blueprint it started from, chosen when it was registered. */
+  readonly blueprint: { readonly key: string; readonly name: string; readonly language: string; readonly framework: string } | null;
   readonly description: string;
   readonly status: ApplicationStatus;
   readonly createdAt: string;
   readonly createdBy: { readonly userId: string; readonly displayName: string | null } | null;
   readonly archivedAt: string | null;
+}
+
+interface TypeRow {
+  key: string;
+  name: string;
+  description: string;
+  /** The blueprint applications of the type start from when none is chosen, or null for its first by key. */
+  default_blueprint: string | null;
 }
 
 interface ApplicationRow {
@@ -45,6 +61,7 @@ interface ApplicationRow {
   slug: string;
   type_key: string;
   type_name: string;
+  blueprint_key: string;
   description: string;
   status: ApplicationStatus;
   created_at: Date;
@@ -59,9 +76,9 @@ const SELECT_APPLICATIONS = 'SELECT * FROM catalog.applications_view() a';
 /** Each company's register of applications. Every query runs in the current company. */
 export class ApplicationCatalog {
   readonly #database: TenantDatabase;
-  readonly #blueprints: BlueprintLibrary;
+  readonly #blueprints: BlueprintCatalog;
 
-  constructor(database: TenantDatabase, blueprints: BlueprintLibrary) {
+  constructor(database: TenantDatabase, blueprints: BlueprintCatalog) {
     this.#database = database;
     this.#blueprints = blueprints;
   }
@@ -70,29 +87,28 @@ export class ApplicationCatalog {
   async types(): Promise<ApplicationType[]> {
     currentCompanyId();
     const rows = await this.#database.transaction(async (tx) => {
-      const { rows: types } = await tx.query<{ key: string; name: string; description: string }>(
-        `SELECT key, name, description FROM catalog.application_types
+      const { rows: types } = await tx.query<TypeRow>(
+        `SELECT key, name, description, default_blueprint FROM catalog.application_types
          WHERE available ORDER BY sort_order, name`,
       );
       return types;
     });
-    return rows.flatMap((type) => {
-      const blueprint = this.#blueprints.latestForType(type.key);
+    return rows.flatMap(({ default_blueprint: defaultKey, ...type }) => {
+      const blueprint = this.#defaultBlueprint(type.key, defaultKey);
       return blueprint === null
         ? []
-        : [
-            {
-              ...type,
-              blueprint: {
-                key: blueprint.key,
-                version: blueprint.version,
-                name: blueprint.name,
-                language: blueprint.language,
-                framework: blueprint.framework,
-              },
-            },
-          ];
+        : [{ ...type, blueprint: choiceOf(blueprint), blueprints: this.#blueprints.forType(type.key).map(choiceOf) }];
     });
+  }
+
+  /**
+   * The blueprint a type starts from when none is chosen: the one the type names, or, for
+   * a type that names none, its first by key.
+   */
+  #defaultBlueprint(type: string, defaultKey: string | null): BlueprintManifest | null {
+    return (
+      this.#blueprints.forType(type).find((blueprint) => blueprint.key === defaultKey) ?? this.#blueprints.latestForType(type)
+    );
   }
 
   async list(statusValue: unknown): Promise<ApplicationView[]> {
@@ -105,18 +121,22 @@ export class ApplicationCatalog {
         `${SELECT_APPLICATIONS} WHERE a.status = $1 ORDER BY lower(a.name)`,
         [status],
       );
-      return rows.map(toView);
+      return rows.map((row) => this.#toView(row));
     });
   }
 
   async get(idValue: unknown): Promise<ApplicationView> {
     const id = parseApplicationId(idValue);
-    return this.#database.transaction(async (tx) => toView(await findOrFail(tx, id)));
+    return this.#database.transaction(async (tx) => this.#toView(await findOrFail(tx, id)));
   }
 
+  /**
+   * Registers an application of a type, starting from the blueprint chosen for it, such
+   * as React in TypeScript for a web frontend, or the type's first blueprint if none is.
+   */
   async register(
     actor: Principal,
-    input: { name?: unknown; type?: unknown; description?: unknown },
+    input: { name?: unknown; type?: unknown; blueprint?: unknown; description?: unknown },
   ): Promise<ApplicationView> {
     const name = normalizeApplicationName(input.name);
     const description = normalizeDescription(input.description);
@@ -127,26 +147,50 @@ export class ApplicationCatalog {
       // One registration per company at a time, so two people can't take the same name or short name.
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalog:' || $1, 0))", [companyId]);
       const type = await availableType(tx, input.type);
-      if (this.#blueprints.latestForType(type) === null) {
-        throw new CatalogError('invalid', 'Choose one of the available application types.');
-      }
+      const blueprint = this.#chosenBlueprint(type.key, type.defaultBlueprint, input.blueprint);
       await assertNameFree(tx, name, null);
       const slug = await freeSlug(tx, name);
       await tx.query(
-        `INSERT INTO catalog.applications (id, company_id, name, slug, type_key, description, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)`,
-        [id, companyId, name, slug, type, description, actor.userId],
+        `INSERT INTO catalog.applications (id, company_id, name, slug, type_key, blueprint_key, description, status, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)`,
+        [id, companyId, name, slug, type.key, blueprint.key, description, actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
+        createDomainEvent<'ApplicationRegistered', ApplicationRegisteredPayload>({
           eventType: 'ApplicationRegistered',
           companyId,
           actorId: actor.userId,
-          payload: { applicationId: id, name, slug, type },
+          payload: { applicationId: id, name, slug, type: type.key, blueprint: blueprint.key },
         }),
       ]);
-      return toView(await findOrFail(tx, id));
+      return this.#toView(await findOrFail(tx, id));
     });
+  }
+
+  /** The blueprint chosen for a type, or its default when none is chosen. */
+  #chosenBlueprint(type: string, defaultKey: string | null, value: unknown): BlueprintManifest {
+    if (value === undefined || value === null || value === '') {
+      const blueprint = this.#defaultBlueprint(type, defaultKey);
+      if (blueprint === null) {
+        throw new CatalogError('invalid', 'Choose one of the available application types.');
+      }
+      return blueprint;
+    }
+    const blueprint = this.#blueprints.forType(type).find((candidate) => candidate.key === value);
+    if (blueprint === undefined) {
+      throw new CatalogError('invalid', 'Choose one of the languages and frameworks this type offers.');
+    }
+    return blueprint;
+  }
+
+  #toView(row: ApplicationRow): ApplicationView {
+    const blueprint = this.#blueprints.latestOf(row.blueprint_key);
+    return toView(
+      row,
+      blueprint === null
+        ? null
+        : { key: blueprint.key, name: blueprint.name, language: blueprint.language, framework: blueprint.framework },
+    );
   }
 
   /** Changes the name or description. The short name stays fixed. */
@@ -211,7 +255,7 @@ export class ApplicationCatalog {
         [id, status],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
+        createDomainEvent<'ApplicationArchived' | 'ApplicationRestored', ApplicationStatusPayload>({
           eventType: status === 'archived' ? 'ApplicationArchived' : 'ApplicationRestored',
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -223,7 +267,7 @@ export class ApplicationCatalog {
 }
 
 function parseApplicationId(value: unknown): string {
-  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+  if (!isUuid(value)) {
     throw new CatalogError('invalid', 'The application ID is not valid.');
   }
   return value;
@@ -241,11 +285,14 @@ async function findOrFail(tx: TenantTransaction, id: string, options: { lock?: b
   return rows[0];
 }
 
-async function availableType(tx: TenantTransaction, value: unknown): Promise<string> {
+async function availableType(tx: TenantTransaction, value: unknown): Promise<{ key: string; defaultBlueprint: string | null }> {
   if (typeof value === 'string') {
-    const { rows } = await tx.query('SELECT 1 FROM catalog.application_types WHERE key = $1 AND available', [value]);
-    if (rows.length > 0) {
-      return value;
+    const { rows } = await tx.query<{ default_blueprint: string | null }>(
+      'SELECT default_blueprint FROM catalog.application_types WHERE key = $1 AND available',
+      [value],
+    );
+    if (rows[0] !== undefined) {
+      return { key: value, defaultBlueprint: rows[0].default_blueprint };
     }
   }
   throw new CatalogError('invalid', 'Choose one of the available application types.');
@@ -278,12 +325,24 @@ async function freeSlug(tx: TenantTransaction, name: string): Promise<string> {
   throw new CatalogError('conflict', 'Too many applications have a similar name.');
 }
 
-function toView(row: ApplicationRow): ApplicationView {
+function choiceOf(blueprint: BlueprintManifest): BlueprintChoice {
+  return {
+    key: blueprint.key,
+    version: blueprint.version,
+    name: blueprint.name,
+    description: blueprint.description,
+    language: blueprint.language,
+    framework: blueprint.framework,
+  };
+}
+
+function toView(row: ApplicationRow, blueprint: ApplicationView['blueprint']): ApplicationView {
   return {
     id: row.id,
     name: row.name,
     slug: row.slug,
     type: { key: row.type_key, name: row.type_name },
+    blueprint,
     description: row.description,
     status: row.status,
     createdAt: row.created_at.toISOString(),
