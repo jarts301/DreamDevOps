@@ -4,6 +4,7 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Builds } from '../src/builds/application/builds.ts';
+import { Releases } from '../src/releases/application/releases.ts';
 import { IMAGE_REGISTRY, PIPELINE_HOST } from '../src/builds/application/ports.ts';
 import { signaturePayload, verifyPayload } from '../src/builds/domain/cosign.ts';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
@@ -189,7 +190,8 @@ const buildsOf = async (agent: Agent, applicationId: string) =>
     digest: string | null;
     signedWith: string | null;
     releaseId: string | null;
-    progress: { job: string; state: string }[];
+    progress: { job: string; state: string; checks: { name: string; outcome: string; detail: string | null }[] }[];
+    reports: { buildLog?: string };
   }[];
 
 /** Waits for a build to be asked for, which happens in the background. */
@@ -317,6 +319,13 @@ describe('feature images', () => {
     const signature = registry.signatures.get(`${repository}@${build!.digest}`)!;
     expect(signature.payload).toEqual(signaturePayload(`registry.test/${repository}`, build!.digest!));
     expect(verifyPayload(testKey.publicKey, signature.payload, signature.signature)).toBe(true);
+    // Every step passed, the platform's own checks included, and the signature was read back and checked.
+    expect(build!.progress.map((step) => step.state)).toEqual(Array(8).fill('passed'));
+    expect(build!.progress.at(-1)!.checks.map((check) => check.name)).toEqual([
+      'The registry has the signature',
+      'It signs this image',
+      "It matches the company's key",
+    ]);
     const { body: versions } = await setup.viewer.get(`/api/v1/company/applications/${setup.applicationId}/versions`).expect(200);
     expect(versions.map((version: { id: string }) => version.id)).toEqual([build!.id]);
     const { body: sbom } = await setup.viewer.get(`/api/v1/company/builds/${build!.id}/sbom`).expect(200);
@@ -346,9 +355,15 @@ describe('feature images', () => {
   });
 
   it.each([
-    [{ testsPass: false }, 'The tests failed.'],
-    [{ secrets: [{ RuleID: 'aws-access-key', File: 'src/config.ts', StartLine: 3 }] }, 'Secrets were found in the code (1), in src/config.ts.'],
-    [{ critical: 2 }, 'The image has 2 critical vulnerabilities.'],
+    [{ testsPass: false }, 'The tests failed. The end of their output is in the test log.'],
+    [
+      { secrets: [{ RuleID: 'aws-access-key', File: 'src/config.ts', StartLine: 3 }] },
+      "Secrets were found in the code: 1 found, in src/config.ts. Remove them, change them where they're used, since they're in Git's history, and push again.",
+    ],
+    [
+      { critical: 2 },
+      'The image has critical vulnerabilities: 2 found. Update the base image or the affected packages, then build again.',
+    ],
   ])('fail when a gate fails: %j', async (options, reason) => {
     const setup = await setUp();
     source.push(setup.organization, setup.name, 'feature/gate');
@@ -395,18 +410,28 @@ describe('feature images', () => {
       (await buildsOf(setup.developer, setup.applicationId))[0]!.progress.map(
         (step) => `${step.job}:${step.state}`,
       );
-    expect(await states()).toEqual(['secrets:waiting', 'test:waiting', 'image:waiting', 'scan:waiting', 'sbom:waiting']);
+    const later = ['inspect:waiting', 'scan:waiting', 'sbom:waiting', 'verify:waiting'];
+    expect(await states()).toEqual(['dockerfile:passed', 'secrets:waiting', 'test:waiting', 'image:waiting', ...later]);
 
     await steps.started('secrets').expect(204);
     await steps.started('test').expect(204);
     await steps.started('test').expect(204);
     await steps.report('secrets', '[]').expect(204);
-    expect(await states()).toEqual(['secrets:passed', 'test:running', 'image:waiting', 'scan:waiting', 'sbom:waiting']);
+    expect(await states()).toEqual(['dockerfile:passed', 'secrets:passed', 'test:running', 'image:waiting', ...later]);
 
     await steps.started('deploy').expect(404);
     await job(body.id, 'wrong-token-of-the-right-length-0000').started('image').expect(401);
     await steps.report('failure', 'secrets=success test=failure').expect(204);
-    expect(await states()).toEqual(['secrets:passed', 'test:failed', 'image:skipped', 'scan:skipped', 'sbom:skipped']);
+    expect(await states()).toEqual([
+      'dockerfile:passed',
+      'secrets:passed',
+      'test:failed',
+      'image:skipped',
+      'inspect:skipped',
+      'scan:skipped',
+      'sbom:skipped',
+      'verify:skipped',
+    ]);
   });
 
   it('fail at once when a pipeline job dies without its report', async () => {
@@ -422,8 +447,101 @@ describe('feature images', () => {
 
     expect((await buildsOf(setup.developer, setup.applicationId))[0]).toMatchObject({
       status: 'failed',
-      failureReason: 'The pipeline stopped: the vulnerability scan step failed.',
+      failureReason:
+        "The pipeline stopped: the vulnerability scan step failed. It stopped before it reported, such as when a tool couldn't be downloaded. Try the build again.",
     });
+  });
+
+  it('show why an image job failed, with the end of the build output', async () => {
+    const setup = await setUp();
+    source.push(setup.organization, setup.name, 'feature/broken-build');
+    const { body } = await setup.developer
+      .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+      .send({ branch: 'feature/broken-build' })
+      .expect(201);
+    await eventually(() => expect(pipelines.tokenOf(body.id)).toBeDefined());
+
+    await job(body.id).report('build-log', '#7 [build 3/5] RUN npm ci\nERROR: process "npm ci" did not complete').expect(204);
+    await job(body.id).report('failure', 'secrets=success test=success image=failure').expect(204);
+
+    const build = (await buildsOf(setup.developer, setup.applicationId))[0]!;
+    expect(build.failureReason).toBe(
+      "The pipeline stopped: the image build step failed. The Dockerfile didn't build. The end of the build's output is in the image build log.",
+    );
+    expect(build.reports.buildLog).toContain('did not complete');
+  });
+
+  it("refuse to build a Dockerfile that breaks the platform's rules, before any job runs", async () => {
+    const setup = await setUp();
+    source.writeFile(setup.organization, setup.name, 'Dockerfile', 'FROM node:24-alpine\nUSER node\n');
+    source.push(setup.organization, setup.name, 'feature/unpinned');
+    const runs = pipelines.runs.length;
+
+    await setup.developer
+      .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+      .send({ branch: 'feature/unpinned' })
+      .expect(201);
+
+    await eventually(async () => {
+      const build = (await buildsOf(setup.developer, setup.applicationId))[0]!;
+      expect(build.status).toBe('failed');
+      expect(build.failureReason).toMatch(/^The Dockerfile breaks a platform rule: Base images are pinned by digest\. Not pinned: node:24-alpine on line 1/);
+      expect(build.progress[0]).toMatchObject({ job: 'dockerfile', state: 'failed' });
+    });
+    expect(pipelines.runs).toHaveLength(runs);
+  });
+
+  it('refuse to store an image that runs as root', async () => {
+    const setup = await setUp();
+    source.push(setup.organization, setup.name, 'feature/root');
+    const { body } = await setup.developer
+      .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+      .send({ branch: 'feature/root' })
+      .expect(201);
+    registry.details = { user: '', healthcheck: true, exposedPorts: [], sizeBytes: 10 };
+    try {
+      await eventually(() => expect(pipelines.tokenOf(body.id)).toBeDefined());
+      const steps = job(body.id);
+      await steps.report('tests', 'All tests passed.', '?passed=true').expect(204);
+      await steps.report('secrets', '[]').expect(204);
+      expect((await steps.uploadImage(Buffer.from(`root image of ${body.id}`))).status).toBe(204);
+    } finally {
+      registry.details = { user: 'app', healthcheck: true, exposedPorts: ['8080/tcp'], sizeBytes: 1_000 };
+    }
+
+    await eventually(async () => {
+      const build = (await buildsOf(setup.developer, setup.applicationId))[0]!;
+      expect(build).toMatchObject({
+        status: 'failed',
+        failureReason:
+          'The image breaks a platform rule: It runs as a non-root user. The image runs as root. Add a USER instruction with a non-root user.',
+      });
+      expect(build.progress.find((step: { job: string }) => step.job === 'inspect')).toMatchObject({ state: 'failed' });
+    });
+    expect([...registry.images.keys()].some((key) => key.includes(setup.name))).toBe(false);
+  });
+
+  it('fail a build whose signature the registry gives back changed', async () => {
+    const setup = await setUp();
+    source.push(setup.organization, setup.name, 'feature/tampered');
+    const { body } = await setup.developer
+      .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+      .send({ branch: 'feature/tampered' })
+      .expect(201);
+    registry.tamper = true;
+    try {
+      await runPipeline(body.id, {});
+      await eventually(async () =>
+        expect((await buildsOf(setup.developer, setup.applicationId))[0]).toMatchObject({
+          status: 'failed',
+          failureReason:
+            "The signature doesn't check out: It matches the company's key. The stored signature doesn't match the company's public key.",
+        }),
+      );
+    } finally {
+      registry.tamper = false;
+    }
+    await setup.viewer.get(`/api/v1/company/applications/${setup.applicationId}/versions`).expect(200, []);
   });
 
   it('refuse an image whose parts are missing or changed', async () => {
@@ -665,6 +783,33 @@ describe('a release', () => {
         expect.arrayContaining(['ReleaseStarted', 'ReleaseCandidateCreated', 'ReleaseMerged', 'ReleasePublished']),
       ),
     );
+  });
+
+  it('catches up on a push and a merge the platform missed, when asked and in the background', async () => {
+    const setup = await setUp();
+    const repository = source.repositories.get(`${setup.organization}/${setup.name}`)!;
+    await setup.techLead
+      .post(`/api/v1/company/applications/${setup.applicationId}/releases`)
+      .send({ kind: 'release', version: '0.1.0' })
+      .expect(201);
+    await eventually(() => expect(repository.tags.get('v0.1.0-rc.1')).toBeDefined());
+    await eventually(() => expect(repository.pullRequests.some((pull) => pull.head === 'release/0.1.0')).toBe(true));
+    const sync = () => setup.viewer.post(`/api/v1/company/applications/${setup.applicationId}/releases/sync`).expect(200);
+    expect((await sync()).body).toEqual({ moved: 0 });
+
+    // A push while the API was stopped: no webhook arrives, so asking catches up.
+    const fix = source.push(setup.organization, setup.name, 'release/0.1.0');
+    expect((await sync()).body).toEqual({ moved: 1 });
+    expect(repository.tags.get('v0.1.0-rc.2')).toBe(fix);
+
+    // A merge into main while the API was stopped: the background catch-up finishes the release.
+    const mergeCommit = source.merge(setup.organization, setup.name, 'release/0.1.0', 'main');
+    await app.get(Releases).syncAll((error) => {
+      throw error;
+    });
+    expect(repository.tags.get('v0.1.0')).toBe(mergeCommit);
+    await eventually(async () => expect((await buildsOf(setup.techLead, setup.applicationId)).some((build) => build.kind === 'final')).toBe(true));
+    expect((await sync()).body).toEqual({ moved: 0 });
   });
 
   it('needs a higher version, one open release at a time, and a Tech Lead', async () => {

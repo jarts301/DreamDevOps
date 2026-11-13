@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ImageRegistry } from '../application/ports.ts';
+import type { ImageDetails } from '../domain/image-rules.ts';
 import { SIGNATURE_ANNOTATION, SIGNATURE_MEDIA_TYPE, signatureTag } from '../domain/cosign.ts';
 import { type Descriptor, OciArchive, toWebStream } from './oci-archive.ts';
 
@@ -36,6 +37,38 @@ export class OciRegistry implements ImageRegistry {
     const archive = await OciArchive.open(file);
     const token = await this.#token(repository);
     return this.#pushManifest(archive, repository, await archive.root(), tag, token);
+  }
+
+  async inspectArchive(file: string): Promise<ImageDetails> {
+    return (await OciArchive.open(file)).details();
+  }
+
+  async readSignature(repository: string, digest: string): Promise<{ payload: Buffer; signature: string } | null> {
+    const token = await this.#token(repository);
+    const response = await fetch(`${this.#options.url}/v2/${repository}/manifests/${signatureTag(digest)}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.oci.image.manifest.v1+json' },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    await expectOk(response, 'read the signature');
+    const manifest = (await response.json()) as {
+      layers?: { mediaType: string; digest: string; annotations?: Record<string, string> }[];
+    };
+    const layer = manifest.layers?.find((candidate) => candidate.mediaType === SIGNATURE_MEDIA_TYPE);
+    const signature = layer?.annotations?.[SIGNATURE_ANNOTATION];
+    if (layer === undefined || signature === undefined) {
+      return null;
+    }
+    const blob = await fetch(`${this.#options.url}/v2/${repository}/blobs/${layer.digest}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    await expectOk(blob, 'read the signed payload');
+    const payload = Buffer.from(await blob.arrayBuffer());
+    // The registry is trusted to store, not to answer truthfully: the payload must be what its digest says.
+    return sha256(payload) === layer.digest ? { payload, signature } : null;
   }
 
   async pushSignature(repository: string, digest: string, payload: Buffer, signature: string): Promise<void> {

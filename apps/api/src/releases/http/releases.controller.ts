@@ -18,6 +18,17 @@ export class ReleasesController {
     return this.#releases.list(id);
   }
 
+  /**
+   * Catches up on merges and pushes to release branches the platform missed, such as
+   * while it was stopped. Any member may ask, as it only does what the webhooks would have.
+   */
+  @Authenticated()
+  @Post('applications/:id/releases/sync')
+  @HttpCode(200)
+  async sync(@Param('id') id: string): Promise<object> {
+    return { moved: await this.#releases.sync(id) };
+  }
+
   @RequirePermissions('releases:start')
   @Post('applications/:id/releases')
   async start(

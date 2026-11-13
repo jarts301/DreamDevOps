@@ -240,6 +240,10 @@ describe('the Forgejo source adapter against a real Forgejo', () => {
 
     const archive = gunzipSync(Buffer.from(await new Response(await host.downloadArchive(spec, develop!)).arrayBuffer()));
     expect(archive.toString('latin1')).toContain('billing-api/package.json');
+
+    // One file at a commit, such as the Dockerfile the platform checks before a build.
+    expect((await host.readFile(spec, develop!, 'Dockerfile'))?.toString()).toContain('FROM ');
+    await expect(host.readFile(spec, develop!, 'missing/file.txt')).resolves.toBeNull();
   });
 
   it('puts people in teams, and reports who has an account', async () => {
@@ -298,8 +302,19 @@ describe('the Forgejo source adapter against a real Forgejo', () => {
     expect((await merge()).status).toBeGreaterThanOrEqual(400);
 
     const pull = (await (await api(`/repos/acme/billing-api/pulls/${number}`)).json()) as { head: { sha: string } };
+    await expect(host.findPullRequest(spec, 'feature/greeting', 'develop')).resolves.toEqual({
+      number,
+      merged: false,
+      mergeCommit: null,
+    });
     await host.setCommitStatus(spec, pull.head.sha, { context: TESTS_CHECK, state: 'success', description: 'Passed' });
     expect((await merge()).status).toBe(200);
+
+    // A merge the platform missed can be found later, with its merge commit.
+    const merged = await host.findPullRequest(spec, 'feature/greeting', 'develop');
+    expect(merged).toMatchObject({ number, merged: true });
+    expect(merged!.mergeCommit).toBe(await host.branchHead(spec, 'develop'));
+    await expect(host.findPullRequest(spec, 'feature/none', 'develop')).resolves.toBeNull();
   });
 
   it('archives and restores the repository', async () => {

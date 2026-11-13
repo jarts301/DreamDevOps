@@ -13,7 +13,7 @@ Builds images in the platform's pipeline, checks and signs them, and keeps each 
 
 Production must only trust the release key, so feature and RC images can only run in test environments. A feature branch's images are deleted with their signatures when the branch is deleted.
 
-A pull request check runs only the secret scan and the tests, from [`pipelines/check.yaml`](../../../../pipelines/check.yaml), and reports `dreamdevops/tests` on the commit. A commit that was already checked keeps its result.
+A pull request check runs only the Dockerfile rules, the secret scan and the tests, from [`pipelines/check.yaml`](../../../../pipelines/check.yaml), and reports `dreamdevops/tests` on the commit. A commit that was already checked keeps its result.
 
 ## The pipeline
 
@@ -32,12 +32,30 @@ The test job's commands live in [`pipelines/run-tests.sh`](../../../../pipelines
 
 Every tool image is pinned by digest. Each job tells the platform when it starts, at `/pipeline/builds/:id/jobs/:job/started`, so the dashboard shows every job waiting, running, passed, failed or skipped while the build runs.
 
+## The platform's own checks
+
+Three steps run on the platform itself, where the thing they check is in its hands, not in a job:
+
+| Step | When | It fails when |
+|---|---|---|
+| Dockerfile rules | Before the pipeline starts. The platform reads the `Dockerfile` and `.dockerignore` at the build's exact commit. A failing rule stops the build before any job runs. | There's no Dockerfile, a base image isn't pinned by digest, `ADD` downloads a file without `--checksum`, or a build argument or environment variable is named like a secret, such as `NPM_TOKEN`. A missing `.dockerignore` is only a warning. |
+| Image rules | When the image arrives, before it's stored. The platform reads the image's settings from its OCI configuration, so a user set by the base image counts. An image that breaks a rule is never pushed, so nothing can deploy it. | It runs as root, or has no health check. |
+| Signature | Right after signing. The platform reads the signature back from the registry, as a target would, and checks it with the company's public key. | The registry doesn't return it, it names another image, or it doesn't match the key. |
+
+The rules are in `domain/dockerfile-policy.ts` and `domain/image-rules.ts`. Every [blueprint](../../../../blueprints/README.md) passes them, which the blueprint tests check.
+
+## Why a build failed
+
+Each step reports what it checked. A failed check says what's wrong and how to fix it, and the build's reason starts with the step, such as *The Dockerfile breaks a platform rule: Base images are pinned by digest. Not pinned: node:24 on line 1.* The application's page lists the failed checks and warnings under the build's steps.
+
+The pipeline repository is closed to company teams, so people can't read Forgejo's job logs. The jobs send what explains a failure instead: the test job the end of the tests' output, and the image job the end of the build's output, which names the instruction that failed. Both show on the build. A job that stopped before it reported, such as when a tool couldn't be downloaded, is named, with the advice to try again.
+
 ## What jobs can and can't do
 
 - **No credentials:** each run gets a one-time token that only reads that build's source and reports that build's results, while the build runs. Only its hash is stored.
 - **The platform pushes:** the job uploads the image to the platform, which pushes it to the company's registry namespace with the bot's account, and records its digest. Jobs never hold registry credentials.
 - **Clean checks:** the scan and SBOM jobs download the exact image the platform stored, in fresh containers where no application code has run.
-- **The platform decides:** a build passes only when every report is in: no secrets found, tests passed, the image stored, no critical vulnerabilities, and an SBOM. Any failing gate fails it at once. A failure report can only fail a build.
+- **The platform decides:** a build passes only when every report is in: the Dockerfile and image rules passed, no secrets found, tests passed, the image stored, no critical vulnerabilities, and an SBOM, and then only once its signature checks out. Any failing gate fails it at once. A failure report can only fail a build.
 
 The pipeline's tools can only upload text, so the image goes up in base64 parts of 16 MB, and the platform checks the whole file against the SHA-256 the job sends.
 

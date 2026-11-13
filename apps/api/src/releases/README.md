@@ -14,6 +14,10 @@ Runs Git Flow releases and hotfixes, from cutting the branch to the final image.
 
 Forgejo enforces the rules on the server. Only the platform creates release branches and version tags.
 
+## Missed webhooks
+
+Forgejo doesn't send a webhook again when the platform missed it, such as while the API was stopped. So the platform catches up: for each open release, a pull request into `main` that merged finishes the release (step 6), and a newer commit on its branch becomes a candidate. This runs every 5 minutes for every company, and when someone opens the application's page. Doing it twice changes nothing.
+
 ## Versions
 
 - **Unused, and higher than everything merged:** a new version must be higher than every merged or published one.
@@ -30,6 +34,7 @@ All routes start with `/api/v1`.
 |---|---|---|
 | `GET /company/applications/:id/releases` | Any member | Releases with their candidates, and suggested next versions |
 | `POST /company/applications/:id/releases` | `releases:start` | Starts `{ "kind": "release" \| "hotfix", "version": "1.4.0" }` |
+| `POST /company/applications/:id/releases/sync` | Any member | Catches up on merges and pushes the platform missed, and returns `{ "moved": n }` |
 | `POST /company/releases/:id/final-build` | `releases:start` | Builds a failed final image again |
 
 ## Events

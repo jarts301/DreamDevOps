@@ -1,3 +1,5 @@
+import type { ImageDetails } from '../domain/image-rules.ts';
+
 export const IMAGE_REGISTRY = Symbol('IMAGE_REGISTRY');
 export const PIPELINE_HOST = Symbol('PIPELINE_HOST');
 
@@ -7,8 +9,12 @@ export interface ImageRegistry {
   readonly imageHost: string;
   /** Pushes an OCI image layout tar file under a tag. Returns the manifest digest. */
   pushArchive(file: string, repository: string, tag: string): Promise<string>;
+  /** Reads an OCI image layout tar file's settings, such as its user and health check, before it's pushed. */
+  inspectArchive(file: string): Promise<ImageDetails>;
   /** Stores a Cosign signature next to the image it signs. */
   pushSignature(repository: string, digest: string, payload: Buffer, signature: string): Promise<void>;
+  /** Reads back the Cosign signature stored for an image, or null if there's none. */
+  readSignature(repository: string, digest: string): Promise<{ payload: Buffer; signature: string } | null>;
   deleteTag(repository: string, tag: string): Promise<void>;
 }
 

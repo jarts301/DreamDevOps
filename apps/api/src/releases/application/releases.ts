@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
+import { createDomainEvent, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { Builds } from '../../builds/application/builds.ts';
 import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
@@ -8,6 +8,8 @@ import type { RepositorySpec, SourceHost } from '../../source-governance/applica
 import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
 import { RC_IMAGE_CHECK } from '../../source-governance/domain/git-flow.ts';
 import { ReleaseError } from '../domain/errors.ts';
+
+const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 import {
   branchFor,
   formatVersion,
@@ -337,6 +339,77 @@ export class Releases {
         }
       });
     }
+  }
+
+  /**
+   * Catches up on what the Git tool said while the platform wasn't listening, such as
+   * while the API was stopped: Forgejo doesn't send a missed webhook again. A release
+   * merged into main is finished, and a newer commit on a release branch builds a
+   * candidate. Returns how many releases moved on. Safe to repeat.
+   */
+  async sync(applicationIdValue: unknown): Promise<number> {
+    const application = await this.#catalog.get(applicationIdValue);
+    const releases = await this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query<ReleaseRow>(
+        "SELECT * FROM releases.releases WHERE application_id = $1 AND status = 'open'",
+        [application.id],
+      );
+      return rows;
+    });
+    let moved = 0;
+    for (const release of releases) {
+      if (await this.#syncRelease(release)) {
+        moved += 1;
+      }
+    }
+    return moved;
+  }
+
+  /**
+   * Catches up on every company's open releases. Runs in the background. A release the
+   * Git tool can't answer for is passed to onError and doesn't hold up the others.
+   */
+  async syncAll(onError: (error: unknown) => void): Promise<void> {
+    const companies = await runWithCompany(NO_COMPANY, () =>
+      this.#database.transaction(async (tx) => {
+        const { rows } = await tx.query<{ company_id: string }>('SELECT * FROM releases.companies_with_open_releases()');
+        return rows;
+      }),
+    );
+    for (const { company_id: companyId } of companies) {
+      await runWithCompany(parseCompanyId(companyId), async () => {
+        const releases = await this.#database.transaction(async (tx) => {
+          const { rows } = await tx.query<ReleaseRow>("SELECT * FROM releases.releases WHERE status = 'open'");
+          return rows;
+        });
+        for (const release of releases) {
+          await this.#syncRelease(release).catch(onError);
+        }
+      });
+    }
+  }
+
+  async #syncRelease(release: ReleaseRow): Promise<boolean> {
+    const spec = await this.#repositories.locate(release.application_id);
+    if (spec === null) {
+      return false;
+    }
+    const merge = await this.#source.findPullRequest(spec, release.branch, 'main');
+    if (merge?.merged === true && merge.mergeCommit !== null) {
+      await this.onPullRequestMerged({
+        applicationId: release.application_id,
+        head: release.branch,
+        base: 'main',
+        mergeCommit: merge.mergeCommit,
+      });
+      return true;
+    }
+    const head = await this.#source.branchHead(spec, release.branch);
+    if (head !== null && head !== release.last_candidate_commit) {
+      await this.#candidate(release.id, head, null);
+      return true;
+    }
+    return false;
   }
 
   /** Builds the final image again, such as after a failure. */

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { GenericContainer, Network, type StartedNetwork, type StartedTestContainer, Wait } from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { signaturePayload, signatureTag, signPayload } from '../src/builds/domain/cosign.ts';
+import { signaturePayload, signatureTag, signPayload, verifyPayload } from '../src/builds/domain/cosign.ts';
 import { ForgejoPipelineHost, PIPELINE_FILE, PIPELINE_REPOSITORY } from '../src/builds/infrastructure/forgejo-pipeline-host.ts';
 import { OciRegistry } from '../src/builds/infrastructure/oci-registry.ts';
 import { ForgejoGitProvider } from '../src/tenancy/infrastructure/forgejo-git-provider.ts';
@@ -41,7 +41,7 @@ const digestOf = (content: Buffer) => `sha256:${createHash('sha256').update(cont
 const blob = (content: Buffer) => [`blobs/sha256/${digestOf(content).slice(7)}`, content] as const;
 
 /** A one-layer image in the OCI layout BuildKit writes. */
-function ociArchive(): { archive: Buffer; manifest: Buffer } {
+function ociArchive(settings: object = {}): { archive: Buffer; manifest: Buffer } {
   const layerTar = tar({ 'hello.txt': Buffer.from('hello from a test image\n') });
   const layer = gzipSync(layerTar);
   const config = Buffer.from(
@@ -49,7 +49,7 @@ function ociArchive(): { archive: Buffer; manifest: Buffer } {
       architecture: 'amd64',
       os: 'linux',
       rootfs: { type: 'layers', diff_ids: [digestOf(layerTar)] },
-      config: {},
+      config: settings,
     }),
   );
   const manifest = Buffer.from(
@@ -206,6 +206,11 @@ describe('the registry and pipeline adapters against a real Forgejo', () => {
     const verified = cosignVerify(`forgejo:3000/acme/hello@${digest}`, keys.publicKey);
     expect(verified.status, verified.stderr).toBe(0);
     expect(verified.stdout).toContain(digest);
+    // The platform reads it back as cosign does, and gets what it stored.
+    const stored = await registry.readSignature('acme/hello', digest);
+    expect(stored?.payload).toEqual(payload);
+    expect(verifyPayload(keys.publicKey, stored!.payload, stored!.signature)).toBe(true);
+    await expect(registry.readSignature('acme/hello', `sha256:${'0'.repeat(64)}`)).resolves.toBeNull();
 
     const other = generateKeyPairSync('ec', {
       namedCurve: 'P-256',
@@ -214,6 +219,26 @@ describe('the registry and pipeline adapters against a real Forgejo', () => {
     });
     expect(cosignVerify(`forgejo:3000/acme/hello@${digest}`, other.publicKey).status).not.toBe(0);
   }, 180_000);
+
+  it("reads an image's user, health check and ports before it's pushed", async () => {
+    const file = join(folder, 'settings.tar');
+    writeFileSync(
+      file,
+      ociArchive({
+        User: 'node',
+        Healthcheck: { Test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8080/health || exit 1'] },
+        ExposedPorts: { '8080/tcp': {} },
+      }).archive,
+    );
+    await expect(registry.inspectArchive(file)).resolves.toMatchObject({
+      user: 'node',
+      healthcheck: true,
+      exposedPorts: ['8080/tcp'],
+    });
+
+    writeFileSync(file, ociArchive({ Healthcheck: { Test: ['NONE'] } }).archive);
+    await expect(registry.inspectArchive(file)).resolves.toMatchObject({ user: '', healthcheck: false, exposedPorts: [] });
+  });
 
   it('deletes a tag', async () => {
     const { archive } = ociArchive();

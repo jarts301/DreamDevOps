@@ -107,6 +107,8 @@ describe('ApplicationDetail', () => {
       branches?: string[];
       environments?: object[];
       deployments?: object[];
+      /** How many releases the catch-up on missed merges and pushes moved on. */
+      moved?: number;
     } = {},
   ) => {
     setUp(permissions);
@@ -126,6 +128,9 @@ describe('ApplicationDetail', () => {
     http.expectOne((request) => request.url === '/api/v1/company/environments').flush(data.environments ?? []);
     await settle();
     http.expectOne((request) => request.url === '/api/v1/company/deployments').flush(data.deployments ?? []);
+    // The page asks the platform to catch up on merges and pushes it missed.
+    await settle();
+    http.expectOne('/api/v1/company/applications/a-1/releases/sync').flush({ moved: data.moved ?? 0 });
     await render(fixture);
     return fixture;
   };
@@ -173,11 +178,14 @@ describe('ApplicationDetail', () => {
           status: 'running',
           reports: { secrets: { found: 0 }, tests: { passed: true, log: '' } },
           progress: [
-            { job: 'secrets', state: 'passed', startedAt: '2026-11-02T10:00:10Z' },
-            { job: 'test', state: 'passed', startedAt: '2026-11-02T10:00:10Z' },
-            { job: 'image', state: 'running', startedAt: '2026-11-02T10:01:00Z' },
-            { job: 'scan', state: 'waiting', startedAt: null },
-            { job: 'sbom', state: 'waiting', startedAt: null },
+            { job: 'dockerfile', state: 'passed', startedAt: null, checks: [] },
+            { job: 'secrets', state: 'passed', startedAt: '2026-11-02T10:00:10Z', checks: [] },
+            { job: 'test', state: 'passed', startedAt: '2026-11-02T10:00:10Z', checks: [] },
+            { job: 'image', state: 'running', startedAt: '2026-11-02T10:01:00Z', checks: [] },
+            { job: 'inspect', state: 'waiting', startedAt: null, checks: [] },
+            { job: 'scan', state: 'waiting', startedAt: null, checks: [] },
+            { job: 'sbom', state: 'waiting', startedAt: null, checks: [] },
+            { job: 'verify', state: 'waiting', startedAt: null, checks: [] },
           ],
         }),
       ],
@@ -188,11 +196,14 @@ describe('ApplicationDetail', () => {
     ]);
 
     expect(steps).toEqual([
+      ['passed', '✓Dockerfile rules: done'],
       ['passed', '✓Secret scan: done, none found'],
       ['passed', '✓Tests: done'],
       ['running', '◐Image: in progress'],
+      ['waiting', '○Image rules: waiting'],
       ['waiting', '○Vulnerability scan: waiting'],
       ['waiting', '○SBOM: waiting'],
+      ['waiting', '○Signature: waiting'],
     ]);
     fixture.destroy();
   });
@@ -204,6 +215,61 @@ describe('ApplicationDetail', () => {
 
     expect(text(fixture)).toContain('The tests failed.');
     expect(element(fixture).querySelector('pre.log')?.textContent).toContain('expected 2 to be 3');
+  });
+
+  it('shows the rules a build broke, with how to fix them, and its warnings', async () => {
+    const fixture = await open(['dashboards:view'], {
+      builds: [
+        build({
+          status: 'failed',
+          failureReason: 'The image breaks a platform rule: It runs as a non-root user.',
+          progress: [
+            {
+              job: 'dockerfile',
+              state: 'passed',
+              startedAt: null,
+              checks: [
+                { name: 'The repository has a Dockerfile', outcome: 'passed', detail: null },
+                { name: 'The repository has a .dockerignore file', outcome: 'warning', detail: 'Without one, every file is sent.' },
+              ],
+            },
+            {
+              job: 'inspect',
+              state: 'failed',
+              startedAt: null,
+              checks: [{ name: 'It runs as a non-root user', outcome: 'failed', detail: 'Add a USER instruction.' }],
+            },
+          ],
+        }),
+      ],
+    });
+    const checks = [...element(fixture).querySelectorAll<HTMLElement>('.check-list li')].map((item) => [
+      item.dataset['outcome'],
+      item.textContent?.replace(/\s+/g, ' ').trim(),
+    ]);
+
+    expect(checks).toEqual([
+      ['warning', '!The repository has a .dockerignore file: warning. Without one, every file is sent.'],
+      ['failed', '✕It runs as a non-root user: failed. Add a USER instruction.'],
+    ]);
+  });
+
+  it("shows the end of a failed image build's output", async () => {
+    const fixture = await open(['dashboards:view'], {
+      builds: [build({ status: 'failed', failureReason: "The Dockerfile didn't build.", reports: { buildLog: 'ERROR: npm ci did not complete' } })],
+    });
+
+    expect(text(fixture)).toContain('Image build output');
+    expect(element(fixture).querySelector('pre.log')?.textContent).toContain('npm ci did not complete');
+  });
+
+  it('shows releases again when the catch-up on missed merges moved one on', async () => {
+    const fixture = await open(['dashboards:view'], { moved: 1 });
+
+    await answerRefresh({ releases: [PUBLISHED] });
+    await render(fixture);
+
+    expect(text(fixture)).toContain('Release 1.0.0');
   });
 
   it('starts a release with the suggested version', async () => {

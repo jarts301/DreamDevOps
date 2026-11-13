@@ -2,12 +2,20 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { type FileHandle, open } from 'node:fs/promises';
 import { Readable } from 'node:stream';
+import type { ImageDetails } from '../domain/image-rules.ts';
 
 const BLOCK = 512;
 
 interface Entry {
   readonly offset: number;
   readonly size: number;
+}
+
+/** The part of an OCI image configuration the platform's rules look at. */
+interface ContainerConfig {
+  readonly User?: string;
+  readonly Healthcheck?: { readonly Test?: readonly string[] };
+  readonly ExposedPorts?: Readonly<Record<string, unknown>>;
 }
 
 export interface Descriptor {
@@ -46,6 +54,35 @@ export class OciArchive {
       throw new InvalidArchiveError('The image archive must hold exactly one image.');
     }
     return root;
+  }
+
+  /**
+   * The image's settings, from its configuration, and its size. For an index of several
+   * platforms, the first image's, as they're built from the same Dockerfile.
+   */
+  async details(): Promise<ImageDetails> {
+    let descriptor = await this.root();
+    let manifest = JSON.parse((await this.blob(descriptor)).toString('utf8')) as {
+      config?: Descriptor;
+      layers?: Descriptor[];
+      manifests?: Descriptor[];
+    };
+    if (manifest.manifests !== undefined) {
+      descriptor = manifest.manifests.find((child) => !child.mediaType.includes('index')) ?? manifest.manifests[0]!;
+      manifest = JSON.parse((await this.blob(descriptor)).toString('utf8')) as typeof manifest;
+    }
+    if (manifest.config === undefined) {
+      throw new InvalidArchiveError('The image has no configuration.');
+    }
+    const config = (JSON.parse((await this.blob(manifest.config)).toString('utf8')) as { config?: ContainerConfig }).config ?? {};
+    const healthcheck = config.Healthcheck?.Test ?? [];
+    return {
+      user: config.User ?? '',
+      // A health check of NONE turns off one set by a base image.
+      healthcheck: healthcheck.length > 0 && healthcheck[0] !== 'NONE',
+      exposedPorts: Object.keys(config.ExposedPorts ?? {}).sort(),
+      sizeBytes: (manifest.layers ?? []).reduce((total, layer) => total + layer.size, manifest.config.size),
+    };
   }
 
   /** A small blob, such as a manifest, checked against its digest. */

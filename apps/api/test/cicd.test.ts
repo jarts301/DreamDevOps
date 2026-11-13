@@ -134,19 +134,26 @@ describe('builds', () => {
     expect(evaluate({ secrets: complete.secrets! }, 'check')).toEqual({ state: 'waiting' });
     expect(evaluate({ secrets: complete.secrets!, tests: { passed: false, log: '' } }, 'check')).toEqual({
       state: 'failed',
-      reason: 'The tests failed.',
+      reason: 'The tests failed. The end of their output is in the test log.',
     });
   });
 
   it('fail at once on a failing gate, even with reports missing', () => {
-    expect(evaluate({ tests: { passed: false, log: 'x' } })).toEqual({ state: 'failed', reason: 'The tests failed.' });
+    expect(evaluate({ tests: { passed: false, log: 'x' } })).toEqual({
+      state: 'failed',
+      reason: 'The tests failed. The end of their output is in the test log.',
+    });
     expect(evaluate({ scan: { ...complete.scan!, critical: 1 } })).toEqual({
       state: 'failed',
-      reason: 'The image has 1 critical vulnerabilities.',
+      reason: 'The image has critical vulnerabilities: 1 found. Update the base image or the affected packages, then build again.',
     });
     expect(
       evaluate({ secrets: { found: 2, findings: [{ rule: 'r', file: 'a.ts', line: 1 }, { rule: 'r', file: 'a.ts', line: 9 }] } }),
-    ).toEqual({ state: 'failed', reason: 'Secrets were found in the code (2), in a.ts.' });
+    ).toEqual({
+      state: 'failed',
+      reason:
+        "Secrets were found in the code: 2 found, in a.ts. Remove them, change them where they're used, since they're in Git's history, and push again.",
+    });
   });
 
   it('sign only final images with the release key', () => {

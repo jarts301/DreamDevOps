@@ -83,8 +83,15 @@ jobs:
           for attempt in 1 2 3; do
             BUILDKITD_FLAGS=--oci-worker-no-process-sandbox buildctl-daemonless.sh build \
               --frontend dockerfile.v0 --local context=. --local dockerfile=. \
-              --output type=oci,dest=/tmp/image.tar && break
-            [ "$attempt" -eq 3 ] && exit 1
+              --output type=oci,dest=/tmp/image.tar > /tmp/build.log 2>&1 && break
+            tail -n 40 /tmp/build.log
+            if [ "$attempt" -eq 3 ]; then
+              # The end of the output names the instruction that failed, so people can see why.
+              tail -c 60000 /tmp/build.log > /tmp/build-tail.log
+              wget -qO /dev/null --header "Authorization: Bearer $BUILD_TOKEN" \
+                --header "Content-Type: application/octet-stream" --post-file /tmp/build-tail.log "$BUILD_URL/reports/build-log" || true
+              exit 1
+            fi
             sleep 15
           done
           # BusyBox wget only uploads text, so the image goes up in base64 parts, then the

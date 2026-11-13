@@ -5,8 +5,16 @@ import { firstValueFrom } from 'rxjs';
 export type BuildKind = 'feature' | 'rc' | 'final' | 'check';
 export type BuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted';
 
-export type PipelineJob = 'secrets' | 'test' | 'image' | 'scan' | 'sbom';
+/** A build's steps: the pipeline's jobs, and the platform's own checks of the Dockerfile, the image and its signature. */
+export type PipelineJob = 'dockerfile' | 'secrets' | 'test' | 'image' | 'inspect' | 'scan' | 'sbom' | 'verify';
 export type JobState = 'waiting' | 'running' | 'passed' | 'failed' | 'skipped';
+
+/** One rule a step checked. A warning is shown but doesn't stop the build. */
+export interface BuildCheck {
+  readonly name: string;
+  readonly outcome: 'passed' | 'failed' | 'warning';
+  readonly detail: string | null;
+}
 
 export interface Build {
   readonly id: string;
@@ -22,6 +30,8 @@ export interface Build {
   readonly reports: {
     readonly secrets?: { readonly found: number };
     readonly tests?: { readonly passed: boolean; readonly log: string };
+    /** The end of a failed image build's output. */
+    readonly buildLog?: string;
     readonly image?: { readonly digest: string; readonly size: number };
     readonly scan?: {
       readonly critical: number;
@@ -32,7 +42,12 @@ export interface Build {
     };
     readonly sbom?: { readonly components: number };
   };
-  readonly progress: readonly { readonly job: PipelineJob; readonly state: JobState; readonly startedAt: string | null }[];
+  readonly progress: readonly {
+    readonly job: PipelineJob;
+    readonly state: JobState;
+    readonly startedAt: string | null;
+    readonly checks: readonly BuildCheck[];
+  }[];
   readonly imageRef: string | null;
   readonly digest: string | null;
   readonly signedWith: 'test' | 'release' | null;
@@ -130,6 +145,11 @@ export class DeliveryApi {
 
   releases(applicationId: string): Promise<Releases> {
     return firstValueFrom(this.#http.get<Releases>(`${applicationPath(applicationId)}/releases`));
+  }
+
+  /** Asks the platform to catch up on merges and pushes to release branches it missed. */
+  syncReleases(applicationId: string): Promise<{ moved: number }> {
+    return firstValueFrom(this.#http.post<{ moved: number }>(`${applicationPath(applicationId)}/releases/sync`, {}));
   }
 
   startRelease(applicationId: string, kind: ReleaseKind, version: string): Promise<unknown> {

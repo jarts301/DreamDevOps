@@ -32,8 +32,9 @@ import {
   summarizeScan,
   summarizeSecrets,
 } from '../domain/build.ts';
-import { signaturePayload, signatureTag, signPayload } from '../domain/cosign.ts';
+import { signaturePayload, signatureTag, signPayload, verifyPayload } from '../domain/cosign.ts';
 import { BuildError } from '../domain/errors.ts';
+import { checkImage, checkRepositoryFiles, checkStoredSignature, failedChecksReason } from '../domain/image-rules.ts';
 import { TESTS_CHECK } from '../../source-governance/domain/git-flow.ts';
 import type { ImageRegistry, PipelineHost } from './ports.ts';
 import type { SigningKeys } from './signing-keys.ts';
@@ -50,6 +51,7 @@ const MAX_REPORT_BYTES: Readonly<Record<ReportKind, number>> = {
   scan: 50 * 1024 * 1024,
   sbom: 100 * 1024 * 1024,
   failure: 4 * 1024,
+  'build-log': 64 * 1024,
 };
 
 const JOB_NAMES: Readonly<Record<string, string>> = {
@@ -60,7 +62,13 @@ const JOB_NAMES: Readonly<Record<string, string>> = {
   sbom: 'SBOM',
 };
 
-export type ReportKind = 'secrets' | 'tests' | 'scan' | 'sbom' | 'failure';
+/** Why a pipeline job may have stopped, and what to do, for people reading the build. */
+const JOB_ADVICE: Readonly<Record<string, string>> = {
+  image: "The Dockerfile didn't build. The end of the build's output is in the image build log.",
+};
+const DEFAULT_JOB_ADVICE = "It stopped before it reported, such as when a tool couldn't be downloaded. Try the build again.";
+
+export type ReportKind = 'secrets' | 'tests' | 'scan' | 'sbom' | 'failure' | 'build-log';
 
 export interface BuildView {
   readonly id: string;
@@ -307,6 +315,23 @@ export class Builds {
       await this.#fail(buildId, "The application's repository isn't ready.");
       return;
     }
+    // The platform checks the Dockerfile itself, at the exact commit, before any job runs.
+    const [dockerfile, dockerignore] = await Promise.all([
+      this.#source.readFile(spec, build.commit_sha, 'Dockerfile'),
+      this.#source.readFile(spec, build.commit_sha, '.dockerignore'),
+    ]);
+    const rules = checkRepositoryFiles(dockerfile?.toString('utf8') ?? null, dockerignore !== null);
+    await this.#database.transaction((tx) =>
+      tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
+        buildId,
+        JSON.stringify({ dockerfile: rules }),
+      ]),
+    );
+    const broken = failedChecksReason('The Dockerfile breaks a platform rule', rules.checks);
+    if (broken !== null) {
+      await this.#fail(buildId, broken);
+      return;
+    }
     const token = randomBytes(32).toString('base64url');
     await this.#pipelines.ensurePipeline(spec.organization, this.#options.pipelines);
     await this.#database.transaction((tx) =>
@@ -432,6 +457,8 @@ export class Builds {
       // Says which jobs failed. It can only fail a build, so it needs no other check.
       const failedJobs = [...content.toString('utf8').matchAll(/(\w+)=(failure|cancelled)/g)].map((match) => match[1]!);
       const failed = failedJobs.map((job) => JOB_NAMES[job] ?? job).join(', ');
+      const first = failedJobs[0];
+      const advice = first === undefined ? DEFAULT_JOB_ADVICE : (JOB_ADVICE[first] ?? DEFAULT_JOB_ADVICE);
       await runWithCompany(companyId, async () => {
         await this.#database.transaction((tx) =>
           tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
@@ -439,7 +466,7 @@ export class Builds {
             JSON.stringify({ failedJobs: failedJobs.filter((job) => (PIPELINE_JOBS as readonly string[]).includes(job)) }),
           ]),
         );
-        await this.#fail(build.id, `The pipeline stopped: the ${failed || 'pipeline'} step failed.`);
+        await this.#fail(build.id, `The pipeline stopped: the ${failed || 'pipeline'} step failed. ${advice}`);
       });
       return;
     }
@@ -453,6 +480,10 @@ export class Builds {
             break;
           case 'tests':
             update = { tests: { passed: passed === 'true', log: content.toString('utf8').slice(-60_000) } };
+            break;
+          case 'build-log':
+            // The end of a failed image build's output, which names the instruction that failed.
+            update = { buildLog: content.toString('utf8').slice(-60_000) };
             break;
           case 'scan':
             update = { scan: summarizeScan(JSON.parse(content.toString('utf8'))) };
@@ -559,7 +590,28 @@ export class Builds {
       throw new BuildError('invalid', "The image doesn't match its hash.");
     }
 
+    let inspection;
+    try {
+      inspection = checkImage(await this.#registry.inspectArchive(file));
+    } catch {
+      await rm(file, { force: true });
+      throw new BuildError('invalid', "The image's settings could not be read.");
+    }
+
     await runWithCompany(companyId, async () => {
+      await this.#database.transaction((tx) =>
+        tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
+          build.id,
+          JSON.stringify({ inspection }),
+        ]),
+      );
+      // An image that breaks the rules is never stored, so nothing can deploy it.
+      const broken = failedChecksReason('The image breaks a platform rule', inspection.checks);
+      if (broken !== null) {
+        await rm(file, { force: true });
+        await this.#fail(build.id, broken);
+        return;
+      }
       const spec = await this.#repositories.locate(build.application_id);
       const application = await this.#catalog.get(build.application_id);
       if (spec === null) {
@@ -725,7 +777,21 @@ export class Builds {
       const signature = signPayload(await this.#keys.privateKey(tx, purpose), payload);
       await this.#registry.pushSignature(repository, build.digest, payload, signature);
       await tx.query('UPDATE builds.builds SET signed_at = now() WHERE id = $1', [buildId]);
-      await this.#finish(tx, build, 'succeeded', null);
+      // Reads the signature back, as a target would, and checks it with the public key.
+      const publicKey = await this.#keys.publicKey(tx, purpose);
+      const imageName = `${this.#registry.imageHost}/${repository}@${build.digest}`;
+      const verification = checkStoredSignature(
+        payload,
+        await this.#registry.readSignature(repository, build.digest),
+        (stored, storedSignature) => verifyPayload(publicKey, stored, storedSignature),
+        `cosign verify --key ${purpose}.pub --insecure-ignore-tlog=true ${imageName}`,
+      );
+      await tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
+        buildId,
+        JSON.stringify({ verification }),
+      ]);
+      const broken = failedChecksReason("The signature doesn't check out", verification.checks);
+      await this.#finish(tx, build, broken === null ? 'succeeded' : 'failed', broken);
     });
   }
 

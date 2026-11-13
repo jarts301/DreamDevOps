@@ -8,7 +8,7 @@ import type { ApiRequest } from '../../http/request.ts';
 import { Builds, type ReportKind } from '../application/builds.ts';
 import { BuildError } from '../domain/errors.ts';
 
-const REPORTS: readonly ReportKind[] = ['secrets', 'tests', 'scan', 'sbom', 'failure'];
+const REPORTS: readonly ReportKind[] = ['secrets', 'tests', 'scan', 'sbom', 'failure', 'build-log'];
 
 const bearer = (request: ApiRequest): string | undefined => {
   const match = /^Bearer ([A-Za-z0-9_-]{20,100})$/.exec(request.headers.authorization ?? '');

@@ -1,3 +1,6 @@
+import { type Check, failed, failures, passed, warning } from '../../shared/progress.ts';
+import { failedChecksReason, type PlatformChecks } from './image-rules.ts';
+
 /** Images, plus checks: the platform's tests and secret scan for a pull request, with no image. */
 export type BuildKind = 'feature' | 'rc' | 'final' | 'check';
 export type BuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted';
@@ -51,6 +54,8 @@ export interface ScanReport {
 export interface Reports {
   readonly secrets?: SecretsReport;
   readonly tests?: TestsReport;
+  /** The end of a failed image build's output. */
+  readonly buildLog?: string;
   readonly image?: { readonly digest: string; readonly size: number };
   readonly scan?: ScanReport;
   readonly sbom?: { readonly components: number };
@@ -58,31 +63,51 @@ export interface Reports {
   readonly started?: Readonly<Partial<Record<PipelineJob, string>>>;
   /** The jobs the pipeline said failed or were cancelled. */
   readonly failedJobs?: readonly string[];
+  /** The platform's own checks: the Dockerfile before the pipeline starts, */
+  readonly dockerfile?: PlatformChecks;
+  /** the image's settings when it arrives, before it's stored, */
+  readonly inspection?: PlatformChecks;
+  /** and the signature, read back from the registry once it's signed. */
+  readonly verification?: PlatformChecks;
 }
 
 /** The pipeline's jobs, in the order they run. Checks run only the first two. */
 export const PIPELINE_JOBS = ['secrets', 'test', 'image', 'scan', 'sbom'] as const;
 export type PipelineJob = (typeof PIPELINE_JOBS)[number];
 
+/**
+ * Every step of a build, in order: the pipeline's jobs, and the checks the platform runs
+ * itself, on the Dockerfile, the image it received, and the signature it stored.
+ */
+export const BUILD_STEPS = ['dockerfile', 'secrets', 'test', 'image', 'inspect', 'scan', 'sbom', 'verify'] as const;
+export type BuildStep = (typeof BUILD_STEPS)[number];
+/** A pull request check builds no image, so it has only these. */
+const CHECK_STEPS: readonly BuildStep[] = ['dockerfile', 'secrets', 'test'];
+
 export type JobState = 'waiting' | 'running' | 'passed' | 'failed' | 'skipped';
 
 export interface JobProgress {
-  readonly job: PipelineJob;
+  readonly job: BuildStep;
   readonly state: JobState;
   readonly startedAt: string | null;
+  /** What the step checked, with why each failed and how to fix it. */
+  readonly checks: readonly Check[];
 }
 
-const JOB_REPORT: Readonly<Record<PipelineJob, keyof Reports>> = {
+const STEP_REPORT: Readonly<Record<BuildStep, keyof Reports>> = {
+  dockerfile: 'dockerfile',
   secrets: 'secrets',
   test: 'tests',
   image: 'image',
+  inspect: 'inspection',
   scan: 'scan',
   sbom: 'sbom',
+  verify: 'verification',
 };
 
 /**
- * Where each job of a build stands, for people to follow. A job is running once it said
- * it started, and done once its report is in. When the build has finished, jobs that
+ * Where each step of a build stands, for people to follow. A job is running once it said
+ * it started, and done once its report is in. When the build has finished, steps that
  * never ran count as skipped.
  */
 export function buildProgress(
@@ -90,13 +115,14 @@ export function buildProgress(
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted',
   reports: Reports,
 ): JobProgress[] {
-  const jobs = kind === 'check' ? PIPELINE_JOBS.slice(0, 2) : PIPELINE_JOBS;
+  const steps = kind === 'check' ? CHECK_STEPS : BUILD_STEPS;
   const finished = status === 'succeeded' || status === 'failed' || status === 'deleted';
-  return jobs.map((job) => {
-    const startedAt = reports.started?.[job] ?? null;
-    const report = reports[JOB_REPORT[job]];
+  return steps.map((job) => {
+    const startedAt = (reports.started as Partial<Record<string, string>> | undefined)?.[job] ?? null;
+    const report = reports[STEP_REPORT[job]];
+    const checks = stepChecks(job, reports);
     let state: JobState;
-    if (reports.failedJobs?.includes(job) || jobFailed(job, reports)) {
+    if (reports.failedJobs?.includes(job) || failures(checks).length > 0) {
       state = 'failed';
     } else if (report !== undefined) {
       state = 'passed';
@@ -105,21 +131,58 @@ export function buildProgress(
     } else {
       state = startedAt === null ? 'waiting' : 'running';
     }
-    return { job, state, startedAt };
+    return { job, state, startedAt, checks };
   });
 }
 
-function jobFailed(job: PipelineJob, reports: Reports): boolean {
-  switch (job) {
+/** What a step found, as checks: the platform's own, or made from a job's report. */
+function stepChecks(step: BuildStep, reports: Reports): readonly Check[] {
+  switch (step) {
+    case 'dockerfile':
+      return reports.dockerfile?.checks ?? [];
+    case 'inspect':
+      return reports.inspection?.checks ?? [];
+    case 'verify':
+      return reports.verification?.checks ?? [];
     case 'secrets':
-      return (reports.secrets?.found ?? 0) > 0;
+      return reports.secrets === undefined
+        ? []
+        : [
+            reports.secrets.found === 0
+              ? passed('No secrets in the code')
+              : failed('No secrets in the code', secretsAdvice(reports.secrets)),
+          ];
     case 'test':
-      return reports.tests !== undefined && !reports.tests.passed;
+      return reports.tests === undefined
+        ? []
+        : [
+            reports.tests.passed
+              ? passed('The tests pass')
+              : failed('The tests pass', 'The end of their output is in the test log. Fix the failing tests and push again.'),
+          ];
     case 'scan':
-      return (reports.scan?.critical ?? 0) > 0;
+      return reports.scan === undefined
+        ? []
+        : [
+            reports.scan.critical === 0
+              ? passed('No critical vulnerabilities', `${reports.scan.high} high, ${reports.scan.medium} medium.`)
+              : failed('No critical vulnerabilities', scanAdvice(reports.scan)),
+            ...(reports.scan.high > 0
+              ? [warning('No high vulnerabilities', `${reports.scan.high} found. They don't stop the build, but update soon.`)]
+              : []),
+          ];
     default:
-      return false;
+      return [];
   }
+}
+
+function secretsAdvice(report: SecretsReport): string {
+  const files = [...new Set(report.findings.map((finding) => finding.file))].slice(0, 3).join(', ');
+  return `${report.found} found, in ${files}. Remove them, change them where they're used, since they're in Git's history, and push again.`;
+}
+
+function scanAdvice(report: ScanReport): string {
+  return `${report.critical} found. Update the base image or the affected packages, then build again.`;
 }
 
 export type Outcome =
@@ -133,15 +196,20 @@ export type Outcome =
  * vulnerabilities and an SBOM.
  */
 export function evaluate(reports: Reports, kind: BuildKind = 'feature'): Outcome {
+  const platform =
+    failedChecksReason('The Dockerfile breaks a platform rule', reports.dockerfile?.checks ?? []) ??
+    failedChecksReason('The image breaks a platform rule', reports.inspection?.checks ?? []);
+  if (platform !== null) {
+    return { state: 'failed', reason: platform };
+  }
   if (reports.secrets !== undefined && reports.secrets.found > 0) {
-    const files = [...new Set(reports.secrets.findings.map((finding) => finding.file))].slice(0, 3).join(', ');
-    return { state: 'failed', reason: `Secrets were found in the code (${reports.secrets.found}), in ${files}.` };
+    return { state: 'failed', reason: `Secrets were found in the code: ${secretsAdvice(reports.secrets)}` };
   }
   if (reports.tests !== undefined && !reports.tests.passed) {
-    return { state: 'failed', reason: 'The tests failed.' };
+    return { state: 'failed', reason: 'The tests failed. The end of their output is in the test log.' };
   }
   if (reports.scan !== undefined && reports.scan.critical > 0) {
-    return { state: 'failed', reason: `The image has ${reports.scan.critical} critical vulnerabilities.` };
+    return { state: 'failed', reason: `The image has critical vulnerabilities: ${scanAdvice(reports.scan)}` };
   }
   const needed = kind === 'check' ? [reports.secrets, reports.tests] : [reports.secrets, reports.tests, reports.image, reports.scan, reports.sbom];
   const complete = needed.every((report) => report !== undefined);

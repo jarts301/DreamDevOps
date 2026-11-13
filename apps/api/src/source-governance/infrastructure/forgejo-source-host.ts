@@ -1,9 +1,10 @@
 import type { BlueprintFile } from '../../blueprints/domain/blueprint.ts';
-import { expectOk as expectForgejoOk, ForgejoApi, type ForgejoConnection, segment } from '../../shared/forgejo/forgejo-api.ts';
+import { expectOk as expectForgejoOk, ForgejoApi, type ForgejoConnection, refPath, segment } from '../../shared/forgejo/forgejo-api.ts';
 import {
   type CommitStatus,
   PermanentSourceError,
   type PullRequestSpec,
+  type PullRequestState,
   type RepositorySpec,
   type SourceHost,
   type WebhookSpec,
@@ -289,6 +290,30 @@ export class ForgejoSourceHost implements SourceHost {
     });
     await expectOk(response, 'open a pull request');
     return ((await response.json()) as { number: number }).number;
+  }
+
+  async readFile(spec: RepositorySpec, commit: string, path: string): Promise<Buffer | null> {
+    const response = await this.#api.request('GET', `${repoPath(spec)}/raw/${refPath(path)}?ref=${segment(commit)}`, undefined, {
+      accept: 'application/octet-stream',
+    });
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return null;
+    }
+    await expectOk(response, 'read a file');
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async findPullRequest(spec: RepositorySpec, head: string, base: string): Promise<PullRequestState | null> {
+    // Forgejo finds the newest pull request between two branches by their names.
+    const response = await this.#api.request('GET', `${repoPath(spec)}/pulls/${refPath(base)}/${refPath(head)}`);
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return null;
+    }
+    await expectOk(response, 'read a pull request');
+    const pull = (await response.json()) as { number: number; merged: boolean; merge_commit_sha: string | null };
+    return { number: pull.number, merged: pull.merged, mergeCommit: pull.merged ? pull.merge_commit_sha : null };
   }
 
   async downloadArchive(spec: RepositorySpec, commit: string): Promise<ReadableStream<Uint8Array>> {

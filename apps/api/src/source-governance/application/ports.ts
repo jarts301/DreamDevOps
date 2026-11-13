@@ -37,6 +37,10 @@ export interface SourceHost {
   setCommitStatus(spec: RepositorySpec, commit: string, status: CommitStatus): Promise<void>;
   /** Opens a pull request, or returns the one already open. Null when there's nothing to merge. */
   openPullRequest(spec: RepositorySpec, request: PullRequestSpec): Promise<number | null>;
+  /** One file at a commit, such as the Dockerfile, or null if the commit has no such file. */
+  readFile(spec: RepositorySpec, commit: string, path: string): Promise<Buffer | null>;
+  /** The newest pull request from one branch into another, open or closed, or null if there's none. */
+  findPullRequest(spec: RepositorySpec, head: string, base: string): Promise<PullRequestState | null>;
   /** The repository's files at a commit, as a gzipped tar archive. */
   downloadArchive(spec: RepositorySpec, commit: string): Promise<ReadableStream<Uint8Array>>;
   /** Whether a person has a Git account yet. Accounts are created on their first sign-in. */
@@ -57,6 +61,13 @@ export interface CommitStatus {
   readonly state: 'pending' | 'success' | 'failure' | 'error';
   readonly description: string;
   readonly targetUrl?: string;
+}
+
+export interface PullRequestState {
+  readonly number: number;
+  readonly merged: boolean;
+  /** The commit the merge made, once it's merged. */
+  readonly mergeCommit: string | null;
 }
 
 export interface PullRequestSpec {

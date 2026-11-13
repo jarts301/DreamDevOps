@@ -1,13 +1,22 @@
+import { Logger, type OnApplicationShutdown } from '@nestjs/common';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
 import type { FinishedBuild, Releases } from '../application/releases.ts';
 
+/** How often releases are checked for merges and pushes the platform missed. */
+const SYNC_MS = 5 * 60_000;
+
 type Payload = Record<string, unknown>;
 
-/** Prepares started releases, and moves them along as code is pushed, merged and built. */
-export class ReleasesSubscriptions implements BackgroundSubscriber {
+/**
+ * Prepares started releases, and moves them along as code is pushed, merged and built.
+ * Every few minutes it catches up on webhooks the platform missed.
+ */
+export class ReleasesSubscriptions implements BackgroundSubscriber, OnApplicationShutdown {
+  readonly #logger = new Logger(ReleasesSubscriptions.name);
   readonly #releases: Releases;
   readonly #config: AppConfig;
+  #sync: ReturnType<typeof setInterval> | undefined;
 
   constructor(releases: Releases, config: AppConfig) {
     this.#releases = releases;
@@ -47,5 +56,13 @@ export class ReleasesSubscriptions implements BackgroundSubscriber {
         retries,
       );
     }
+    const onError = (error: unknown) => this.#logger.error(error);
+    this.#sync = setInterval(() => {
+      this.#releases.syncAll(onError).catch(onError);
+    }, SYNC_MS);
+  }
+
+  onApplicationShutdown(): void {
+    clearInterval(this.#sync);
   }
 }

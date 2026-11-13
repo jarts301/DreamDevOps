@@ -7,6 +7,7 @@ import { SessionService } from '../../core/session.service';
 import { type Application, CatalogApi, type Repository } from '../catalog/catalog.api';
 import {
   type Build,
+  type BuildCheck,
   type BuildKind,
   type BuildStatus,
   DeliveryApi,
@@ -235,10 +236,33 @@ const REFRESH_MS = 5_000;
                       @if (build.failureReason) {
                         <p class="cell-note">{{ build.failureReason }}</p>
                       }
+                      @if (notableChecks(build); as checks) {
+                        @if (checks.length > 0) {
+                          <ul class="check-list" [attr.aria-label]="'Checks that need attention in ' + build.tag">
+                            @for (check of checks; track check.name) {
+                              <li [attr.data-outcome]="check.outcome">
+                                <span class="check-symbol" aria-hidden="true">{{ check.outcome === 'failed' ? '✕' : '!' }}</span>
+                                <span
+                                  >{{ check.name }}<span class="visually-hidden">{{ check.outcome === 'failed' ? ': failed. ' : ': warning. ' }}</span></span
+                                >
+                                @if (check.detail) {
+                                  <span class="check-detail muted">{{ check.detail }}</span>
+                                }
+                              </li>
+                            }
+                          </ul>
+                        }
+                      }
                       @if (build.status === 'failed' && build.reports.tests?.passed === false) {
                         <details>
                           <summary>Test output</summary>
                           <pre class="log">{{ build.reports.tests?.log }}</pre>
+                        </details>
+                      }
+                      @if (build.status === 'failed' && build.reports.buildLog) {
+                        <details>
+                          <summary>Image build output</summary>
+                          <pre class="log">{{ build.reports.buildLog }}</pre>
                         </details>
                       }
                     </td>
@@ -308,6 +332,17 @@ export class ApplicationDetail implements OnInit, OnDestroy {
       await this.#refresh();
       this.suggest();
     });
+    // Forgejo doesn't resend a webhook the platform missed, so the page asks it to catch up.
+    if (this.repository()?.status === 'ready') {
+      void this.#attempt(
+        async () => {
+          if ((await this.#delivery.syncReleases(this.id())).moved > 0) {
+            await this.#refresh();
+          }
+        },
+        { quiet: true },
+      );
+    }
     if (this.build() === 'test' && this.canBuildFeatures()) {
       // After the page renders, take people straight to the form.
       setTimeout(() => {
@@ -325,7 +360,12 @@ export class ApplicationDetail implements OnInit, OnDestroy {
     return STATUS_LABELS[status];
   }
 
-  /** The pipeline's jobs, with what each found once it's done. */
+  /** Failed checks and warnings, with why and how to fix them. Passed ones are left out. */
+  protected notableChecks(build: Build): BuildCheck[] {
+    return build.progress.flatMap((step) => step.checks.filter((check) => check.outcome !== 'passed'));
+  }
+
+  /** The build's steps, with what each found once it's done. */
   protected buildSteps(build: Build): Step[] {
     return build.progress.map(({ job, state }) => ({
       label: JOB_LABELS[job],
@@ -419,11 +459,14 @@ export class ApplicationDetail implements OnInit, OnDestroy {
 }
 
 const JOB_LABELS: Readonly<Record<PipelineJob, string>> = {
+  dockerfile: 'Dockerfile rules',
   secrets: 'Secret scan',
   test: 'Tests',
   image: 'Image',
+  inspect: 'Image rules',
   scan: 'Vulnerability scan',
   sbom: 'SBOM',
+  verify: 'Signature',
 };
 
 function jobDetail(job: PipelineJob, build: Build): string | null {
@@ -439,6 +482,8 @@ function jobDetail(job: PipelineJob, build: Build): string | null {
         : `${reports.scan.critical} critical, ${reports.scan.high} high`;
     case 'sbom':
       return reports.sbom === undefined ? null : `${reports.sbom.components} components`;
+    case 'verify':
+      return build.status === 'succeeded' ? 'checked in the registry' : null;
     default:
       return null;
   }

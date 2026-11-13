@@ -3,6 +3,7 @@ import {
   type CommitStatus,
   PermanentSourceError,
   type PullRequestSpec,
+  type PullRequestState,
   type RepositorySpec,
   type SourceHost,
   type WebhookSpec,
@@ -20,7 +21,7 @@ interface FakeRepository {
   readonly branches: Map<string, string>;
   readonly tags: Map<string, string>;
   readonly statuses: { commit: string; status: CommitStatus }[];
-  readonly pullRequests: { number: number; head: string; base: string; title: string }[];
+  readonly pullRequests: { number: number; head: string; base: string; title: string; mergeCommit: string | null }[];
 }
 
 /** Keeps repositories and teams in memory, and can be told to fail. */
@@ -117,6 +118,32 @@ export class FakeSourceHost implements SourceHost {
     this.#repository(spec).statuses.push({ commit, status });
   }
 
+  async readFile(spec: RepositorySpec, _commit: string, path: string): Promise<Buffer | null> {
+    return this.#repository(spec).files.find((file) => file.path === path)?.content ?? null;
+  }
+
+  async findPullRequest(spec: RepositorySpec, head: string, base: string): Promise<PullRequestState | null> {
+    const pull = this.#repository(spec)
+      .pullRequests.filter((candidate) => candidate.head === head && candidate.base === base)
+      .at(-1);
+    return pull === undefined ? null : { number: pull.number, merged: pull.mergeCommit !== null, mergeCommit: pull.mergeCommit };
+  }
+
+  /** Merges a pull request as someone would in the Git tool, and returns the merge commit. */
+  merge(organization: string, name: string, head: string, base: string): string {
+    const repository = this.repositories.get(`${organization}/${name}`)!;
+    const pull = repository.pullRequests.find((candidate) => candidate.head === head && candidate.base === base)!;
+    const commit = this.push(organization, name, base);
+    pull.mergeCommit = commit;
+    return commit;
+  }
+
+  /** Replaces a file, as a push that changes it would. */
+  writeFile(organization: string, name: string, path: string, content: string): void {
+    const repository = this.repositories.get(`${organization}/${name}`)!;
+    repository.files = [...repository.files.filter((file) => file.path !== path), { path, content: Buffer.from(content) }];
+  }
+
   async openPullRequest(spec: RepositorySpec, request: PullRequestSpec): Promise<number | null> {
     const repository = this.#repository(spec);
     const existing = repository.pullRequests.find((pull) => pull.head === request.head && pull.base === request.base);
@@ -124,7 +151,7 @@ export class FakeSourceHost implements SourceHost {
       return existing.number;
     }
     const number = repository.pullRequests.length + 1;
-    repository.pullRequests.push({ number, head: request.head, base: request.base, title: request.title });
+    repository.pullRequests.push({ number, head: request.head, base: request.base, title: request.title, mergeCommit: null });
     return number;
   }
 
