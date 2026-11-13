@@ -31,9 +31,9 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Company data separation | Enforced in the database with row-level security |
 | Audit | A history of every change per company that shows any tampering, and platform admins' own activity |
 | Notifications | Emailed invitation links, and company rules that post chosen events to Slack or any webhook |
-| Applications | A register of each company's applications, with their type, that can be edited, archived and restored |
+| Applications | A register of each company's applications, with their type, language and framework, that can be edited, archived and restored |
 | Repositories | Each application gets a private Forgejo repository from its type's blueprint, with Git Flow branches, branch and tag protection, and teams that follow company roles |
-| Blueprints | Versioned starting points: a Node.js service and an Angular frontend, each with tests, a Dockerfile, a pipeline and metrics |
+| Blueprints | Versioned starting points, each with tests, a Dockerfile, a pipeline and metrics: a Node.js service, and web frontends in TypeScript, with Angular, React, Vue or Svelte, in JavaScript, with React, Vue or Svelte, and in Python, with PyScript. Whoever registers an application chooses its language and framework. |
 | Builds and versions | Versioned images: development images of feature pull requests, candidates when a release or hotfix starts, and releases when one is merged into main. Each is validated, scanned, published, signed with cosign's format and verified, and the dashboard shows every step's progress. |
 | Environments | Each application's environments, such as staging and production, on the company's hosting targets. Every company starts with **This machine**, the Docker of the machine that runs DreamDevOps, and can plan others: Kubernetes or Docker servers it runs itself, or AWS, Azure or Google Cloud. Switching an environment to another target is one change. Production is protected: only Tech Leads and Operators change it, by typing its name and giving a reason, and it can't be archived. |
 | Deployments | Deploying any version that built to an environment on This machine, with every step on the dashboard: checking, verifying the signature, pulling, starting and waiting until it's healthy. A version that isn't healthy is rolled back. Production runs only releases. Moving an environment to another target moves what runs in it. |
@@ -238,7 +238,7 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Audit](apps/api/src/audit/README.md) | The tamper-evident history of changes |
 | [Notifications](apps/api/src/notifications/README.md) | Invitation emails, chat rules and webhook safety |
 | [Application catalog](apps/api/src/catalog/README.md) | Application types, registering and archiving applications |
-| [Blueprints](blueprints/README.md) | What each blueprint sets up, and how to publish a new version |
+| [Blueprints](blueprints/README.md) | What each blueprint sets up, the languages and frameworks on offer, and how to publish a new version |
 | [Source governance](apps/api/src/source-governance/README.md) | Repositories, Git Flow rules, teams and Git accounts |
 | [Builds and versions](apps/api/src/builds/README.md) | Development, candidate and release images, their versions, validation, scanning and signing |
 | [Environments](apps/api/src/environments/README.md) | Environments, hosting targets and providers, deploying, variables and secrets, hosting on this machine, production protection, and adding a provider |

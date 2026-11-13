@@ -137,7 +137,11 @@ export class Repositories implements RepositoryLookup {
         let blueprintKey = row.blueprint_key;
         let blueprintVersion = row.blueprint_version;
         if (blueprintKey === null || blueprintVersion === null) {
-          const blueprint = this.#blueprints.latestForType(application.type.key);
+          // The newest version of the blueprint chosen when the application was registered.
+          const blueprint =
+            application.blueprint === null
+              ? this.#blueprints.latestForType(application.type.key)
+              : this.#blueprints.latestOf(application.blueprint.key);
           if (blueprint === null) {
             throw new PermanentSourceError(`No blueprint exists for the ${application.type.name} type.`);
           }

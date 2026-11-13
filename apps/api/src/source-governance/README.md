@@ -7,7 +7,7 @@ Creates each application's repository in its company's Forgejo organization, enf
 Registering an application creates its repository in the background:
 
 1. A private repository named after the application's short name, with the application ID in its description, which proves it's ours.
-2. The scaffold from the newest blueprint for the application's type, as the first commit on `main`.
+2. The scaffold from the newest version of the blueprint chosen for the application, such as Vue in TypeScript, as the first commit on `main`.
 3. A `develop` branch, which becomes the default branch.
 4. Branch and tag protection, below.
 

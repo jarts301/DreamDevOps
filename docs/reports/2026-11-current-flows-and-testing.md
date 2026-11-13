@@ -33,6 +33,7 @@ A guide to every flow DreamDevOps offers today, from signing in to watching a ru
 | Change | What it gives | Where it's described |
 |---|---|---|
 | **Monitoring** page and context | Each running application's CPU, memory, requests, response times and server errors, now and charted over 15 minutes to 24 hours | [Monitoring guide](../../apps/api/src/monitoring/README.md) |
+| Languages and frameworks | Web frontends in TypeScript, with Angular, React, Vue or Svelte, in JavaScript, with React, Vue or Svelte, and in Python, with PyScript, chosen when an application is registered | [Blueprints](../../blueprints/README.md#languages-and-frameworks) |
 | **Alerts** page and context | Alerts on any environment's metric, above or below a threshold for a number of minutes, checked every minute, emailing the members they name when they fire and when they're resolved, never anyone removed from the company, through Mailpit locally | [Alerts guide](../../apps/api/src/alerts/README.md) |
 | Daily high | Each chart has an orange dashed line at the metric's highest value in the 24 hours before the range, and says when values go above it | [Daily high](../../apps/api/src/monitoring/README.md#daily-high) |
 | Container limits | CPU and memory shown against what each container may use, such as **13% of 1 CPU** and **50.0 MiB of 512 MiB, 10%**, standing out from 90% | [Limits](../../apps/api/src/monitoring/README.md#limits) |
@@ -90,7 +91,7 @@ Run these from the repository root. Steps 3 and 4 matter for the latest change.
    ```bash
    docker compose -f infra/local/compose.yaml run --rm smoke-test
    ```
-4. **Apply the migrations.** This adds `0015_record-container-limits`, `0016_create-alerts` and `0017_alert-recipients-are-members`, which the API needs:
+4. **Apply the migrations.** This adds `0015_record-container-limits`, `0016_create-alerts`, `0017_alert-recipients-are-members` and `0018_record-application-blueprint`, which the API needs:
    ```bash
    npm run db:migrate
    ```
@@ -135,9 +136,13 @@ Only needed to test company separation, in [Flow 12](#flow-12-company-separation
 1. As `dev-tech-lead`, open **Applications**, and register one of each type:
    - *Billing API*, a **RESTful Service**
    - *Web*, a **Web Frontend**
-2. Wait until each repository shows as ready.
+2. Register three more web frontends, choosing their **Language** and **Framework**:
+   - *Shop*, in **TypeScript** with **React 19**
+   - *Admin*, in **JavaScript** with **Vue 3**
+   - *Reports*, in **Python** with **PyScript**
+3. Wait until each repository shows as ready.
 
-**Expect:** **Blueprints** shows `node-service 1.3.0` and `angular-frontend 1.3.0` as the newest, and new repositories start from them. In Forgejo, the backend repository has:
+**Expect:** the form offers TypeScript, JavaScript and Python for a web frontend, and TypeScript only for a service, and starts a web frontend on TypeScript with Angular, as before. The list shows each application's framework and language, such as *React 19 · TypeScript*. **Blueprints** shows `node-service 1.3.0` and `angular-frontend 1.3.0` as the newest of the first two, and the seven new blueprints at `1.0.0`, and new repositories start from them. Each new frontend's repository has the same `nginx/` folder as Angular's, and `src/App.tsx`, `src/App.vue` or `src/main.py`. Deploy *Reports* as in Flow 4: its page says *Your web frontend is running.*, and, a few seconds later, once its Python starts, **Check the API** can be clicked. In Forgejo, the backend repository has:
 - `src/logging.ts`
 - `GET /api/ping` in `src/app.ts`
 - `@opentelemetry/instrumentation-undici` in `package.json`
@@ -425,6 +430,7 @@ Needs an environment that runs a version, from [Flow 4](#flow-4-create-an-enviro
 | 17 | Alert fires and resolves | `dev-operator` | *[Firing]*, then *[Resolved]*, emails in Mailpit, each within a minute, and both in **History** |
 | 18 | Alerts for viewers | `dev-viewer` | Alerts and history shown, without whom they email or buttons |
 | 19 | Removed members | `dev-company-admin` | A member removed on **Team** is taken off every alert, and gets no alert emails |
+| 20 | Languages and frameworks | `dev-tech-lead` | A web frontend registered in each language starts from the chosen framework, and its pipeline passes |
 
 ## Automated tests
 
@@ -542,4 +548,4 @@ Alerts' routes also need the `monitoring` feature. Seeing them needs `dashboards
 | Limits | `apps/api/src/environments/infrastructure/local-docker-runtime.ts` (`CONTAINER_LIMITS`), `migrations/0015_record-container-limits.sql` |
 | Dashboard | `apps/dashboard/src/app/features/monitoring/`, `apps/dashboard/src/app/features/alerts/` |
 | Local tools | `infra/local/compose.yaml`, `infra/local/prometheus/prometheus.yml`, `infra/local/ops/smoke-test.sh` |
-| Blueprints | `blueprints/node-service/1.3.0/`, `blueprints/angular-frontend/1.3.0/` |
+| Blueprints | `blueprints/node-service/1.3.0/`, `blueprints/angular-frontend/1.3.0/`, and the new frontends at `1.0.0`, such as `blueprints/pyscript-frontend/1.0.0/` |

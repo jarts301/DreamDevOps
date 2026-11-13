@@ -10,8 +10,9 @@ import { compareVersions } from '../src/blueprints/domain/blueprint.ts';
 import { BlueprintLibrary } from '../src/blueprints/infrastructure/blueprint-library.ts';
 
 // Checks that every blueprint version produces a project that installs, passes its own
-// checks, builds an image, and starts healthy as a read-only, non-root container. From
-// 1.2.0, it also checks the container sends its metrics where the platform says.
+// checks, builds an image, and starts healthy as a read-only, non-root container. It also
+// checks the container sends its metrics where the platform says, and logs and traces a
+// request, for every version that does.
 // It's slow and needs Docker and the internet: npm run test:scaffolds
 
 const BLUEPRINTS = fileURLToPath(new URL('../../../blueprints', import.meta.url));
@@ -42,10 +43,18 @@ async function waitForHealth(url: string): Promise<number> {
   throw new Error(`${url} never became healthy.`);
 }
 
-/** Versions from this one on send metrics when the platform says where. */
-const FIRST_WITH_METRICS = '1.2.0';
-/** Versions from this one on log in JSON, with the trace a request brings, and services send traces. */
-const FIRST_WITH_TRACES = '1.3.0';
+/**
+ * The first version of each blueprint that sends metrics when the platform says where. The
+ * first blueprints gained them in 1.2.0. Blueprints made since have had them from 1.0.0.
+ */
+const FIRST_WITH_METRICS: Readonly<Record<string, string>> = { 'node-service': '1.2.0', 'angular-frontend': '1.2.0' };
+/**
+ * The first version of each blueprint that logs in JSON, with the trace a request brings,
+ * and, for services, sends traces. The first blueprints gained them in 1.3.0.
+ */
+const FIRST_WITH_TRACES: Readonly<Record<string, string>> = { 'node-service': '1.3.0', 'angular-frontend': '1.3.0' };
+const since = (firsts: Readonly<Record<string, string>>, manifest: { key: string; version: string }) =>
+  compareVersions(manifest.version, firsts[manifest.key] ?? '1.0.0') >= 0;
 
 /** What containers send over OTLP, as the platform's metrics store would receive it. */
 const received: string[] = [];
@@ -170,7 +179,7 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
       const user = run('docker', ['exec', container, 'id', '-u'], folder);
       expect(user).not.toBe('0');
 
-      if (compareVersions(manifest.version, FIRST_WITH_METRICS) >= 0) {
+      if (since(FIRST_WITH_METRICS, manifest)) {
         // A request that isn't a health check, so a service has a request to measure.
         await fetch(`${base}/`);
         const expected = ['process.cpu.time', 'process.memory.usage'];
@@ -180,7 +189,7 @@ describe.each(library.all())('the $key $version blueprint', (manifest) => {
         expect(await metricsOf(environmentId, expected)).toEqual(expect.arrayContaining(expected));
       }
 
-      if (compareVersions(manifest.version, FIRST_WITH_TRACES) >= 0) {
+      if (since(FIRST_WITH_TRACES, manifest)) {
         // A request in a trace a caller started, as another service or a web page would.
         const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
         const traceparent = `00-${traceId}-00f067aa0ba902b7-01`;

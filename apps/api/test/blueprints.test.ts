@@ -18,6 +18,11 @@ const file = (path: string, content: string) => ({ path, content: Buffer.from(co
 
 describe('the published blueprints', () => {
   const library = BlueprintLibrary.load(BLUEPRINTS);
+  /** A blueprint's files, filled in for an application called Probe, by path. */
+  const render = (manifest: { key: string; version: string }) => {
+    const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+    return (path: string) => files.find((candidate) => candidate.path === path)!.content.toString();
+  };
 
   it('cover both starter types, each with a pipeline, health checks and all five strategies', () => {
     expect(library.latestForType('restful-service')?.key).toBe('node-service');
@@ -101,6 +106,112 @@ describe('the published blueprints', () => {
       expect.objectContaining({ keyword: 'COPY', args: '--chmod=0755 nginx/send-metrics.sh /docker-entrypoint.d/50-send-metrics.sh' }),
     );
     expect(files.find((candidate) => candidate.path === 'nginx/send-metrics.sh')!.content.toString()).toMatch(/^#!\/bin\/sh\n/);
+  });
+
+  it('offer web frontends in TypeScript, JavaScript and Python, each on a popular open-source framework', () => {
+    expect(library.forType('web-frontend').map((manifest) => `${manifest.language}: ${manifest.framework}`)).toEqual([
+      'JavaScript: React 19',
+      'JavaScript: Svelte 5',
+      'JavaScript: Vue 3',
+      'Python: PyScript 0.7, on Pyodide 314',
+      'TypeScript: Angular 22',
+      'TypeScript: React 19',
+      'TypeScript: Svelte 5',
+      'TypeScript: Vue 3',
+    ]);
+    expect(library.forType('restful-service').map((manifest) => manifest.key)).toEqual(['node-service']);
+    expect(library.forType('mobile-app')).toEqual([]);
+    // Applications that choose nothing start from the first by key, as they always have.
+    expect(library.latestForType('web-frontend')?.key).toBe('angular-frontend');
+    expect(library.latestOf('vue-typescript-frontend')).toMatchObject({ version: '1.0.0', language: 'TypeScript' });
+    expect(library.latestOf('cobol-frontend')).toBeNull();
+  });
+
+  it('give every web frontend the same runtime: JSON request logs, metrics started by nginx, and settings read at startup', () => {
+    const angular = render(library.latestOf('angular-frontend')!);
+    for (const manifest of library.forType('web-frontend')) {
+      const file = render(manifest);
+      expect(file('nginx/default.conf'), manifest.key).toContain('access_log /var/log/nginx/access.log json;');
+      expect(file('nginx/default.conf'), manifest.key).toContain('location = /healthz');
+      for (const shared of ['nginx/send-metrics.sh', 'nginx/write-runtime-config.sh', 'nginx/security-headers.conf', 'compose.yaml']) {
+        expect(file(shared), `${manifest.key} ${shared}`).toBe(angular(shared));
+      }
+      const instructions = parseDockerfile(file('Dockerfile'));
+      expect(instructions, manifest.key).toContainEqual(
+        expect.objectContaining({ keyword: 'COPY', args: '--chmod=0755 nginx/send-metrics.sh /docker-entrypoint.d/50-send-metrics.sh' }),
+      );
+      expect(instructions.at(-1), manifest.key).toMatchObject({ keyword: 'HEALTHCHECK' });
+    }
+  });
+
+  it('let every web frontend start a trace for its API calls, and ping the API with one', () => {
+    for (const manifest of library.forType('web-frontend')) {
+      const files = library.render(manifest.key, manifest.version, { name: 'Probe', slug: 'probe' });
+      const code = files
+        .filter((candidate) => /\.(ts|js|tsx|jsx|vue|svelte|py)$/.test(candidate.path) && !candidate.path.startsWith('scripts/'))
+        .map((candidate) => candidate.content.toString())
+        .join('\n');
+      expect(code, manifest.key).toMatch(/traceparent/);
+      expect(code, manifest.key).toMatch(/\/ping/);
+      expect(code, manifest.key).toMatch(/Check the API/);
+    }
+  });
+
+  it('give every scaffold the checks the pipeline runs: lint, typecheck, test and build', () => {
+    for (const manifest of library.latest()) {
+      const file = render(manifest);
+      const packageJson = JSON.parse(file('package.json')) as { scripts: Record<string, string> };
+      expect(Object.keys(packageJson.scripts), manifest.key).toEqual(expect.arrayContaining(['lint', 'typecheck', 'test', 'build']));
+      for (const step of ['npm ci', 'npm run lint', 'npm run typecheck', 'npm test', 'npm run build']) {
+        expect(file('.forgejo/workflows/ci.yaml'), `${manifest.key} ${step}`).toContain(`- run: ${step}`);
+      }
+    }
+  });
+
+  it('lock every platform’s native packages, so images build on Alpine, and people build on any computer', () => {
+    for (const manifest of library.latest()) {
+      const lock = JSON.parse(render(manifest)('package-lock.json')) as {
+        packages: Record<string, { optionalDependencies?: Record<string, string>; integrity?: string; link?: boolean }>;
+      };
+      // Where Node would find a dependency from a package's folder.
+      const installed = (from: string, name: string): boolean => {
+        for (let base = from; ; base = base.includes('/node_modules/') ? base.slice(0, base.lastIndexOf('/node_modules/')) : '') {
+          if (lock.packages[`${base === '' ? '' : `${base}/`}node_modules/${name}`] !== undefined) {
+            return true;
+          }
+          if (base === '') {
+            return false;
+          }
+        }
+      };
+      const missing = Object.entries(lock.packages).flatMap(([path, entry]) =>
+        Object.keys(entry.optionalDependencies ?? {})
+          .filter((name) => !installed(path, name))
+          .map((name) => `${name} for ${path || 'the project'}`),
+      );
+      expect(missing, manifest.key).toEqual([]);
+      for (const [path, entry] of Object.entries(lock.packages).filter(([path, entry]) => path !== '' && !entry.link)) {
+        expect(entry.integrity, `${manifest.key} ${path}`).toMatch(/^sha512-/);
+      }
+    }
+    const vite = JSON.parse(render(library.latestOf('react-typescript-frontend')!)('package-lock.json')) as { packages: object };
+    expect(Object.keys(vite.packages)).toEqual(
+      expect.arrayContaining(['node_modules/@rolldown/binding-linux-x64-musl', 'node_modules/@rolldown/binding-linux-arm64-musl']),
+    );
+  });
+
+  it('serve PyScript and Python themselves, from the versions they were tested with, rather than a CDN', () => {
+    const file = render(library.latestOf('pyscript-frontend')!);
+    const packageJson = JSON.parse(file('package.json')) as { dependencies: Record<string, string> };
+
+    expect(packageJson.dependencies).toEqual({ '@pyscript/core': '0.7.31', pyodide: '314.0.5' });
+    expect(file('index.html')).not.toMatch(/https?:\/\//);
+    expect(file('index.html')).toContain('<script type="py" src="/main.py" config="/pyscript.json"></script>');
+    expect(file('scripts/build.mjs')).toContain('interpreter: `${PYODIDE}/pyodide.mjs`');
+    // Browsers only run modules and WebAssembly served with their own types.
+    expect(file('nginx/default.conf')).toMatch(/location \^~ \/vendor\/ \{\n    types \{\n      text\/javascript js mjs;/);
+    expect(file('nginx/default.conf')).toContain('application/wasm wasm;');
+    expect(file('src/app_info.py')).toBe(`"""The application's name, as registered in DreamDevOps."""\n\nAPP_NAME: str = "Probe"\n`);
   });
 
   it('leave no placeholder unfilled', () => {

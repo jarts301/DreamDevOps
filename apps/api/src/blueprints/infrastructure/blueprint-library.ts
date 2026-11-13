@@ -80,13 +80,25 @@ export class BlueprintLibrary implements BlueprintCatalog {
       .sort((left, right) => left.key.localeCompare(right.key) || compareVersions(right.version, left.version));
   }
 
-  /** The newest blueprint for an application type, or null if none exists. */
+  /** The blueprint an application type starts from unless another is chosen: its first by key. */
   latestForType(applicationType: string): BlueprintManifest | null {
     return (
       this.latest()
         .filter((manifest) => manifest.applicationType === applicationType)
         .sort((left, right) => left.key.localeCompare(right.key))[0] ?? null
     );
+  }
+
+  /** Every blueprint of an application type, in its newest version, by language and name. */
+  forType(applicationType: string): BlueprintManifest[] {
+    return this.latest()
+      .filter((manifest) => manifest.applicationType === applicationType)
+      .sort((left, right) => left.language.localeCompare(right.language) || left.name.localeCompare(right.name));
+  }
+
+  /** The newest version of one blueprint, or null if there's no such blueprint. */
+  latestOf(key: string): BlueprintManifest | null {
+    return this.latest().find((manifest) => manifest.key === key) ?? null;
   }
 
   /** The scaffold of one version, filled in for an application. */

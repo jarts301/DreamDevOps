@@ -49,6 +49,7 @@ function toView(application: { id: string; name: string; status: 'active' | 'arc
     name: application.name,
     slug: application.name.toLowerCase().replace(/\s+/g, '-'),
     type: { key: 'restful-service', name: 'RESTful Service' },
+    blueprint: null,
     description: '',
     status: application.status,
     createdAt: '2026-01-01T00:00:00.000Z',

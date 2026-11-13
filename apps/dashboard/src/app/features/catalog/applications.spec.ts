@@ -7,25 +7,38 @@ import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
 import { Applications } from './applications';
 
-const blueprint = (key: string, name: string, framework: string) => ({
+const blueprint = (key: string, name: string, framework: string, language = 'TypeScript') => ({
   key,
   version: '1.0.0',
   name,
-  language: 'TypeScript',
+  description: `A ${framework} app.`,
+  language,
   framework,
 });
+const NODE = blueprint('node-service', 'Node.js service', 'Fastify');
+const ANGULAR = blueprint('angular-frontend', 'Angular frontend', 'Angular 22');
 const TYPES = [
   {
     key: 'restful-service',
     name: 'RESTful Service',
     description: 'An HTTP API',
-    blueprint: blueprint('node-service', 'Node.js service', 'Fastify'),
+    blueprint: NODE,
+    blueprints: [NODE],
   },
   {
     key: 'web-frontend',
     name: 'Web Frontend',
     description: 'Runs in the browser',
-    blueprint: blueprint('angular-frontend', 'Angular frontend', 'Angular 22'),
+    blueprint: ANGULAR,
+    // By language and name, as the API lists them.
+    blueprints: [
+      blueprint('react-javascript-frontend', 'React frontend in JavaScript', 'React 19', 'JavaScript'),
+      blueprint('vue-javascript-frontend', 'Vue frontend in JavaScript', 'Vue 3', 'JavaScript'),
+      blueprint('pyscript-frontend', 'PyScript frontend in Python', 'PyScript 0.7, on Pyodide 314', 'Python'),
+      ANGULAR,
+      blueprint('react-typescript-frontend', 'React frontend in TypeScript', 'React 19'),
+      blueprint('vue-typescript-frontend', 'Vue frontend in TypeScript', 'Vue 3'),
+    ],
   },
 ];
 const ACCESS = {
@@ -48,6 +61,7 @@ const BILLING = {
   name: 'Billing',
   slug: 'billing',
   type: { key: 'restful-service', name: 'RESTful Service' },
+  blueprint: { key: 'node-service', name: 'Node.js service', language: 'TypeScript', framework: 'Fastify' },
   description: 'Charges customers',
   status: 'active',
   createdAt: '2026-11-01T10:00:00Z',
@@ -152,26 +166,66 @@ describe('Applications', () => {
     expect(button(fixture, 'Archive Billing')).toBeUndefined();
   });
 
-  it('registers an application of the chosen type', async () => {
+  it('registers an application of the chosen type, language and framework', async () => {
     const fixture = await open([]);
+    const select = (name: string) => element(fixture).querySelector<HTMLSelectElement>(`select[formcontrolname="${name}"]`)!;
+    const options = (name: string) => [...select(name).options].map((option) => option.textContent?.trim());
+    const choose = async (name: string, value: string) => {
+      select(name).value = value;
+      select(name).dispatchEvent(new Event('change'));
+      await render(fixture);
+    };
     expect(text(fixture)).toContain('RESTful Service: An HTTP API');
     expect(text(fixture)).toContain('It starts from the Node.js service blueprint 1.0.0, in TypeScript with Fastify.');
+    expect(options('language')).toEqual(['TypeScript']);
+    expect(options('blueprint')).toEqual(['Fastify']);
 
     await type(fixture, 'input[formcontrolname="name"]', 'Storefront');
-    const select = element(fixture).querySelector<HTMLSelectElement>('select[formcontrolname="type"]')!;
-    select.value = 'web-frontend';
-    select.dispatchEvent(new Event('change'));
+    await choose('type', 'web-frontend');
+    // A web frontend starts as it always has, on Angular, until another is chosen.
+    expect(options('language')).toEqual(['JavaScript', 'Python', 'TypeScript']);
+    expect(select('language').value).toBe('TypeScript');
+    expect(options('blueprint')).toEqual(['Angular 22', 'React 19', 'Vue 3']);
+    expect(select('blueprint').value).toBe('angular-frontend');
+
+    await choose('language', 'Python');
+    expect(options('blueprint')).toEqual(['PyScript 0.7, on Pyodide 314']);
+    expect(text(fixture)).toContain('It starts from the PyScript frontend in Python blueprint 1.0.0, in Python with PyScript 0.7, on Pyodide 314.');
+    await choose('language', 'JavaScript');
+    expect(select('blueprint').value).toBe('react-javascript-frontend');
+    await choose('blueprint', 'vue-javascript-frontend');
     await type(fixture, 'textarea[formcontrolname="description"]', 'The shop');
     expect(text(fixture)).toContain('Web Frontend: Runs in the browser');
+    expect(text(fixture)).toContain('in JavaScript with Vue 3. A Vue 3 app.');
 
     button(fixture, 'Register application').click();
     const request = http.expectOne((candidate) => candidate.method === 'POST');
-    expect(request.request.body).toEqual({ name: 'Storefront', type: 'web-frontend', description: 'The shop' });
-    request.flush({ ...BILLING, id: 'a-3', name: 'Storefront' });
-    await answerList([BILLING]);
+    expect(request.request.body).toEqual({
+      name: 'Storefront',
+      type: 'web-frontend',
+      blueprint: 'vue-javascript-frontend',
+      description: 'The shop',
+    });
+    const storefront = {
+      ...BILLING,
+      id: 'a-3',
+      name: 'Storefront',
+      type: { key: 'web-frontend', name: 'Web Frontend' },
+      blueprint: { key: 'vue-javascript-frontend', name: 'Vue frontend in JavaScript', language: 'JavaScript', framework: 'Vue 3' },
+    };
+    request.flush(storefront);
+    await answerList([BILLING, storefront]);
     await render(fixture);
 
     expect(text(fixture)).toContain('Storefront is registered.');
+    // The list says what each application started from, and the form keeps the choice for the next one.
+    expect(text(fixture)).toContain('Web Frontend Vue 3 · JavaScript');
+    expect(text(fixture)).toContain('RESTful Service Fastify · TypeScript');
+    expect([select('type').value, select('language').value, select('blueprint').value]).toEqual([
+      'web-frontend',
+      'JavaScript',
+      'vue-javascript-frontend',
+    ]);
   });
 
   it('shows why a registration was refused', async () => {

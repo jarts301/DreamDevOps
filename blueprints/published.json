@@ -6,5 +6,12 @@
   "node-service@1.0.0": "334d752fccdf9ecaac08eec562935a028694b3a7801772ce7cb7c6f001284451",
   "node-service@1.1.0": "a34df7dcc3f0d7dcb56b6def58332820396f6861e38ddb11e7448cb62549e94f",
   "node-service@1.2.0": "a5d7cf177f1b61c688a40174997483c804a3ceb7f7d629bd449fba4a40be1dae",
-  "node-service@1.3.0": "cd5acd1e2bd73784b03ca15f65d26a7e3dbf60937faa4b20a8910b1143c06217"
+  "node-service@1.3.0": "cd5acd1e2bd73784b03ca15f65d26a7e3dbf60937faa4b20a8910b1143c06217",
+  "pyscript-frontend@1.0.0": "1ea1c32d15b9b5bf97982e30b6a1cd60aa2fa677edcab56029b3d6110a7f7b2c",
+  "react-javascript-frontend@1.0.0": "891eafa21646f6107a69bbd7281ec3ed67237cac63cc3ffd9b8d81f1aec3392b",
+  "react-typescript-frontend@1.0.0": "1dac5be0dd3821c6ddd6dc5eaccbf4c355f847822d65b3ba75defe386a666248",
+  "svelte-javascript-frontend@1.0.0": "8bc566dcc9d9d2e8b120f63cbbbccc4dcc1d78e1a9826d65deb07cafb9dce66c",
+  "svelte-typescript-frontend@1.0.0": "52efa9e2079741dc043fee5e56be8fc02b2af5f951f1dba5f34e0b267e100c3b",
+  "vue-javascript-frontend@1.0.0": "651835d3bc343800aba55ca0f07347b677a5ef12974fbb60bae02c49c7da6544",
+  "vue-typescript-frontend@1.0.0": "3b6421a73909e6af85d7ddef3688054779475bce534c0a0857dcbfaf258fc238"
 }

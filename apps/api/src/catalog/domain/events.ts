@@ -11,6 +11,12 @@ export interface ApplicationRegisteredPayload {
   readonly slug: string;
   /** The application type's key, such as restful-service. */
   readonly type: string;
+  /**
+   * The blueprint chosen for it, such as react-typescript-frontend. Events of applications
+   * registered before blueprints were chosen don't have it: they started from their type's
+   * only blueprint.
+   */
+  readonly blueprint?: string;
 }
 
 export interface ApplicationStatusPayload {

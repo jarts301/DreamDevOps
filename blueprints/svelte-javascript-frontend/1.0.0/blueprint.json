@@ -1,0 +1,28 @@
+{
+  "key": "svelte-javascript-frontend",
+  "version": "1.0.0",
+  "applicationType": "web-frontend",
+  "name": "Svelte frontend in JavaScript",
+  "description": "A Svelte app in JavaScript, built with Vite and served by nginx, with settings read at runtime so one image serves every environment.",
+  "language": "JavaScript",
+  "framework": "Svelte 5",
+  "runtime": {
+    "port": 8080,
+    "livenessPath": "/healthz",
+    "readinessPath": "/healthz",
+    "resources": {
+      "cpu": "100m",
+      "memory": "64Mi"
+    },
+    "configuration": "Environment variables written to /config.json"
+  },
+  "telemetry": "Request logs from nginx in JSON, CPU and memory over OTLP, and a trace started for each call to its API",
+  "pipeline": ".forgejo/workflows/ci.yaml",
+  "strategies": [
+    "recreate",
+    "rolling",
+    "blue-green",
+    "canary",
+    "a-b"
+  ]
+}

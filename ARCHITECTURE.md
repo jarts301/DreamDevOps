@@ -25,8 +25,8 @@ Each context is a folder in `apps/api/src`, with its own guide.
 | [Audit](apps/api/src/audit/README.md) | Each company's tamper-evident history | `audit` | Nothing | Every context's events |
 | [Notifications](apps/api/src/notifications/README.md) | Invitation and alert emails, and chat rules | `notification` | `InvitationEmails`, `AlertEmails` | `CompanyDirectory`, every context's events |
 | [Editions](apps/api/src/editions/README.md) | Each company's edition and features | `editions` | `EntitlementProvider`, `RequireFeature` | `CompanyDirectory` |
-| [Blueprints](blueprints/README.md) | Versioned scaffolds for new applications | Files | `BlueprintCatalog`, blueprint types | Nothing |
-| [Catalog](apps/api/src/catalog/README.md) | Each company's applications | `catalog` | `ApplicationCatalog`, application events | Blueprints |
+| [Blueprints](blueprints/README.md) | Versioned scaffolds for new applications, in several languages and frameworks per type | Files | `BlueprintCatalog`, blueprint types | Nothing |
+| [Catalog](apps/api/src/catalog/README.md) | Each company's applications, and the blueprint each one starts from | `catalog` | `ApplicationCatalog`, application events | Blueprints |
 | [Source governance](apps/api/src/source-governance/README.md) | Repositories, Git Flow rules and teams | `source` | `RepositoryLookup`, Git Flow, repository events | Catalog, Blueprints, `CompanyDirectory` |
 | [Builds](apps/api/src/builds/README.md) | Versioned, scanned and signed images | `builds` | `DeployableImages` | Catalog, `RepositoryLookup`, `CompanyDirectory` |
 | [Environments](apps/api/src/environments/README.md) | Each application's environments, hosting targets, deployments and production protection | `environments` | Environment, hosting target and deployment events, `RunningEnvironments`, `EnvironmentLogs`, the attribute metrics and traces carry | Catalog, Builds' `DeployableImages` |

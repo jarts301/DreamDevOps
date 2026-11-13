@@ -11,13 +11,22 @@ A type is data, not code. The database starts with two:
 | `restful-service` | RESTful Service |
 | `web-frontend` | Web Frontend |
 
-Types are shared by every company. A type marked as unavailable can't be chosen any more, but applications that already use it keep it. A type can only be chosen when a [blueprint](../../../../blueprints/README.md) exists for it, and the types route shows which blueprint each one starts from.
+Types are shared by every company. A type marked as unavailable can't be chosen any more, but applications that already use it keep it. A type can only be chosen when a [blueprint](../../../../blueprints/README.md) exists for it.
+
+## Languages and frameworks
+
+A type can start from several blueprints, one for each language and framework, such as React in TypeScript or PyScript in Python for a web frontend. The types route lists them as `blueprints`, each with its `key`, `version`, `name`, `description`, `language` and `framework`, by language and name, and `blueprint` is the one an application starts from when none is chosen: the type's first by key.
+
+| Type | Languages and frameworks |
+|---|---|
+| RESTful Service | TypeScript: Fastify |
+| Web Frontend | TypeScript: Angular, React, Vue, Svelte. JavaScript: React, Vue, Svelte. Python: PyScript. |
 
 ## Applications
 
 | Action | Route | Effect |
 |---|---|---|
-| Register | `POST /company/applications` | Records the application with its name, type and optional description |
+| Register | `POST /company/applications` | Records the application with its name, type, the `blueprint` chosen for it, and an optional description. The blueprint must be one its type offers. |
 | Edit | `PATCH /company/applications/:id` | Changes the name or description. The short name stays fixed. |
 | Archive | `POST /company/applications/:id/archive` | Hides it from the list. Nothing is deleted. |
 | Restore | `POST /company/applications/:id/restore` | Brings an archived application back |
@@ -29,7 +38,8 @@ All routes start with `/api/v1`. Every company member can read. Registering, edi
 
 - **Short names:** each application gets a short name made from its name, such as `billing-api`, numbered if taken. It's fixed, because it names the application's repository.
 - **Names:** unique in the company, ignoring case. Archived applications keep their names, so a name always points to one application.
-- **Repositories:** registering starts creating the application's repository in the background. See [Source Governance](../source-governance/README.md).
+- **Blueprints:** each application keeps the blueprint chosen for it, fixed at registration, and shows it as `blueprint`, with its `language` and `framework`. Applications registered before there was a choice started from their type's only blueprint, which migration `0018` records.
+- **Repositories:** registering starts creating the application's repository in the background, from the newest version of its blueprint. See [Source Governance](../source-governance/README.md).
 - **History:** each change is recorded in the audit log as `ApplicationRegistered`, `ApplicationUpdated`, `ApplicationArchived` or `ApplicationRestored`. Saving without a change records nothing. Company Admins can choose to be notified of each.
 
 ## Data separation
@@ -38,4 +48,4 @@ Applications are company data. Row-level security limits every query to the curr
 
 ## For other modules
 
-Other modules use `ApplicationCatalog` to read applications. `ApplicationRegistered`, `ApplicationArchived` and `ApplicationRestored` are a contract, typed in `domain/events.ts`, because Source Governance reacts to them. Change them only compatibly. See the [architecture guide](../../../../ARCHITECTURE.md).
+Other modules use `ApplicationCatalog` to read applications. `ApplicationRegistered`, `ApplicationArchived` and `ApplicationRestored` are a contract, typed in `domain/events.ts`, because Source Governance reacts to them. Change them only compatibly. `ApplicationRegistered` gained `blueprint`, the chosen blueprint's key, which events from before there was a choice don't have. See the [architecture guide](../../../../ARCHITECTURE.md).

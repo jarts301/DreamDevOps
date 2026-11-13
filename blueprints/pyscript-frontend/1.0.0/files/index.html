@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>__APP_NAME_HTML__</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- The build puts PyScript here, in a folder named after its version. -->
+  <link rel="stylesheet" href="%PYSCRIPT%/core.css">
+  <script type="module" src="%PYSCRIPT%/core.js"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, sans-serif;
+    }
+
+    body {
+      margin: 0;
+    }
+
+    main {
+      max-width: 40rem;
+      margin: 4rem auto;
+      padding: 0 1rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>__APP_NAME_HTML__</h1>
+    <p>Your web frontend is running.</p>
+    <p>
+      It calls its API at <code id="api-url">…</code>.
+    </p>
+    <section aria-labelledby="check-heading">
+      <h2 id="check-heading">Check the API</h2>
+      <p>Pings the API, and starts a trace you can follow in DreamDevOps, under Monitoring.</p>
+      <button type="button" id="check-api" disabled>Check the API</button>
+      <div id="check-result"></div>
+    </section>
+  </main>
+  <!-- The page's Python. It starts once Python has loaded, and enables the button. -->
+  <script type="py" src="/main.py" config="/pyscript.json"></script>
+</body>
+</html>
