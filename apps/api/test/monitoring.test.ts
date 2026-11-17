@@ -113,8 +113,8 @@ describe('the Prometheus metrics store', () => {
 
     const selector = `{dreamdevops_place_id=~"${STAGING}"}`;
     expect(queries()).toEqual([
-      `sum by (dreamdevops_place_id) (rate(process_cpu_time_seconds_total${selector}[120s])) * 100`,
-      `sum by (dreamdevops_place_id) (process_memory_usage_bytes${selector})`,
+      `max by (dreamdevops_place_id) (rate(process_cpu_time_seconds_total${selector}[120s])) * 100`,
+      `max by (dreamdevops_place_id) (process_memory_usage_bytes${selector})`,
       `sum by (dreamdevops_place_id) (rate(http_server_request_duration_seconds_count${selector}[120s]))`,
       `histogram_quantile(0.95, sum by (dreamdevops_place_id, le) (rate(http_server_request_duration_seconds_bucket${selector}[120s])))`,
       `(sum by (dreamdevops_place_id) (rate(http_server_request_duration_seconds_count{dreamdevops_place_id=~"${STAGING}",http_response_status_code=~"5.."}[120s])) or sum by (dreamdevops_place_id) (rate(http_server_request_duration_seconds_count${selector}[120s])) * 0) / sum by (dreamdevops_place_id) (rate(http_server_request_duration_seconds_count${selector}[120s])) * 100`,
@@ -181,7 +181,7 @@ describe('the Prometheus metrics store', () => {
     // Evaluated where the window starts, over the 24 hours before it, once a minute.
     expect(highs.every((form) => form.get('time') === '1794312000')).toBe(true);
     expect(highs[0]!.get('query')).toBe(
-      `max_over_time((sum by (dreamdevops_place_id) (rate(process_cpu_time_seconds_total{dreamdevops_place_id="${STAGING}"}[120s])) * 100)[86400s:60s])`,
+      `max_over_time((max by (dreamdevops_place_id) (rate(process_cpu_time_seconds_total{dreamdevops_place_id="${STAGING}"}[120s])) * 100)[86400s:60s])`,
     );
   });
 

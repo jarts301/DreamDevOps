@@ -43,6 +43,8 @@ describe('the target tools', () => {
     });
     expect(values.extraVolumes).toEqual([{ name: 'telemetry-token', secret: { secretName: 'dreamdevops-telemetry' } }]);
     expect(values.config.service.pipelines.logs.receivers).toEqual(['otlp', 'filelog']);
+    // Flux shuts the system namespace to other namespaces, so applications' pods must be let in.
+    expect(values.networkPolicy).toEqual({ enabled: true, allowIngressFrom: [{ namespaceSelector: {} }] });
     expect(JSON.stringify(values.config.processors['filter/system'])).toContain('dreamdevops-system');
   });
 });

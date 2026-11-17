@@ -28,10 +28,13 @@ const HTTP_DURATION = 'http_server_request_duration_seconds';
  * Each metric as PromQL, for a label selector and a rate window. The names are how
  * Prometheus stores the standard OpenTelemetry metrics: process.cpu.time,
  * process.memory.usage and http.server.request.duration.
+ *
+ * CPU and memory are the busiest copy's, since each copy has its own limit to compare
+ * with. Requests and errors count every copy's.
  */
 const QUERIES: Readonly<Record<MetricKey, (selector: string, window: string) => string>> = {
-  cpu: (selector, window) => `sum by (${PLACE_LABEL}) (rate(process_cpu_time_seconds_total{${selector}}[${window}])) * 100`,
-  memory: (selector) => `sum by (${PLACE_LABEL}) (process_memory_usage_bytes{${selector}})`,
+  cpu: (selector, window) => `max by (${PLACE_LABEL}) (rate(process_cpu_time_seconds_total{${selector}}[${window}])) * 100`,
+  memory: (selector) => `max by (${PLACE_LABEL}) (process_memory_usage_bytes{${selector}})`,
   requests: (selector, window) => `sum by (${PLACE_LABEL}) (rate(${HTTP_DURATION}_count{${selector}}[${window}]))`,
   responseTime: (selector, window) =>
     `histogram_quantile(0.95, sum by (${PLACE_LABEL}, le) (rate(${HTTP_DURATION}_bucket{${selector}}[${window}])))`,
@@ -118,7 +121,7 @@ export class PrometheusMetricsStore implements MetricsStore {
         ),
       ),
     ]);
-    // Each query sums by place, so it answers with one series at most.
+    // Each query groups by place, so it answers with one series at most.
     const ours = (answer: PrometheusAnswer) =>
       answer.data?.result?.find((result) => result.metric?.[PLACE_LABEL] === placeId);
     const series = {} as Record<MetricKey, SeriesData>;

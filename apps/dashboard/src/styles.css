@@ -985,3 +985,8 @@ tr[data-production='true'] > td:first-child {
   vertical-align: middle;
   border-top: 2px dashed var(--color-warning);
 }
+
+/* A choice's explanation, on its own line under the choice's name. */
+.choice-note {
+  display: block;
+}

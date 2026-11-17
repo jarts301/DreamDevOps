@@ -276,7 +276,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
                             />
                             <span>
                               <strong>{{ provider.name }}</strong>
-                              <span class="cell-note">{{ provider.unavailableReason ?? provider.description }}</span>
+                              <span class="cell-note choice-note">{{ provider.unavailableReason ?? provider.description }}</span>
                             </span>
                           </label>
                         }

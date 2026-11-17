@@ -14,6 +14,8 @@ const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'targets:connect': 'Connect hosting targets, where environments run',
   'environments:manage': 'Manage environments',
   'environments-production:manage': 'Change production environments, with their name typed and a reason',
+  'environment-config:manage': "Manage every environment's variables and secrets",
+  'test-environment-config:manage': "Manage test environments' variables and secrets",
   'applications:create': 'Register and manage applications',
   'code:push': 'Push code and open pull requests',
   'pull-requests:approve': 'Approve pull requests',

@@ -270,7 +270,7 @@ describe('alerts', () => {
   it('says when there’s nothing to watch yet, or the server keeps no metrics', async () => {
     const fixture = await open(MANAGER, { environments: [], page: overview({ metricsEnabled: false, alerts: [] }) });
 
-    expect(text(fixture)).toContain("There's no environment to watch yet.");
+    expect(text(fixture)).toContain("Nothing runs yet, so there's nothing to watch.");
     expect(text(fixture)).toContain("This server doesn't keep applications' metrics yet");
     expect(text(fixture)).toContain('No alerts yet.');
   });

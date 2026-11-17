@@ -69,8 +69,8 @@ Each is worked out from OpenTelemetry's standard metrics, by their names:
 
 | Metric | From | Worked out as |
 |---|---|---|
-| CPU | `process.cpu.time` | The share of one CPU core used, over the last two minutes |
-| Memory | `process.memory.usage` | The latest value |
+| CPU | `process.cpu.time` | The share of one CPU core used, over the last two minutes, by the busiest copy |
+| Memory | `process.memory.usage` | The latest value of the busiest copy |
 | Requests | `http.server.request.duration` | Requests answered each second, over the last two minutes |
 | Response time | `http.server.request.duration` | The time within which 95% of requests were answered |
 | Server errors | `http.server.request.duration` | The share of requests answered with a 5xx status |
@@ -78,7 +78,7 @@ Each is worked out from OpenTelemetry's standard metrics, by their names:
 An application that sends none of one shows **No data** for it, rather than zero.
 
 - **Daily high:** each chart has a dashed line at the metric's highest value in the 24 hours before the chart's range, worked out as the chart's points are. A value above it is higher than anything the day before.
-- **Limits:** CPU and memory show against what the container may use at most, from the deployment that started it, such as **13% of 1 CPU**. A value at 90% of its limit or more stands out.
+- **Limits:** CPU and memory show against what each copy's container may use at most, from the deployment that started it, such as **13% of 1 CPU**. A value at 90% of its limit or more stands out.
 
 The definitions are in `domain/metrics.ts`, and their PromQL in `infrastructure/prometheus-metrics-store.ts`.
 

@@ -18,8 +18,8 @@ export interface MetricDefinition {
  * application that sends them shows up, whichever blueprint it started from.
  */
 export const METRICS: readonly MetricDefinition[] = [
-  { key: 'cpu', name: 'CPU', unit: 'percent', description: 'How much of one CPU core it uses.' },
-  { key: 'memory', name: 'Memory', unit: 'bytes', description: 'How much memory it holds.' },
+  { key: 'cpu', name: 'CPU', unit: 'percent', description: 'How much of one CPU core it uses, in its busiest copy.' },
+  { key: 'memory', name: 'Memory', unit: 'bytes', description: 'How much memory it holds, in its busiest copy.' },
   { key: 'requests', name: 'Requests', unit: 'per-second', description: 'HTTP requests it answers each second.' },
   {
     key: 'responseTime',

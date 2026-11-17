@@ -68,7 +68,7 @@ const ENDINGS: Readonly<Record<NonNullable<Incident['endedBy']>, string>> = {
           <h2 id="new-alert-heading">New alert</h2>
           @if (environments().length === 0) {
             <p class="muted">
-              There's no environment to watch yet. Create one on the <a routerLink="/environments">Environments</a> page.
+              Nothing runs yet, so there's nothing to watch. Deploy a version on its application's page, and it shows here.
             </p>
           } @else {
             <form [formGroup]="form" (ngSubmit)="create()">

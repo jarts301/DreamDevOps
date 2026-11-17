@@ -64,6 +64,9 @@ export function collectorValues(endpoint: string): object {
     image: { repository: 'otel/opentelemetry-collector-contrib' },
     // Applications reach the collector on their own node.
     service: { enabled: true, internalTrafficPolicy: 'Local' },
+    // Flux's network policies shut the system namespace to other namespaces, so this lets
+    // applications' pods in, on the collector's ports only, and nothing from outside the cluster.
+    networkPolicy: { enabled: true, allowIngressFrom: [{ namespaceSelector: {} }] },
     presets: {
       logsCollection: { enabled: true, includeCollectorLogs: false },
       kubernetesAttributes: { enabled: true },
