@@ -71,6 +71,27 @@ export class OpenBaoSecretStore implements SecretStore {
     return { token: auth.client_token, expiresAt: new Date(Date.now() + auth.lease_duration * 1000) };
   }
 
+  async read(token: string, path: string): Promise<Record<string, string>> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.#options.url.replace(/\/$/, '')}/v1/${this.#mount}/data/${path}`, {
+        headers: { 'X-Vault-Token': token },
+        signal: AbortSignal.timeout(this.#options.timeoutMs ?? 15_000),
+      });
+    } catch {
+      throw new Error('The secret store could not be reached.');
+    }
+    if (response.status === 404) {
+      return {};
+    }
+    await expectOk(response, 'read the secrets');
+    const body = (await response.json()) as { data?: { data?: Record<string, unknown> | null } };
+    // Removed values stay as nulls in a merge patch's result, so only strings count.
+    return Object.fromEntries(
+      Object.entries(body.data?.data ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+  }
+
   /** Keeps the platform's own periodic token alive. */
   async renew(): Promise<void> {
     await expectOk(await this.#request('POST', '/v1/auth/token/renew-self', {}), 'renew the platform token');

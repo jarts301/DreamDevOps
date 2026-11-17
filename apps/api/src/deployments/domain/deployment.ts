@@ -72,6 +72,9 @@ export interface Progress {
   readonly updated?: number;
   readonly ready?: number;
   readonly available?: number;
+  /** On This machine: where people reach it, and the port it has there. */
+  readonly address?: string | null;
+  readonly port?: number | null;
 }
 
 /**
@@ -107,4 +110,22 @@ export function advance(
     default:
       return { status: 'progressing', progress, message: null };
   }
+}
+
+/**
+ * Where a stop stands after a report from its target. It has no workload of its own: it's
+ * done once Flux applied the change and the application's workload is gone.
+ */
+export function advanceStop(
+  current: { readonly status: DeploymentStatus },
+  stillRunning: boolean,
+  sync: SyncReport | null,
+): { status: DeploymentStatus; progress: Progress; message: string | null } {
+  if (sync !== null && !sync.ready && sync.message !== null) {
+    return { status: current.status, progress: { applied: false }, message: `Flux can't apply the change: ${sync.message}` };
+  }
+  if (sync?.ready === true && !stillRunning) {
+    return { status: 'succeeded', progress: { applied: true }, message: 'It no longer runs here.' };
+  }
+  return { status: current.status, progress: { applied: false }, message: null };
 }

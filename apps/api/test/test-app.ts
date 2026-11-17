@@ -15,8 +15,10 @@ import { DATABASE_POOL } from '../src/tokens.ts';
 import { MAILER } from '../src/notifications/application/ports.ts';
 import { SOURCE_HOST } from '../src/source-governance/application/ports.ts';
 import { IMAGE_REGISTRY, PIPELINE_HOST } from '../src/builds/application/ports.ts';
+import { HOST_RUNTIME } from '../src/deployments/application/ports.ts';
 import {
   FakeEnvironmentRepositories,
+  FakeHostRuntime,
   FakeIdentityProvider,
   FakeImageRegistry,
   FakeMailer,
@@ -73,6 +75,10 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   openbaoToken: 'fake-dummy-openbao-token-for-tests',
   targetOpenbaoUrl: 'http://openbao.target.test',
   targetRegistryHost: 'registry.target.test',
+  targetOtlpEndpoint: 'http://collector.target.test:4318',
+  localHosting: true,
+  localHostingBindAddress: '127.0.0.1',
+  deployHealthTimeoutSeconds: 5,
   targetGitSshUrl: 'ssh://git@git.target.test:2222',
   targetGitKnownHosts: '[git.target.test]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeTestHostKeyForTargetsOnly000000000000',
   provisioningMaxAttempts: 3,
@@ -113,6 +119,8 @@ export async function buildApp(options: TestAppOptions): Promise<INestApplicatio
         { provide: ENVIRONMENT_REPOSITORIES, useValue: new FakeEnvironmentRepositories() },
         { provide: PULL_ACCOUNTS, useValue: new FakePullAccounts() },
         { provide: SECRET_STORE, useValue: new FakeSecretStore() },
+        // Tests never run containers on the machine that runs them.
+        { provide: HOST_RUNTIME, useValue: new FakeHostRuntime() },
         ...(options.overrides ?? []),
       ],
     }),

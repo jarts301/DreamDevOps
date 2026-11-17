@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { ProductionConfirmation } from '../../shared/production-confirmation';
 
 export type EnvironmentKind = 'test' | 'production';
 export type EnvironmentStatus = 'active' | 'archived';
@@ -8,6 +9,9 @@ export type TargetStatus = 'pending' | 'connected' | 'lost';
 
 export interface Target {
   readonly id: string;
+  /** What runs the environment: a Kubernetes cluster with the agent, or This machine. */
+  readonly provider: string;
+  readonly settings: Readonly<Record<string, string | number>>;
   readonly status: TargetStatus;
   readonly registrationExpiresAt: string | null;
   readonly keyFingerprint: string | null;
@@ -40,11 +44,24 @@ export interface EnvironmentConfig {
   readonly secrets: readonly { readonly name: string; readonly scope: ConfigScope; readonly updatedAt: string }[];
 }
 
+/** A place environments can run, and what it needs. */
+export interface Provider {
+  readonly key: string;
+  readonly name: string;
+  readonly description: string;
+  readonly deploys: boolean;
+  readonly settings: readonly { readonly key: string; readonly label: string; readonly example: string; readonly help: string | null }[];
+  /** Why it can't be chosen here, or null when it can. */
+  readonly unavailableReason: string | null;
+}
+
 export interface Connection {
   readonly targetId: string;
-  readonly registrationToken: string;
-  readonly expiresAt: string;
-  readonly command: string;
+  readonly provider: string;
+  /** For a cluster only: This machine needs no agent. */
+  readonly registrationToken: string | null;
+  readonly expiresAt: string | null;
+  readonly command: string | null;
 }
 
 const BASE = '/api/v1/company/environments';
@@ -70,34 +87,62 @@ export class EnvironmentsApi {
     return firstValueFrom(this.#http.get<EnvironmentConfig>(`${BASE}/${id}/config`, { params }));
   }
 
-  setValue(id: string, kind: 'variables' | 'secrets', name: string, value: string, application?: string): Promise<void> {
+  /** Production changes carry its name, typed to confirm, and a reason. */
+  setValue(
+    id: string,
+    kind: 'variables' | 'secrets',
+    name: string,
+    value: string,
+    application?: string,
+    confirmation?: ProductionConfirmation,
+  ): Promise<void> {
     return firstValueFrom(
-      this.#http.put<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, { value, ...(application && { application }) }),
+      this.#http.put<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, {
+        value,
+        ...(application && { application }),
+        ...confirmation,
+      }),
     );
   }
 
-  removeValue(id: string, kind: 'variables' | 'secrets', name: string, application?: string): Promise<void> {
+  removeValue(
+    id: string,
+    kind: 'variables' | 'secrets',
+    name: string,
+    application?: string,
+    confirmation?: ProductionConfirmation,
+  ): Promise<void> {
     const params: Record<string, string> = application === undefined ? {} : { application };
-    return firstValueFrom(this.#http.delete<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, { params }));
+    return firstValueFrom(
+      this.#http.delete<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, { params, body: { ...confirmation } }),
+    );
   }
 
-  update(id: string, input: { name?: string; acceptsFeatureImages?: boolean; requiresApproval?: boolean }): Promise<void> {
-    return firstValueFrom(this.#http.patch<void>(`${BASE}/${id}`, input));
+  update(
+    id: string,
+    input: { name?: string; acceptsFeatureImages?: boolean; requiresApproval?: boolean },
+    confirmation?: ProductionConfirmation,
+  ): Promise<void> {
+    return firstValueFrom(this.#http.patch<void>(`${BASE}/${id}`, { ...input, ...confirmation }));
   }
 
-  archive(id: string): Promise<void> {
-    return firstValueFrom(this.#http.post<void>(`${BASE}/${id}/archive`, {}));
+  archive(id: string, confirmation?: ProductionConfirmation): Promise<void> {
+    return firstValueFrom(this.#http.post<void>(`${BASE}/${id}/archive`, { ...confirmation }));
   }
 
   restore(id: string): Promise<void> {
     return firstValueFrom(this.#http.post<void>(`${BASE}/${id}/restore`, {}));
   }
 
-  connect(id: string): Promise<Connection> {
-    return firstValueFrom(this.#http.post<Connection>(`${BASE}/${id}/target`, {}));
+  providers(): Promise<Provider[]> {
+    return firstValueFrom(this.#http.get<Provider[]>(`${BASE}/providers`));
   }
 
-  disconnect(id: string): Promise<void> {
-    return firstValueFrom(this.#http.delete<void>(`${BASE}/${id}/target`));
+  connect(id: string, provider = 'kubernetes', settings: Readonly<Record<string, string>> = {}): Promise<Connection> {
+    return firstValueFrom(this.#http.post<Connection>(`${BASE}/${id}/target`, { provider, settings }));
+  }
+
+  disconnect(id: string, confirmation?: ProductionConfirmation): Promise<void> {
+    return firstValueFrom(this.#http.delete<void>(`${BASE}/${id}/target`, { body: { ...confirmation } }));
   }
 }

@@ -58,6 +58,15 @@ export interface AppConfig {
   readonly targetLostAfterSeconds: number;
   /** Sets up the demo company and its users at startup. Local use only. */
   readonly demoData: boolean;
+  /**
+   * Whether companies may run applications on this machine's own Docker, for trying
+   * things out. Off by default in production, where companies would share the machine.
+   */
+  readonly localHosting: boolean;
+  /** The address applications on this machine publish their ports on. 127.0.0.1 keeps them to this machine. */
+  readonly localHostingBindAddress: string;
+  /** How long a new version on this machine has to become healthy before it's rolled back. */
+  readonly deployHealthTimeoutSeconds: number;
   /** A Forgejo administrator, used only to create each company's read-only pull account. */
   readonly forgejoAdminUsername: string;
   readonly forgejoAdminPassword: string;
@@ -68,6 +77,11 @@ export interface AppConfig {
   /** How targets reach OpenBao, the registry and Git. Default: the platform's own addresses. */
   readonly targetOpenbaoUrl: string;
   readonly targetRegistryHost: string;
+  /**
+   * Where applications on targets send their metrics and traces over OTLP/HTTP, such as
+   * the collector the agent installs. Null: they aren't told to send any.
+   */
+  readonly targetOtlpEndpoint: string | null;
   /** The SSH address targets clone their environment repository from, such as ssh://git@git.example.com:22. */
   readonly targetGitSshUrl: string;
   /** Forgejo's SSH host keys as targets see them, in known_hosts format. */
@@ -149,6 +163,10 @@ export function loadConfig(env: Environment): AppConfig {
     throw new InvalidConfigError('AGENT_CHART must be a chart reference, such as oci://registry.example.com/charts/agent.');
   }
   const demoData = env.DEMO_DATA === 'true';
+  const localHosting = (env.LOCAL_HOSTING || (isProduction ? 'off' : 'on')) === 'on';
+  if (env.LOCAL_HOSTING !== undefined && env.LOCAL_HOSTING !== '' && !['on', 'off'].includes(env.LOCAL_HOSTING)) {
+    throw new InvalidConfigError('LOCAL_HOSTING must be on or off.');
+  }
   if (isProduction && demoData) {
     throw new InvalidConfigError('DEMO_DATA is for local use only.');
   }
@@ -200,12 +218,16 @@ export function loadConfig(env: Environment): AppConfig {
     agentChart,
     targetLostAfterSeconds: integer(env, 'TARGET_LOST_AFTER_SECONDS', 180),
     demoData,
+    localHosting,
+    localHostingBindAddress: env.LOCAL_HOSTING_BIND_ADDRESS || '127.0.0.1',
+    deployHealthTimeoutSeconds: integer(env, 'DEPLOY_HEALTH_TIMEOUT_SECONDS', 120),
     forgejoAdminUsername: required(env, 'FORGEJO_ADMIN_USERNAME'),
     forgejoAdminPassword: required(env, 'FORGEJO_ADMIN_PASSWORD'),
     openbaoUrl,
     openbaoToken,
     targetOpenbaoUrl: env.TARGET_OPENBAO_URL ? url(env, 'TARGET_OPENBAO_URL') : openbaoUrl,
     targetRegistryHost: env.TARGET_REGISTRY_HOST || new URL(forgejoPublicUrl).host,
+    targetOtlpEndpoint: env.TARGET_OTLP_ENDPOINT ? url(env, 'TARGET_OTLP_ENDPOINT') : null,
     targetGitSshUrl: env.TARGET_GIT_SSH_URL || `ssh://git@${new URL(forgejoPublicUrl).hostname}:22`,
     targetGitKnownHosts: env.TARGET_GIT_KNOWN_HOSTS ?? '',
     provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),

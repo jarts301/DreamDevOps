@@ -4,8 +4,8 @@ import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { describeEvent } from '../../core/events';
 import { SessionService } from '../../core/session.service';
-import { settle } from '../../testing';
-import type { Deployment } from './delivery.api';
+import { confirmProduction, settle } from '../../testing';
+import type { Deployment, RunningVersion } from './delivery.api';
 import { DeploymentsPanel, deploymentSteps } from './deployments-panel';
 
 const environment = (id: string, name: string, kind: 'test' | 'production', acceptedImages: string[], status = 'connected') => ({
@@ -44,6 +44,20 @@ const deployment = (overrides: Partial<Deployment> = {}): Deployment => ({
   createdAt: '2026-11-10T10:00:00Z',
   updatedAt: '2026-11-10T10:01:00Z',
   finishedAt: null,
+  action: 'deploy',
+  reason: null,
+  limits: null,
+  ...overrides,
+});
+const runningVersion = (overrides: Partial<RunningVersion> = {}): RunningVersion => ({
+  deploymentId: 'd-9',
+  application: { id: 'a-1', name: 'Billing', slug: 'billing' },
+  environment: { id: 'e-1', name: 'Staging', kind: 'test' },
+  version: { buildId: 'b-1', kind: 'feature', tag: 'feature-login-abc1234', version: null },
+  strategy: 'rolling',
+  limits: { cpu: '250m', memory: '256Mi' },
+  since: '2026-11-10T10:05:00Z',
+  settingsChanged: false,
   ...overrides,
 });
 
@@ -85,7 +99,7 @@ describe('deployment steps', () => {
 describe('DeploymentsPanel', () => {
   let http: HttpTestingController;
 
-  const open = async (permissions: string[], deployments: Deployment[], userId = 'u-1') => {
+  const open = async (permissions: string[], deployments: Deployment[], userId = 'u-1', running: RunningVersion[] = []) => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
@@ -105,10 +119,15 @@ describe('DeploymentsPanel', () => {
     await settle();
     http.expectOne((request) => request.url === '/api/v1/company/environments').flush([STAGING, LIVE, OFFLINE]);
     await settle();
-    http.expectOne((request) => request.url === '/api/v1/company/deployments').flush(deployments);
+    answerRefresh(deployments, running);
     await settle();
     await fixture.whenStable();
     return fixture;
+  };
+  /** The panel loads the deployments and what runs together. */
+  const answerRefresh = (deployments: Deployment[], running: RunningVersion[] = []) => {
+    http.expectOne((request) => request.url === '/api/v1/company/deployments').flush(deployments);
+    http.expectOne((request) => request.url === '/api/v1/company/running').flush(running);
   };
 
   afterEach(() => http.verify());
@@ -138,12 +157,15 @@ describe('DeploymentsPanel', () => {
     expect(element(fixture).textContent).toContain('Someone else must approve each deployment.');
 
     element(fixture).querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
-    await settle();
+    // Production asks for its name first. A reason is optional when deploying.
+    const asked = await confirmProduction(fixture, 'Live');
+    expect(asked).toContain('Deploy 1.0.0 to Live');
+    expect(asked).toContain('Why (optional,');
     const request = http.expectOne('/api/v1/company/applications/a-1/deployments');
-    expect(request.request.body).toEqual({ environment: 'e-2', version: 'b-2', strategy: 'rolling' });
+    expect(request.request.body).toEqual({ environment: 'e-2', version: 'b-2', strategy: 'rolling', confirmation: 'Live' });
     request.flush(deployment({ status: 'awaiting-approval', environment: { id: 'e-2', name: 'Live', kind: 'production' } }));
     await settle();
-    http.expectOne((candidate) => candidate.url === '/api/v1/company/deployments').flush([]);
+    answerRefresh([]);
     await settle();
     await fixture.whenStable();
     expect(element(fixture).textContent).toContain('The deployment to Live waits for someone to approve it.');
@@ -176,7 +198,70 @@ describe('DeploymentsPanel', () => {
     await settle();
     http.expectOne('/api/v1/company/deployments/d-2/rollback').flush(deployment({ id: 'd-6', status: 'queued' }));
     await settle();
-    http.expectOne((candidate) => candidate.url === '/api/v1/company/deployments').flush([]);
+    answerRefresh([]);
+    fixture.destroy();
+  });
+
+  it('describes choosing This machine in the audit log', () => {
+    expect(describeEvent('TargetConnected', { provider: 'local', environmentName: 'Trial' })).toBe('Set "Trial" to run on this machine');
+  });
+
+  it('describes stops, applied values and production reasons in the audit log', () => {
+    expect(describeEvent('DeploymentRequested', { action: 'stop', environmentName: 'Live', reason: 'Retiring the old API' })).toBe(
+      'Asked to stop an application in "Live", because "Retiring the old API"',
+    );
+    expect(describeEvent('DeploymentRequested', { action: 'apply', environmentName: 'Staging' })).toBe(
+      'Asked to apply the values of "Staging" to what runs there',
+    );
+    expect(describeEvent('DeploymentSucceeded', { action: 'stop', applicationName: 'Billing', environmentName: 'Staging' })).toBe(
+      'Stopped Billing in "Staging"',
+    );
+    expect(describeEvent('TargetRevoked', { wasConnected: true, environmentName: 'Live', reason: 'Moving to the new cluster' })).toBe(
+      'Disconnected the target of "Live", because "Moving to the new cluster"',
+    );
+  });
+
+  it('shows what runs, with changed values to apply, and stops it', async () => {
+    const fixture = await open(['deployments-test:run'], [], 'u-1', [runningVersion({ settingsChanged: true })]);
+    const text = element(fixture).textContent?.replace(/\s+/g, ' ') ?? '';
+    expect(text).toContain('Running now');
+    expect(text).toContain('250m CPU, 256Mi memory');
+    expect(text).toContain("The environment's values changed since it started.");
+
+    element(fixture).querySelector<HTMLButtonElement>('button[aria-label="Apply the values of Staging to Billing"]')!.click();
+    await settle();
+    const apply = http.expectOne('/api/v1/company/applications/a-1/apply');
+    expect(apply.request.body).toEqual({ environment: 'e-1' });
+    apply.flush(deployment({ action: 'apply', status: 'queued' }));
+    await settle();
+    answerRefresh([deployment({ action: 'apply', status: 'queued' })], [runningVersion()]);
+    await settle();
+    await fixture.whenStable();
+    expect(element(fixture).textContent).toContain('Values applied, Rolling');
+
+    element(fixture).querySelector<HTMLButtonElement>('button[aria-label="Stop Billing in Staging"]')!.click();
+    await settle();
+    http.expectOne('/api/v1/company/applications/a-1/stop').flush(deployment({ action: 'stop', status: 'queued' }));
+    await settle();
+    answerRefresh([deployment({ action: 'stop', status: 'queued' })], []);
+    await settle();
+    await fixture.whenStable();
+    expect(element(fixture).textContent).toContain('Stopping Billing in Staging.');
+    expect(element(fixture).textContent).not.toContain('Running now');
+    fixture.destroy();
+  });
+
+  it('asks for production’s name and a reason before stopping it', async () => {
+    const live = { id: 'e-2', name: 'Live', kind: 'production' as const };
+    const fixture = await open(['deployments-production:run'], [], 'u-1', [runningVersion({ environment: live })]);
+
+    element(fixture).querySelector<HTMLButtonElement>('button[aria-label="Stop Billing in Live"]')!.click();
+    expect(await confirmProduction(fixture, 'Live', 'Retiring the old API')).toContain('Stop Billing feature-login-abc1234 in Live');
+    const stop = http.expectOne('/api/v1/company/applications/a-1/stop');
+    expect(stop.request.body).toEqual({ environment: 'e-2', confirmation: 'Live', reason: 'Retiring the old API' });
+    stop.flush(deployment({ action: 'stop', status: 'queued', environment: live }));
+    await settle();
+    answerRefresh([], []);
     fixture.destroy();
   });
 });

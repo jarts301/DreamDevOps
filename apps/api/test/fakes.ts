@@ -1,5 +1,6 @@
 // Fakes of each module's ports, for tests. Each module's fakes live in fakes/.
 export * from './fakes/builds.ts';
+export * from './fakes/deployments.ts';
 export * from './fakes/environments.ts';
 export * from './fakes/identity-access.ts';
 export * from './fakes/notifications.ts';

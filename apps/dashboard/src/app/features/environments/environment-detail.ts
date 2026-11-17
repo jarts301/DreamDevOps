@@ -4,11 +4,17 @@ import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angula
 import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { SessionService } from '../../core/session.service';
+import {
+  type PendingProductionChange,
+  type ProductionConfirmation,
+  ProductionConfirmationPanel,
+} from '../../shared/production-confirmation';
 import { type Application, CatalogApi } from '../catalog/catalog.api';
 import { DeploymentsPanel } from '../delivery/deployments-panel';
 import { type Environment, type EnvironmentConfig, EnvironmentsApi } from './environments.api';
 
-const NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,99}$/;
+/** Letters, digits and underscores, starting with a letter or underscore. The API checks the rest. */
+const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 /**
  * One environment: its target, its variables and secrets, and what's deployed there.
@@ -17,7 +23,7 @@ const NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,99}$/;
  */
 @Component({
   selector: 'app-environment-detail',
-  imports: [DatePipe, DeploymentsPanel, ReactiveFormsModule, RouterLink],
+  imports: [DatePipe, DeploymentsPanel, ProductionConfirmationPanel, ReactiveFormsModule, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <p><a routerLink="/environments">← Environments</a></p>
@@ -26,7 +32,11 @@ const NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,99}$/;
       <p class="lead">
         {{ current.kind === 'production' ? 'Production' : 'Test' }} · takes {{ current.acceptedImages.join(', ') }} images ·
         @if (current.target; as target) {
-          target {{ target.status === 'connected' ? 'connected' : target.status === 'lost' ? 'not reporting' : 'waiting for its agent' }}
+          @if (target.provider === 'local') {
+            runs on this machine
+          } @else {
+            target {{ target.status === 'connected' ? 'connected' : target.status === 'lost' ? 'not reporting' : 'waiting for its agent' }}
+          }
         } @else {
           no target connected
         }
@@ -38,8 +48,19 @@ const NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,99}$/;
       @if (notice(); as message) {
         <p class="alert alert-success" role="status">{{ message }}</p>
       }
+      @if (pending(); as change) {
+        <app-production-confirmation
+          [name]="change.environmentName"
+          [what]="change.what"
+          [action]="change.action"
+          [reasonRequired]="change.reasonRequired"
+          [working]="working()"
+          (confirm)="confirmPending(change, $event)"
+          (cancel)="pending.set(null)"
+        />
+      }
 
-      @if (current.kind === 'production' && canManageTargets()) {
+      @if (current.kind === 'production' && canManageTargets() && canManageProduction()) {
         <section class="card" aria-labelledby="approval-heading">
           <h2 id="approval-heading">Approval</h2>
           <label class="field-inline">
@@ -114,7 +135,7 @@ const NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,99}$/;
             </label>
             <label class="field">
               <span>Value</span>
-              <input type="text" formControlName="value" autocomplete="off" maxlength="4096" />
+              <input type="text" formControlName="value" autocomplete="off" maxlength="32768" />
             </label>
             <button type="submit" class="button button-primary" [disabled]="variableForm.invalid || working()">Save variable</button>
           </form>
@@ -198,6 +219,12 @@ export class EnvironmentDetail implements OnInit {
   readonly #forms = inject(NonNullableFormBuilder);
 
   protected readonly environment = signal<Environment | null>(null);
+  /** A production change waiting for its name and reason. */
+  protected readonly pending = signal<PendingProductionChange | null>(null);
+  protected readonly canManageProduction = computed(() => {
+    this.#session.user();
+    return this.#session.can('environments-production:manage');
+  });
   protected readonly applications = signal<Application[]>([]);
   protected readonly config = signal<EnvironmentConfig>({ variables: [], secrets: [] });
   /** An application's ID, or empty for every application. */
@@ -220,7 +247,7 @@ export class EnvironmentDetail implements OnInit {
 
   protected readonly variableForm = this.#forms.group({
     name: ['', [Validators.required, Validators.pattern(NAME_PATTERN)]],
-    value: ['', Validators.maxLength(4096)],
+    value: ['', Validators.maxLength(32768)],
   });
   protected readonly secretForm = this.#forms.group({
     name: ['', [Validators.required, Validators.pattern(NAME_PATTERN)]],
@@ -248,18 +275,40 @@ export class EnvironmentDetail implements OnInit {
   }
 
   protected async setApproval(required: boolean): Promise<void> {
+    await this.#guard(
+      required ? 'Ask a second person to approve each deployment' : 'Stop asking for approval of deployments',
+      'Save',
+      async (confirmation) => {
+        await this.#api.update(this.id(), { requiresApproval: required }, confirmation);
+        this.environment.set(await this.#api.get(this.id()));
+        this.notice.set(required ? 'Each deployment now needs a second person to approve it.' : 'Deployments no longer need approval.');
+      },
+    );
+  }
+
+  protected async confirmPending(change: PendingProductionChange, confirmation: ProductionConfirmation): Promise<void> {
     await this.#attempt(async () => {
-      await this.#api.update(this.id(), { requiresApproval: required });
-      this.environment.set(await this.#api.get(this.id()));
-      this.notice.set(required ? 'Each deployment now needs a second person to approve it.' : 'Deployments no longer need approval.');
+      await change.run(confirmation);
+      this.pending.set(null);
     });
+  }
+
+  /** Runs a change at once, or for production, once its name and a reason are given. */
+  async #guard(what: string, action: string, run: (confirmation?: ProductionConfirmation) => Promise<void>): Promise<void> {
+    const environment = this.environment();
+    if (environment?.kind === 'production') {
+      this.pending.set({ environmentName: environment.name, what, action, reasonRequired: true, run });
+      return;
+    }
+    await this.#attempt(() => run());
   }
 
   protected async save(kind: 'variables' | 'secrets'): Promise<void> {
     const form = kind === 'variables' ? this.variableForm : this.secretForm;
     const { name, value } = form.getRawValue();
-    await this.#attempt(async () => {
-      await this.#api.setValue(this.id(), kind, name, value, this.scope() || undefined);
+    const what = kind === 'variables' ? 'variable' : 'secret';
+    await this.#guard(`Set the ${what} ${name}`, 'Save', async (confirmation) => {
+      await this.#api.setValue(this.id(), kind, name, value, this.scope() || undefined, confirmation);
       form.reset({ name: '', value: '' });
       this.notice.set(`${name} is saved. It applies at the next deployment.`);
       await this.#loadConfig();
@@ -267,8 +316,8 @@ export class EnvironmentDetail implements OnInit {
   }
 
   protected async remove(kind: 'variables' | 'secrets', name: string): Promise<void> {
-    await this.#attempt(async () => {
-      await this.#api.removeValue(this.id(), kind, name, this.scope() || undefined);
+    await this.#guard(`Remove the ${kind === 'variables' ? 'variable' : 'secret'} ${name}`, 'Remove', async (confirmation) => {
+      await this.#api.removeValue(this.id(), kind, name, this.scope() || undefined, confirmation);
       this.notice.set(`${name} is removed. It goes at the next deployment.`);
       await this.#loadConfig();
     });

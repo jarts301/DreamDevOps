@@ -38,8 +38,9 @@ export class EnvironmentsSubscriptions implements BackgroundSubscriber, OnApplic
       'TargetRevoked',
       'target-deploy-keys',
       (event) => {
-        const { environmentId, targetId, wasConnected } = event.payload as Payload;
-        return wasConnected === true
+        const { environmentId, targetId, wasConnected, provider } = event.payload as Payload;
+        // This machine has no agent, so it has no deploy key.
+        return wasConnected === true && provider !== 'local'
           ? this.#configurations.removeDeployKey(String(environmentId), String(targetId))
           : Promise.resolve();
       },

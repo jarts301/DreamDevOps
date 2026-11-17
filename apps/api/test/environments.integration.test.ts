@@ -202,7 +202,10 @@ describe('environments', () => {
 
 describe('connecting a target', () => {
   it('gives a one-time token in a Helm command, which the agent swaps for its own key', async () => {
-    const { admin } = await createCompany();
+    const { admin: companyAdmin } = await createCompany();
+    // Production environments are an Operator's: a Company Admin can't create or connect them.
+    await companyAdmin.post('/api/v1/company/environments').send({ name: 'Live', kind: 'production' }).expect(403);
+    const admin = await addMember(companyAdmin, 'operator');
     const environment = await createEnvironment(admin, 'production');
 
     const { body: connection } = await admin.post(`/api/v1/company/environments/${environment.id}/target`).expect(201);
@@ -239,7 +242,7 @@ describe('connecting a target', () => {
       registrationExpiresAt: null,
     });
     await eventually(async () =>
-      expect(await auditTypes(admin)).toEqual(expect.arrayContaining(['TargetRegistrationStarted', 'TargetConnected'])),
+      expect(await auditTypes(companyAdmin)).toEqual(expect.arrayContaining(['TargetRegistrationStarted', 'TargetConnected'])),
     );
   });
 

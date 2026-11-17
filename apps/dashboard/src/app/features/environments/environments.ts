@@ -5,11 +5,17 @@ import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { SessionService } from '../../core/session.service';
 import {
+  type PendingProductionChange,
+  type ProductionConfirmation,
+  ProductionConfirmationPanel,
+} from '../../shared/production-confirmation';
+import {
   type Connection,
   type Environment,
   type EnvironmentKind,
   EnvironmentsApi,
   type EnvironmentStatus,
+  type Provider,
   type TargetStatus,
 } from './environments.api';
 
@@ -24,7 +30,7 @@ const TARGET_LABELS: Readonly<Record<TargetStatus, string>> = {
 
 const IMAGE_LABELS: Readonly<Record<string, string>> = { feature: 'feature', rc: 'RC', final: 'final' };
 
-type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disconnect' } | null;
+type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disconnect' | 'connect' } | null;
 
 /**
  * The company's environments and the targets that run them. Every member can see them;
@@ -32,11 +38,14 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
  */
 @Component({
   selector: 'app-environments',
-  imports: [DatePipe, ReactiveFormsModule, RouterLink],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink, ProductionConfirmationPanel],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Environments</h1>
-    <p class="lead">Where your applications run. Each environment runs on one Kubernetes cluster, its target.</p>
+    <p class="lead">
+      Where your applications run. Each environment runs on one target: a Kubernetes cluster with the platform's agent,
+      or This machine, the Docker of the machine that runs DreamDevOps, for trying things out.
+    </p>
 
     @if (error(); as message) {
       <p class="alert alert-error" role="alert">{{ message }}</p>
@@ -45,20 +54,20 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
       <p class="alert alert-success" role="status">{{ message }}</p>
     }
 
-    @if (connection(); as current) {
+    @if (connection()?.connection?.command; as command) {
       <section class="alert alert-success" role="status" aria-labelledby="connect-heading">
-        <h2 id="connect-heading">Connect the target of {{ current.environmentName }}</h2>
+        <h2 id="connect-heading">Connect the target of {{ connection()!.environmentName }}</h2>
         <p>
           Run this command with access to the cluster. It installs the agent, which only makes outbound calls,
           so the cluster needs no open port.
         </p>
         <p>
           The command is shown only once. Its token works once and expires at
-          {{ current.connection.expiresAt | date: 'shortTime' }}.
+          {{ connection()!.connection.expiresAt | date: 'shortTime' }}.
         </p>
         <div class="copy-row">
-          <textarea readonly rows="4" aria-label="Connect command" [value]="current.connection.command"></textarea>
-          <button type="button" class="button" (click)="copy(current.connection.command)">
+          <textarea readonly rows="4" aria-label="Connect command" [value]="command"></textarea>
+          <button type="button" class="button" (click)="copy(command)">
             {{ copied() ? 'Copied' : 'Copy' }}
           </button>
         </div>
@@ -77,7 +86,9 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
             <span>Kind</span>
             <select formControlName="kind">
               <option value="test">Test</option>
-              <option value="production">Production</option>
+              @if (canManageProduction()) {
+                <option value="production">Production</option>
+              }
             </select>
           </label>
           @if (createForm.controls.kind.value === 'test') {
@@ -108,6 +119,18 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
           Archived
         </button>
       </div>
+
+      @if (pending(); as change) {
+        <app-production-confirmation
+          [name]="change.environmentName"
+          [what]="change.what"
+          [action]="change.action"
+          [reasonRequired]="change.reasonRequired"
+          [working]="working()"
+          (confirm)="confirmPending(change, $event)"
+          (cancel)="pending.set(null)"
+        />
+      }
 
       @if (loading()) {
         <p class="muted">Loading…</p>
@@ -141,6 +164,9 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
                       <span class="status" [attr.data-status]="'target-' + target.status">
                         {{ targetLabel(target.status) }}
                       </span>
+                      @if (target.provider === 'local') {
+                        <p class="cell-note">This machine</p>
+                      }
                       @if (target.status === 'pending' && target.registrationExpiresAt) {
                         <p class="cell-note">The token expires at {{ target.registrationExpiresAt | date: 'shortTime' }}.</p>
                       } @else {
@@ -162,7 +188,9 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
                   </td>
                   @if (canManage()) {
                     <td class="cell-actions">
-                      @if (environment.status === 'archived') {
+                      @if (!mayChange(environment)) {
+                        <span class="cell-note">Tech Leads and Operators manage production.</span>
+                      } @else if (environment.status === 'archived') {
                         <button
                           type="button"
                           class="button"
@@ -194,7 +222,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
                             class="button"
                             [attr.aria-label]="(environment.target ? 'New command for ' : 'Connect a target to ') + environment.name"
                             [disabled]="working()"
-                            (click)="connect(environment)"
+                            (click)="environment.target ? connect(environment, 'kubernetes') : startConnect(environment)"
                           >
                             {{ environment.target ? 'New command' : 'Connect a target' }}
                           </button>
@@ -231,6 +259,43 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
                     </td>
                   }
                 </tr>
+                @if (isEditing(environment, 'connect')) {
+                  <tr>
+                    <td colspan="5">
+                      <fieldset class="provider-choice">
+                        <legend>Where {{ environment.name }} runs</legend>
+                        @for (provider of providers(); track provider.key) {
+                          <label class="field-inline">
+                            <input
+                              type="radio"
+                              name="provider"
+                              [value]="provider.key"
+                              [checked]="chosenProvider() === provider.key"
+                              [disabled]="provider.unavailableReason !== null"
+                              (change)="chosenProvider.set(provider.key)"
+                            />
+                            <span>
+                              <strong>{{ provider.name }}</strong>
+                              <span class="cell-note">{{ provider.unavailableReason ?? provider.description }}</span>
+                            </span>
+                          </label>
+                        }
+                      </fieldset>
+                      @if (chosenProvider() === 'local') {
+                        <label class="field">
+                          <span>Host name for applications (optional)</span>
+                          <input type="text" autocomplete="off" placeholder="localhost" [value]="publicHost()" (input)="publicHost.set($any($event.target).value)" />
+                        </label>
+                      }
+                      <div class="button-row">
+                        <button type="button" class="button button-primary" [disabled]="working()" (click)="connect(environment, chosenProvider())">
+                          Connect
+                        </button>
+                        <button type="button" class="button" (click)="editing.set(null)">Cancel</button>
+                      </div>
+                    </td>
+                  </tr>
+                }
                 @if (isEditing(environment, 'disconnect')) {
                   <tr>
                     <td colspan="5">
@@ -291,6 +356,41 @@ export class Environments implements OnInit, OnDestroy {
     this.#session.user();
     return this.#session.can('targets:connect');
   });
+  protected readonly canManageProduction = computed(() => {
+    this.#session.user();
+    return this.#session.can('environments-production:manage');
+  });
+  protected readonly providers = signal<Provider[]>([]);
+  protected readonly chosenProvider = signal('kubernetes');
+  protected readonly publicHost = signal('');
+  /** A production change waiting for its name and reason. */
+  protected readonly pending = signal<PendingProductionChange | null>(null);
+
+  /** Production environments are for those who manage production. */
+  protected mayChange(environment: Environment): boolean {
+    return environment.kind === 'test' || this.#session.can('environments-production:manage');
+  }
+
+  protected async confirmPending(change: PendingProductionChange, confirmation: ProductionConfirmation): Promise<void> {
+    await this.#attempt(async () => {
+      await change.run(confirmation);
+      this.pending.set(null);
+    });
+  }
+
+  /** Runs a change at once, or for production, once its name and reason are given. */
+  async #guard(
+    environment: Environment,
+    what: string,
+    action: string,
+    run: (confirmation?: ProductionConfirmation) => Promise<void>,
+  ): Promise<void> {
+    if (environment.kind === 'production') {
+      this.pending.set({ environmentName: environment.name, what, action, reasonRequired: true, run });
+      return;
+    }
+    await this.#attempt(() => run());
+  }
 
   protected readonly createForm = this.#forms.group({
     name: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(40)]],
@@ -353,29 +453,53 @@ export class Environments implements OnInit, OnDestroy {
 
   protected async save(environment: Environment): Promise<void> {
     const { name, acceptsFeatureImages } = this.editForm.getRawValue();
-    await this.#attempt(async () => {
-      await this.#api.update(environment.id, {
-        name,
-        ...(environment.kind === 'test' && { acceptsFeatureImages }),
-      });
+    await this.#guard(environment, `Rename ${environment.name} to ${name}`, 'Rename', async (confirmation) => {
+      await this.#api.update(
+        environment.id,
+        {
+          name,
+          ...(environment.kind === 'test' && { acceptsFeatureImages }),
+        },
+        confirmation,
+      );
       this.editing.set(null);
       await this.#refresh();
     });
   }
 
-  protected async connect(environment: Environment): Promise<void> {
+  /** Asks where the environment runs, offering what this server allows. */
+  protected async startConnect(environment: Environment): Promise<void> {
     await this.#attempt(async () => {
-      const connection = await this.#api.connect(environment.id);
+      if (this.providers().length === 0) {
+        this.providers.set(await this.#api.providers());
+      }
+      this.chosenProvider.set(this.providers().find((provider) => provider.unavailableReason === null)?.key ?? 'kubernetes');
+      this.publicHost.set('');
+      this.editing.set({ id: environment.id, kind: 'connect' });
+    });
+  }
+
+  protected async connect(environment: Environment, provider: string): Promise<void> {
+    await this.#attempt(async () => {
+      const host = this.publicHost().trim();
+      const connection = await this.#api.connect(environment.id, provider, provider === 'local' && host !== '' ? { publicHost: host } : {});
+      this.editing.set(null);
       this.copied.set(false);
-      this.connection.set({ environmentName: environment.name, connection });
-      this.notice.set(null);
+      if (connection.command === null) {
+        // This machine needs no agent: it's connected already.
+        this.connection.set(null);
+        this.notice.set(`${environment.name} runs on this machine now.`);
+      } else {
+        this.connection.set({ environmentName: environment.name, connection });
+        this.notice.set(null);
+      }
       await this.#refresh();
     });
   }
 
   protected async disconnect(environment: Environment): Promise<void> {
-    await this.#attempt(async () => {
-      await this.#api.disconnect(environment.id);
+    await this.#guard(environment, `Disconnect the target of ${environment.name}`, 'Disconnect', async (confirmation) => {
+      await this.#api.disconnect(environment.id, confirmation);
       this.editing.set(null);
       if (this.connection()?.environmentName === environment.name) {
         this.connection.set(null);
@@ -386,8 +510,8 @@ export class Environments implements OnInit, OnDestroy {
   }
 
   protected async archive(environment: Environment): Promise<void> {
-    await this.#attempt(async () => {
-      await this.#api.archive(environment.id);
+    await this.#guard(environment, `Archive ${environment.name}`, 'Archive', async (confirmation) => {
+      await this.#api.archive(environment.id, confirmation);
       this.editing.set(null);
       this.notice.set(`${environment.name} is archived. You can restore it from the archived list.`);
       await this.#refresh();

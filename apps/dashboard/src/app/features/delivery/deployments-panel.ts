@@ -4,8 +4,21 @@ import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angula
 import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api-error';
 import { SessionService } from '../../core/session.service';
+import {
+  type PendingProductionChange,
+  type ProductionConfirmation,
+  ProductionConfirmationPanel,
+} from '../../shared/production-confirmation';
 import { type Environment, EnvironmentsApi } from '../environments/environments.api';
-import { type Build, DeliveryApi, type Deployment, type DeploymentAction, type DeploymentStatus, type Strategy } from './delivery.api';
+import {
+  type Build,
+  DeliveryApi,
+  type Deployment,
+  type DeploymentAction,
+  type DeploymentStatus,
+  type RunningVersion,
+  type Strategy,
+} from './delivery.api';
 import { ProgressSteps, type Step } from './progress-steps';
 
 const REFRESH_MS = 5_000;
@@ -91,7 +104,7 @@ export function deploymentSteps(deployment: Deployment): Step[] {
  */
 @Component({
   selector: 'app-deployments-panel',
-  imports: [DatePipe, ProgressSteps, ReactiveFormsModule, RouterLink],
+  imports: [DatePipe, ProductionConfirmationPanel, ProgressSteps, ReactiveFormsModule, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (error(); as message) {
@@ -99,6 +112,17 @@ export function deploymentSteps(deployment: Deployment): Step[] {
     }
     @if (notice(); as message) {
       <p class="alert alert-success" role="status">{{ message }}</p>
+    }
+    @if (pending(); as change) {
+      <app-production-confirmation
+        [name]="change.environmentName"
+        [what]="change.what"
+        [action]="change.action"
+        [reasonRequired]="change.reasonRequired"
+        [working]="working()"
+        (confirm)="confirmPending(change, $event)"
+        (cancel)="pending.set(null)"
+      />
     }
 
     @if (versions() !== undefined && deployable().length > 0) {
@@ -153,6 +177,76 @@ export function deploymentSteps(deployment: Deployment): Step[] {
       </section>
     }
 
+    @if (running().length > 0) {
+      <section class="card" aria-labelledby="running-heading">
+        <h2 id="running-heading">Running now</h2>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Version</th>
+                <th scope="col">{{ application() === undefined ? 'Application' : 'Environment' }}</th>
+                <th scope="col">Runs with</th>
+                <th scope="col"><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (current of running(); track current.deploymentId) {
+                <tr>
+                  <td>
+                    <code>{{ current.version.version ?? current.version.tag }}</code>
+                    @if (current.since) {
+                      <p class="cell-note">since {{ current.since | date: 'medium' }}</p>
+                    }
+                  </td>
+                  <td>
+                    @if (application() === undefined) {
+                      <a [routerLink]="['/applications', current.application.id]">{{ current.application.name }}</a>
+                    } @else {
+                      <a [routerLink]="['/environments', current.environment.id]">{{ current.environment.name }}</a>
+                    }
+                  </td>
+                  <td>
+                    @if (current.limits; as limits) {
+                      {{ limits.cpu }} CPU, {{ limits.memory }} memory
+                    }
+                    @if (current.settingsChanged) {
+                      <p class="cell-note" data-tone="warning">
+                        The environment's values changed since it started. Apply them to start it with the new ones.
+                      </p>
+                    }
+                  </td>
+                  <td class="cell-actions">
+                    @if (mayDeploy(current.environment.kind)) {
+                      <button
+                        type="button"
+                        class="button"
+                        [class.button-primary]="current.settingsChanged"
+                        [attr.aria-label]="'Apply the values of ' + current.environment.name + ' to ' + current.application.name"
+                        [disabled]="working()"
+                        (click)="changeRunning(current, 'apply')"
+                      >
+                        Apply now
+                      </button>
+                      <button
+                        type="button"
+                        class="button button-danger"
+                        [attr.aria-label]="'Stop ' + current.application.name + ' in ' + current.environment.name"
+                        [disabled]="working()"
+                        (click)="changeRunning(current, 'stop')"
+                      >
+                        Stop
+                      </button>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    }
+
     <section class="card" aria-labelledby="deployments-heading">
       <h2 id="deployments-heading">Deployments</h2>
       @if (loading()) {
@@ -177,8 +271,21 @@ export function deploymentSteps(deployment: Deployment): Step[] {
                   <td>
                     <code>{{ deployment.version.version ?? deployment.version.tag }}</code>
                     <p class="cell-note">
-                      {{ strategyLabel(deployment.strategy) }}{{ deployment.rollbackOf ? ', rollback' : '' }}
+                      @switch (deployment.action) {
+                        @case ('stop') {
+                          Stop
+                        }
+                        @case ('apply') {
+                          Values applied, {{ strategyLabel(deployment.strategy) }}
+                        }
+                        @default {
+                          {{ strategyLabel(deployment.strategy) }}{{ deployment.rollbackOf ? ', rollback' : '' }}
+                        }
+                      }
                     </p>
+                    @if (deployment.reason) {
+                      <p class="cell-note">“{{ deployment.reason }}”</p>
+                    }
                   </td>
                   <td>
                     @if (application() === undefined) {
@@ -238,11 +345,14 @@ export class DeploymentsPanel implements OnInit, OnDestroy {
   #timer: ReturnType<typeof setTimeout> | undefined;
 
   protected readonly deployments = signal<Deployment[]>([]);
+  protected readonly running = signal<RunningVersion[]>([]);
   protected readonly environments = signal<Environment[]>([]);
   protected readonly loading = signal(true);
   protected readonly working = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly notice = signal<string | null>(null);
+  /** A production change waiting for its name, and a reason when one is needed. */
+  protected readonly pending = signal<PendingProductionChange | null>(null);
   protected readonly chosenEnvironmentId = signal('');
 
   protected readonly form = this.#forms.group({
@@ -331,8 +441,10 @@ export class DeploymentsPanel implements OnInit, OnDestroy {
       return;
     }
     const { environment, version, strategy } = this.form.getRawValue();
-    await this.#attempt(async () => {
-      const deployment = await this.#delivery.deploy(application, { environment, version, strategy });
+    const target = this.chosenEnvironment();
+    const chosen = this.acceptedVersions().find((candidate) => candidate.id === version);
+    await this.#guard(target, `Deploy ${chosen?.version ?? chosen?.tag ?? 'this version'} to ${target?.name ?? 'production'}`, 'Deploy', false, async (confirmation) => {
+      const deployment = await this.#delivery.deploy(application, { environment, version, strategy }, confirmation);
       this.notice.set(
         deployment.status === 'awaiting-approval'
           ? `The deployment to ${deployment.environment.name} waits for someone to approve it.`
@@ -343,8 +455,11 @@ export class DeploymentsPanel implements OnInit, OnDestroy {
   }
 
   protected async act(deployment: Deployment, action: DeploymentAction): Promise<void> {
-    await this.#attempt(async () => {
-      await this.#delivery.act(deployment.id, action);
+    // Refusing a deployment is always safe, so only the others are confirmed.
+    const environment = action === 'reject' ? undefined : deployment.environment;
+    const version = deployment.version.version ?? deployment.version.tag;
+    await this.#guard(environment, `${this.actionLabel(action)} ${version} in ${deployment.environment.name}`, this.actionLabel(action), action === 'rollback', async (confirmation) => {
+      await this.#delivery.act(deployment.id, action, confirmation);
       this.notice.set(
         {
           approve: 'Approved. The deployment starts now.',
@@ -353,6 +468,50 @@ export class DeploymentsPanel implements OnInit, OnDestroy {
           abort: 'Aborting. Traffic goes back to the previous version.',
           rollback: 'Rolling back to the version that ran before.',
         }[action],
+      );
+      await this.#refresh();
+    });
+  }
+
+  protected async confirmPending(change: PendingProductionChange, confirmation: ProductionConfirmation): Promise<void> {
+    await this.#attempt(async () => {
+      await change.run(confirmation);
+      this.pending.set(null);
+    });
+  }
+
+  /** Runs a change at once, or in production, once its name, and a reason if needed, are given. */
+  async #guard(
+    environment: { readonly name: string; readonly kind: 'test' | 'production' } | undefined,
+    what: string,
+    action: string,
+    reasonRequired: boolean,
+    run: (confirmation?: ProductionConfirmation) => Promise<void>,
+  ): Promise<void> {
+    if (environment?.kind === 'production') {
+      this.pending.set({ environmentName: environment.name, what, action, reasonRequired, run });
+      return;
+    }
+    await this.#attempt(() => run());
+  }
+
+  protected mayDeploy(kind: 'test' | 'production'): boolean {
+    return this.#mayDeploy(kind);
+  }
+
+  /** Stops what runs, or runs it again with the environment's values as they are now. */
+  protected async changeRunning(current: RunningVersion, change: 'stop' | 'apply'): Promise<void> {
+    const version = current.version.version ?? current.version.tag;
+    const what =
+      change === 'stop'
+        ? `Stop ${current.application.name} ${version} in ${current.environment.name}`
+        : `Apply the values of ${current.environment.name} to ${current.application.name} ${version}`;
+    await this.#guard(current.environment, what, change === 'stop' ? 'Stop' : 'Apply now', change === 'stop', async (confirmation) => {
+      await this.#delivery.changeRunning(current, change, confirmation);
+      this.notice.set(
+        change === 'stop'
+          ? `Stopping ${current.application.name} in ${current.environment.name}. You can follow it below.`
+          : `Starting ${current.application.name} again in ${current.environment.name} with its values as they are now.`,
       );
       await this.#refresh();
     });
@@ -385,8 +544,9 @@ export class DeploymentsPanel implements OnInit, OnDestroy {
     if (environment !== undefined) {
       filter.environment = environment;
     }
-    const deployments = await this.#delivery.deployments(filter);
+    const [deployments, running] = await Promise.all([this.#delivery.deployments(filter), this.#delivery.running(filter)]);
     this.deployments.set(deployments);
+    this.running.set(running);
     if (deployments.some((deployment) => ACTIVE.includes(deployment.status))) {
       this.#timer = setTimeout(() => void this.#attempt(() => this.#refresh(), { quiet: true }), REFRESH_MS);
     }

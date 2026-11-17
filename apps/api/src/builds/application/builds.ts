@@ -34,7 +34,8 @@ import {
 } from '../domain/build.ts';
 import { signaturePayload, signatureTag, signPayload, verifyPayload } from '../domain/cosign.ts';
 import { BuildError } from '../domain/errors.ts';
-import { checkImage, checkRepositoryFiles, checkStoredSignature, failedChecksReason } from '../domain/image-rules.ts';
+import { checkImage, checkRepositoryFiles, checkStoredSignature, failedChecksReason, type PlatformChecks } from '../domain/image-rules.ts';
+import { failed } from '../../shared/progress.ts';
 import { TESTS_CHECK } from '../../source-governance/domain/git-flow.ts';
 import type { ImageRegistry, PipelineHost } from './ports.ts';
 import type { SigningKeys } from './signing-keys.ts';
@@ -390,6 +391,32 @@ export class Builds {
       const { rows } = await tx.query<BuildRow>('SELECT * FROM builds.builds WHERE id = ANY($1)', [buildIds]);
       return new Map(rows.map((row) => [row.id, toView(row)]));
     });
+  }
+
+  /**
+   * Reads a build's signature back from the registry and checks it with the company's key
+   * for the build's kind, as a target would. For runtimes the platform drives itself, such
+   * as This machine, which check before they pull.
+   */
+  async checkSignature(buildId: string): Promise<PlatformChecks> {
+    const build = await this.#database.transaction((tx) => findBuild(tx, buildId));
+    if (build === null || build.digest === null || build.status !== 'succeeded') {
+      return { checks: [failed('The image is signed', 'This version has no signed image.')], facts: [] };
+    }
+    const spec = await this.#repositories.locate(build.application_id);
+    const application = await this.#catalog.get(build.application_id);
+    if (spec === null) {
+      return { checks: [failed('The image is signed', "The application's repository isn't ready.")], facts: [] };
+    }
+    const repository = `${spec.organization}/${application.slug}`;
+    const purpose = signingPurposeFor(build.kind);
+    const publicKey = await this.#database.transaction((tx) => this.#keys.publicKey(tx, purpose));
+    return checkStoredSignature(
+      signaturePayload(`${this.#registry.imageHost}/${repository}`, build.digest),
+      await this.#registry.readSignature(repository, build.digest),
+      (payload, signature) => verifyPayload(publicKey, payload, signature),
+      `cosign verify --key ${purpose}.pub --insecure-ignore-tlog=true ${this.#registry.imageHost}/${repository}@${build.digest}`,
+    );
   }
 
   /** The deployable versions: signed images that passed every check. */

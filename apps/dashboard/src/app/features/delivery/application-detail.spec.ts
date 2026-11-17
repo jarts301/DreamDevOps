@@ -128,6 +128,7 @@ describe('ApplicationDetail', () => {
     http.expectOne((request) => request.url === '/api/v1/company/environments').flush(data.environments ?? []);
     await settle();
     http.expectOne((request) => request.url === '/api/v1/company/deployments').flush(data.deployments ?? []);
+    http.expectOne((request) => request.url === '/api/v1/company/running').flush([]);
     // The page asks the platform to catch up on merges and pushes it missed.
     await settle();
     http.expectOne('/api/v1/company/applications/a-1/releases/sync').flush({ moved: data.moved ?? 0 });

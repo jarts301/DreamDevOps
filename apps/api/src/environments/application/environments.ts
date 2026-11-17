@@ -13,6 +13,16 @@ import {
   parseKind,
 } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
+import {
+  findProvider,
+  HOSTING_PROVIDERS,
+  type HostingProvider,
+  type HostingSettings,
+  KUBERNETES_PROVIDER,
+  LOCAL_PROVIDER,
+  parseSettings,
+} from '../domain/hosting-providers.ts';
+import { authorizeChange, type ProtectedChange } from '../domain/protection.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -20,6 +30,10 @@ export type TargetStatus = 'pending' | 'connected' | 'lost' | 'revoked';
 
 export interface TargetView {
   readonly id: string;
+  /** What runs the environment: a Kubernetes cluster with the agent, or This machine. */
+  readonly provider: string;
+  /** The provider's settings, such as the host name people reach This machine by. */
+  readonly settings: HostingSettings;
   readonly status: TargetStatus;
   readonly registrationExpiresAt: string | null;
   readonly keyFingerprint: string | null;
@@ -48,11 +62,18 @@ export interface EnvironmentView {
 
 export interface Connection {
   readonly targetId: string;
-  /** Shown once. Only its hash is stored. */
-  readonly registrationToken: string;
-  readonly expiresAt: string;
-  /** The command to run against the target cluster. */
-  readonly command: string;
+  readonly provider: string;
+  /** For a cluster: shown once. Only its hash is stored. Null for This machine, which needs no agent. */
+  readonly registrationToken: string | null;
+  readonly expiresAt: string | null;
+  /** For a cluster: the command to run against it. */
+  readonly command: string | null;
+}
+
+/** A place environments can run, and whether it can be chosen on this server. */
+export interface ProviderView extends HostingProvider {
+  /** Why it can't be chosen, or null when it can. */
+  readonly unavailableReason: string | null;
 }
 
 export interface EnvironmentsOptions {
@@ -60,6 +81,8 @@ export interface EnvironmentsOptions {
   readonly agentApiUrl: string;
   /** The agent's Helm chart. */
   readonly agentChart: string;
+  /** Whether this server lets companies run applications on its own Docker. */
+  readonly localHosting: boolean;
 }
 
 interface EnvironmentRow {
@@ -77,6 +100,8 @@ interface EnvironmentRow {
 interface TargetRow {
   id: string;
   environment_id: string;
+  provider: string;
+  settings: HostingSettings;
   status: TargetStatus;
   registration_expires_at: Date | null;
   public_key: string | null;
@@ -87,7 +112,7 @@ interface TargetRow {
   created_at: Date;
 }
 
-const TARGET_COLUMNS = `id, environment_id, status, registration_expires_at, public_key, agent_version,
+const TARGET_COLUMNS = `id, environment_id, provider, settings, status, registration_expires_at, public_key, agent_version,
   kubernetes_version, registered_at, last_seen_at, created_at`;
 
 /** Each company's environments and the targets that run them. Every query runs in the current company. */
@@ -129,11 +154,12 @@ export class Environments {
 
   async create(
     actor: Principal,
-    input: { name?: unknown; kind?: unknown; acceptsFeatureImages?: unknown },
+    input: { name?: unknown; kind?: unknown; acceptsFeatureImages?: unknown; reason?: unknown },
   ): Promise<EnvironmentView> {
     const name = normalizeEnvironmentName(input.name);
     const kind = parseKind(input.kind);
     const featureImages = acceptsFeatureImages(kind, input.acceptsFeatureImages);
+    const reason = authorize(actor, { name, kind }, 'create', input);
     const companyId = currentCompanyId();
     const id = randomUUID();
 
@@ -153,7 +179,7 @@ export class Environments {
           eventType: 'EnvironmentCreated',
           companyId,
           actorId: actor.userId,
-          payload: { environmentId: id, name, slug, kind, acceptsFeatureImages: featureImages },
+          payload: { environmentId: id, name, slug, kind, acceptsFeatureImages: featureImages, ...(reason !== null && { reason }) },
         }),
       ]);
       return toView(await findOrFail(tx, id), null);
@@ -167,7 +193,7 @@ export class Environments {
   update(
     actor: Principal,
     idValue: unknown,
-    input: { name?: unknown; acceptsFeatureImages?: unknown; requiresApproval?: unknown },
+    input: { name?: unknown; acceptsFeatureImages?: unknown; requiresApproval?: unknown; confirmation?: unknown; reason?: unknown },
   ): Promise<void> {
     const id = parseId(idValue, 'environment');
     const name = input.name === undefined ? undefined : normalizeEnvironmentName(input.name);
@@ -202,6 +228,11 @@ export class Environments {
       if (Object.keys(changes).length === 0) {
         return;
       }
+      // Production is confirmed with the name it has now.
+      const reason = authorize(actor, current, changes.name !== undefined ? 'rename' : 'change-approval', input);
+      if (reason !== null) {
+        changes.reason = reason;
+      }
       await tx.query(
         `UPDATE environments.environments
          SET name = $2, accepts_feature_images = $3, requires_approval = $4, updated_at = now()
@@ -220,15 +251,20 @@ export class Environments {
   }
 
   /** Hides the environment. It must have no target, so nothing keeps running unseen. */
-  archive(actor: Principal, idValue: unknown): Promise<void> {
-    return this.#setStatus(actor, idValue, 'archived');
+  archive(actor: Principal, idValue: unknown, request: { confirmation?: unknown; reason?: unknown } = {}): Promise<void> {
+    return this.#setStatus(actor, idValue, 'archived', request);
   }
 
   restore(actor: Principal, idValue: unknown): Promise<void> {
-    return this.#setStatus(actor, idValue, 'active');
+    return this.#setStatus(actor, idValue, 'active', {});
   }
 
-  #setStatus(actor: Principal, idValue: unknown, status: EnvironmentStatus): Promise<void> {
+  #setStatus(
+    actor: Principal,
+    idValue: unknown,
+    status: EnvironmentStatus,
+    request: { confirmation?: unknown; reason?: unknown },
+  ): Promise<void> {
     const id = parseId(idValue, 'environment');
     return this.#database.transaction(async (tx) => {
       const current = await findOrFail(tx, id, { lock: true });
@@ -238,6 +274,7 @@ export class Environments {
       if (status === 'archived' && (await currentTarget(tx, id)) !== null) {
         throw new EnvironmentError('conflict', 'Disconnect its target first.');
       }
+      const reason = status === 'archived' ? authorize(actor, current, 'archive', request) : null;
       await tx.query(
         `UPDATE environments.environments
          SET status = $2, archived_at = CASE WHEN $2 = 'archived' THEN now() END, updated_at = now()
@@ -249,7 +286,7 @@ export class Environments {
           eventType: status === 'archived' ? 'EnvironmentArchived' : 'EnvironmentRestored',
           companyId: currentCompanyId(),
           actorId: actor.userId,
-          payload: { environmentId: id, name: current.name },
+          payload: { environmentId: id, name: current.name, ...(reason !== null && { reason }) },
         }),
       ]);
     });
@@ -259,14 +296,32 @@ export class Environments {
    * Starts connecting a target: makes a one-time registration token and the Helm command
    * that installs the agent with it. A new token replaces one not used yet.
    */
-  connect(actor: Principal, idValue: unknown): Promise<Connection> {
+  /** Where environments can run, with what each needs, and whether it can be chosen here. */
+  providers(): ProviderView[] {
+    return HOSTING_PROVIDERS.map((provider) => ({ ...provider, unavailableReason: this.#unavailable(provider) }));
+  }
+
+  connect(actor: Principal, idValue: unknown, input: { provider?: unknown; settings?: unknown } = {}): Promise<Connection> {
     const id = parseId(idValue, 'environment');
     const companyId = currentCompanyId();
+    const provider = findProvider(input.provider ?? KUBERNETES_PROVIDER);
+    if (provider === null) {
+      throw new EnvironmentError('invalid', 'Choose where the environment runs.');
+    }
+    const unavailable = this.#unavailable(provider);
+    if (unavailable !== null) {
+      throw new EnvironmentError('conflict', unavailable);
+    }
+    const settings = parseSettings(provider, input.settings);
+    if (provider.key === LOCAL_PROVIDER) {
+      return this.#connectLocal(actor, id, settings);
+    }
     return this.#database.transaction(async (tx) => {
       const environment = await findOrFail(tx, id, { lock: true });
       if (environment.status === 'archived') {
         throw new EnvironmentError('conflict', 'Restore the environment first.');
       }
+      authorize(actor, environment, 'connect-target', {});
       const existing = await currentTarget(tx, id);
       if (existing !== null && existing.status !== 'pending') {
         throw new EnvironmentError('conflict', 'This environment already has a target. Disconnect it first.');
@@ -298,6 +353,7 @@ export class Environments {
       ]);
       return {
         targetId,
+        provider: KUBERNETES_PROVIDER,
         registrationToken: token,
         expiresAt: rows[0]!.registration_expires_at.toISOString(),
         command: this.#command(token),
@@ -305,8 +361,57 @@ export class Environments {
     });
   }
 
+  /** This machine needs no agent, so it's connected at once. */
+  #connectLocal(actor: Principal, id: string, settings: HostingSettings): Promise<Connection> {
+    const companyId = currentCompanyId();
+    return this.#database.transaction(async (tx) => {
+      const environment = await findOrFail(tx, id, { lock: true });
+      if (environment.status === 'archived') {
+        throw new EnvironmentError('conflict', 'Restore the environment first.');
+      }
+      authorize(actor, environment, 'connect-target', {});
+      const existing = await currentTarget(tx, id);
+      if (existing !== null && existing.status !== 'pending') {
+        throw new EnvironmentError('conflict', 'This environment already has a target. Disconnect it first.');
+      }
+      if (existing !== null) {
+        await tx.query(
+          `UPDATE environments.targets
+           SET status = 'revoked', registration_token_hash = NULL, revoked_at = now(), revoked_by = $2, updated_at = now()
+           WHERE id = $1`,
+          [existing.id, actor.userId],
+        );
+      }
+      const targetId = randomUUID();
+      await tx.query(
+        `INSERT INTO environments.targets (id, company_id, environment_id, provider, settings, status, registered_at, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'connected', now(), $6)`,
+        [targetId, companyId, id, LOCAL_PROVIDER, JSON.stringify(settings), actor.userId],
+      );
+      await appendToOutbox(tx, [
+        createDomainEvent({
+          eventType: 'TargetConnected',
+          companyId,
+          actorId: actor.userId,
+          payload: { environmentId: id, environmentName: environment.name, targetId, provider: LOCAL_PROVIDER },
+        }),
+      ]);
+      return { targetId, provider: LOCAL_PROVIDER, registrationToken: null, expiresAt: null, command: null };
+    });
+  }
+
+  #unavailable(provider: HostingProvider): string | null {
+    if (!provider.deploys) {
+      return `${provider.name} targets aren't available yet.`;
+    }
+    if (provider.key === LOCAL_PROVIDER && !this.#options.localHosting) {
+      return 'Running applications on this machine is turned off on this server. An administrator can turn it on with LOCAL_HOSTING=on.';
+    }
+    return null;
+  }
+
   /** Cuts the target off: its key and tokens stop working at once, and a new one can connect. */
-  disconnect(actor: Principal, idValue: unknown): Promise<void> {
+  disconnect(actor: Principal, idValue: unknown, request: { confirmation?: unknown; reason?: unknown } = {}): Promise<void> {
     const id = parseId(idValue, 'environment');
     return this.#database.transaction(async (tx) => {
       const environment = await findOrFail(tx, id, { lock: true });
@@ -314,6 +419,7 @@ export class Environments {
       if (target === null) {
         throw new EnvironmentError('conflict', 'This environment has no target.');
       }
+      const reason = authorize(actor, environment, 'disconnect-target', request);
       await tx.query(
         `UPDATE environments.targets
          SET status = 'revoked', registration_token_hash = NULL, access_token_hash = NULL,
@@ -330,7 +436,9 @@ export class Environments {
             environmentId: id,
             environmentName: environment.name,
             targetId: target.id,
+            provider: target.provider,
             wasConnected: target.status !== 'pending',
+            ...(reason !== null && { reason }),
           },
         }),
       ]);
@@ -424,6 +532,8 @@ function toView(row: EnvironmentRow, target: TargetRow | null): EnvironmentView 
 function toTargetView(row: TargetRow): TargetView {
   return {
     id: row.id,
+    provider: row.provider,
+    settings: row.settings,
     status: row.status,
     registrationExpiresAt: row.status === 'pending' ? (row.registration_expires_at?.toISOString() ?? null) : null,
     keyFingerprint: row.public_key === null ? null : keyFingerprint(row.public_key),
@@ -433,4 +543,18 @@ function toTargetView(row: TargetRow): TargetView {
     lastSeenAt: row.last_seen_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
   };
+}
+
+/** Applies production's protection to a change, and returns the reason to record. */
+function authorize(
+  actor: Principal,
+  environment: { readonly name: string; readonly kind: EnvironmentKind },
+  change: ProtectedChange,
+  request: { confirmation?: unknown; reason?: unknown },
+): string | null {
+  return authorizeChange({ name: environment.name, production: environment.kind === 'production' }, change, {
+    canManageProduction: actor.permissions.includes('environments-production:manage'),
+    confirmation: request.confirmation,
+    reason: request.reason,
+  });
 }

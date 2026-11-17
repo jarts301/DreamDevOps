@@ -1,6 +1,6 @@
 # Environments and Targets
 
-Keeps each company's environments, the target that runs each one, and each environment's variables and secrets. A target is a Kubernetes cluster with the [DreamDevOps agent](../../../agent/README.md) installed; this module is the platform's side of it.
+Keeps each company's environments, the target that runs each one, and each environment's variables and secrets. A target is a Kubernetes cluster with the [DreamDevOps agent](../../../agent/README.md) installed, or **This machine**, the Docker of the machine that runs DreamDevOps, for trying things out. This module is the platform's side of both.
 
 ## Environments
 
@@ -17,6 +17,18 @@ Environments are archived, never deleted, so their names stay reserved. An envir
 
 Each environment runs on exactly one target, and a target serves one environment, so test and production never share a cluster.
 
+### Where a target can be
+
+The places are data, in `HOSTING_PROVIDERS` in `domain/hosting-providers.ts`, and `GET /company/environments/providers` lists them with what each needs and whether it can be chosen here. The dashboard builds its choice from that list.
+
+| Provider | Key | Can be chosen | How it runs applications |
+|---|---|---|---|
+| Kubernetes cluster | `kubernetes` | Yes | The agent, Flux and Argo Rollouts, as below |
+| This machine | `local` | When `LOCAL_HOSTING` is on | The platform runs each application as a container on its own Docker. See [This machine](../deployments/README.md#this-machine). |
+| Docker host, Amazon Web Services, Microsoft Azure, Google Cloud | `docker`, `aws`, `azure`, `gcp` | Not yet | Listed so people can see what's coming. An environment runs on one target, so one that can't deploy would leave it stuck. |
+
+A target never holds credentials. This machine has one optional setting, the host name people reach it by, which addresses use instead of `localhost`. It's connected as soon as it's chosen: it has no agent, no key and no repository, and it's never lost. Disconnecting it doesn't stop what runs: stop the applications first.
+
 | Status | Meaning |
 |---|---|
 | Pending | A registration token was made, and the agent hasn't used it yet |
@@ -26,7 +38,7 @@ Each environment runs on exactly one target, and a target serves one environment
 
 ## Connecting a target, step by step
 
-1. A Company Admin or Operator chooses **Connect a target**. The platform makes a registration token that works once, within an hour, and shows it in one Helm command. The command is shown only once; only a hash of the token is stored. Asking again replaces an unused token.
+1. A Company Admin or Operator chooses **Connect a target**, then **Kubernetes cluster**. The platform makes a registration token that works once, within an hour, and shows it in one Helm command. The command is shown only once; only a hash of the token is stored. Asking again replaces an unused token.
 2. Someone with access to the cluster runs the command. It installs the agent into the `dreamdevops-system` namespace.
 3. The agent makes an Ed25519 key pair inside the cluster, and calls `POST /agent/register` with the token and its public key only. The target is then connected, and the dashboard shows the key's fingerprint.
 4. From then on, the agent proves itself with its own key. To get an access token, it signs a short assertion: a JWT, as in RFC 7523, with its target ID as issuer and subject and the token address as audience, lasting at most two minutes. Each assertion works once. The access token lasts 15 minutes, and only the newest one works.
@@ -42,7 +54,13 @@ Every agent call only goes out from the cluster, over HTTPS in production, so a 
 
 ## Variables and secrets
 
-Each environment has values for all its applications, and each application can have its own, which replace the shared ones of the same name. Names are capital letters, digits and underscores; `PORT`, `DREAMDEVOPS_ENVIRONMENT` and `DREAMDEVOPS_VERSION` are set by the platform.
+Each environment has values for all its applications, and each application can have its own, which replace the shared ones of the same name.
+
+- **Names** are letters, digits and underscores, starting with a letter or underscore, such as `DATABASE_URL`. They're case-sensitive, as in any container, but one scope can't have two that differ only in case, and a name is a variable or a secret, never both. `PORT`, `PATH`, `HOSTNAME` and names starting with `DREAMDEVOPS_` belong to the platform or the container.
+- **Values** are kept exactly, spaces included, and fit on one line, which is what every container runtime passes on safely. Encode multi-line values, such as keys, in base64. Each is up to 32 KB.
+- **Limits:** the environment's shared values, and each application's own, can each hold up to 100 variables and secrets, totalling 256 KB. The size of each secret is kept, never its value.
+- **From the platform:** every application also gets `PORT`, the blueprint's, `DREAMDEVOPS_ENVIRONMENT`, the environment's short name, `DREAMDEVOPS_PRODUCTION`, `true` or `false`, and `DREAMDEVOPS_VERSION`.
+- **Metrics and traces:** when `TARGET_OTLP_ENDPOINT` is set, applications in clusters also get the standard OpenTelemetry settings: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (15000), `OTEL_SERVICE_NAME`, the application's short name, and `OTEL_RESOURCE_ATTRIBUTES` with `dreamdevops.environment.id`. The environment's own values can change all but that attribute, which is always added last, so it counts. The rules are in `domain/telemetry.ts`.
 
 | | Variables | Secrets |
 |---|---|---|
@@ -52,11 +70,23 @@ Each environment has values for all its applications, and each application can h
 
 Tech Leads and Operators manage every environment's values (`environment-config:manage`). Company Admins manage test environments' only (`test-environment-config:manage`), so production's values stay with the people who run production.
 
-Changes apply at the next deployment: the platform puts the values into the manifests then, and a changed value starts a new rollout. The platform's own OpenBao token can write, patch and delete secrets but not read them; history stays in OpenBao, and the audit log records names only.
+Changes apply when a version starts: the platform puts the values into the manifests then, and a changed value starts a new rollout. Until then, the application's page says what runs has older values, and **Apply now** runs it again with the new ones. See [Deployment Orchestration](../deployments/README.md#stop-and-apply-now). The platform's own OpenBao token can write, patch and delete secrets but not read them; history stays in OpenBao, and the audit log records names only.
 
 ## Approval
 
-A Company Admin or Operator can make a production environment require a second person's approval for each deployment. See [Deployment Orchestration](../deployments/README.md).
+A Tech Lead or Operator can make a production environment require a second person's approval for each deployment. See [Deployment Orchestration](../deployments/README.md).
+
+## Production protection
+
+Production is protected from mistakes in several layers. The rules are in `domain/protection.ts`, which deployments use too.
+
+| Protection | How |
+|---|---|
+| Only some people | Creating, renaming, archiving, connecting or disconnecting a production environment, or changing its approval, needs `environments-production:manage`, which only Tech Leads and Operators have, besides the route's own permission. Company Admins manage test environments. |
+| Confirming by name | Any change to production needs its name typed exactly, such as `Live`, so a slip of the mouse can't do it: those above, its variables and secrets, and deploying, approving, promoting, aborting, rolling back, stopping and applying values. Connecting its target and creating it need none. |
+| A reason | Every change but running or steering a version also needs a reason of 10 to 500 characters. For deploying, approving, promoting, aborting and applying values, one is optional. Reasons are saved in the events and on the deployment, so the audit log shows who changed production and why. |
+
+The dashboard asks for the name and reason before it sends a change to production, and the API checks both again. Requests carry them as `confirmation` and `reason`.
 
 ## Routes
 
@@ -67,12 +97,13 @@ All routes start with `/api/v1`.
 | `GET /company/environments` | Any member | Environments with their target's health. `?status=archived` lists archived ones. |
 | `GET /company/environments/:id` | Any member | One environment |
 | `POST /company/environments` | `targets:connect` | Creates `{ "name", "kind": "test" \| "production", "acceptsFeatureImages" }` |
-| `PATCH /company/environments/:id` | `targets:connect` | Changes the name, whether a test environment accepts feature images, or whether production needs approval (`requiresApproval`) |
+| `PATCH /company/environments/:id` | `targets:connect` | Changes the name, whether a test environment accepts feature images, or whether production needs approval (`requiresApproval`). Production also needs `confirmation` and `reason`. |
 | `GET /company/environments/:id/config?application=` | Any member | Variables with values, and secret names |
 | `PUT`, `DELETE /company/environments/:id/variables/:name` | See above | Sets `{ "value", "application" }` or removes a variable |
 | `PUT`, `DELETE /company/environments/:id/secrets/:name` | See above | Sets `{ "value", "application" }` or removes a secret |
 | `POST /company/environments/:id/archive`, `/restore` | `targets:connect` | Archives or restores |
-| `POST /company/environments/:id/target` | `targets:connect` | Returns a registration token and the Helm command |
+| `GET /company/environments/providers` | Any member | Where environments can run, with each one's settings, and why it can't be chosen here, if it can't |
+| `POST /company/environments/:id/target` | `targets:connect` | Connects `{ "provider": "kubernetes" \| "local", "settings": {} }`. For a cluster, it returns a registration token and the Helm command; This machine is connected at once. |
 | `DELETE /company/environments/:id/target` | `targets:connect` | Disconnects the target |
 | `POST /agent/register` | The registration token | Registers the agent's public key |
 | `POST /agent/token` | A signed assertion | Returns an access token |
@@ -94,6 +125,10 @@ All routes start with `/api/v1`.
 | `OPENBAO_URL`, `OPENBAO_TOKEN` | Where the API reaches OpenBao, and its token, which can't read secret values. The API renews it every 12 hours. |
 | `FORGEJO_ADMIN_USERNAME`, `FORGEJO_ADMIN_PASSWORD` | A Forgejo administrator, used only to create each company's registry account |
 | `TARGET_REGISTRY_HOST`, `TARGET_OPENBAO_URL`, `TARGET_GIT_SSH_URL`, `TARGET_GIT_KNOWN_HOSTS` | How targets reach the registry, OpenBao and Git, and Forgejo's SSH host keys. They default to the platform's own addresses. |
+| `TARGET_OTLP_ENDPOINT` | Where applications in clusters send metrics and traces over OTLP/HTTP, such as the collector the agent installs. Unset, they aren't told to send any. |
+| `LOCAL_HOSTING` | `on` lets companies run applications on This machine. On by default, except in production, where companies would share the machine that runs DreamDevOps. |
+| `LOCAL_HOSTING_BIND_ADDRESS` | The address applications on This machine publish their ports on. `127.0.0.1` by default, so only this machine reaches them. |
+| `DEPLOY_HEALTH_TIMEOUT_SECONDS` | How long a new version on This machine has to become healthy before it's rolled back. Default 120. |
 
 ## Not done yet
 

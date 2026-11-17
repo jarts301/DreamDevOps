@@ -6,6 +6,11 @@ function editionName(edition: unknown): string {
   return typeof edition === 'string' ? (EDITION_NAMES[edition] ?? edition) : 'unknown';
 }
 
+/** The reason given for a change to production, at the end of a description. */
+function because(reason: unknown): string {
+  return typeof reason === 'string' && reason !== '' ? `, because "${reason}"` : '';
+}
+
 /** Describes a recorded event for people. Payloads hold IDs and roles, not names or emails. */
 export function describeEvent(eventType: string, payload: Readonly<Record<string, unknown>>): string {
   const role = typeof payload['role'] === 'string' ? roleName(payload['role']) : 'a role';
@@ -70,18 +75,21 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return `Created the ${payload['kind'] === 'production' ? 'production' : 'test'} environment "${String(payload['name'])}"`;
     case 'EnvironmentUpdated':
       if (payload['name'] !== undefined) {
-        return `Renamed the environment "${String(payload['previousName'])}" to "${String(payload['name'])}"`;
+        return `Renamed the environment "${String(payload['previousName'])}" to "${String(payload['name'])}"${because(payload['reason'])}`;
       }
       return payload['acceptsFeatureImages'] === true
         ? 'Let an environment accept feature images'
         : 'Stopped an environment from accepting feature images';
     case 'EnvironmentArchived':
-      return `Archived the environment "${String(payload['name'])}"`;
+      return `Archived the environment "${String(payload['name'])}"${because(payload['reason'])}`;
     case 'EnvironmentRestored':
       return `Restored the environment "${String(payload['name'])}"`;
     case 'TargetRegistrationStarted':
       return `Created a command to connect a target to "${String(payload['environmentName'])}"`;
     case 'TargetConnected':
+      if (payload['provider'] === 'local') {
+        return `Set "${String(payload['environmentName'])}" to run on this machine`;
+      }
       return payload['reconnected'] === true
         ? `The target of "${String(payload['environmentName'])}" is reporting again`
         : `Connected a target to "${String(payload['environmentName'])}", key ${String(payload['keyFingerprint'])}`;
@@ -89,17 +97,23 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return `The target of "${String(payload['environmentName'])}" stopped reporting`;
     case 'TargetRevoked':
       return payload['wasConnected'] === true
-        ? `Disconnected the target of "${String(payload['environmentName'])}"`
+        ? `Disconnected the target of "${String(payload['environmentName'])}"${because(payload['reason'])}`
         : `Cancelled connecting a target to "${String(payload['environmentName'])}"`;
     case 'EnvironmentVariableSet':
-      return `Set the variable ${String(payload['name'])} in "${String(payload['environmentName'])}"${payload['applicationId'] ? ' for one application' : ''}`;
+      return `Set the variable ${String(payload['name'])} in "${String(payload['environmentName'])}"${payload['applicationId'] ? ' for one application' : ''}${because(payload['reason'])}`;
     case 'EnvironmentVariableRemoved':
-      return `Removed the variable ${String(payload['name'])} from "${String(payload['environmentName'])}"`;
+      return `Removed the variable ${String(payload['name'])} from "${String(payload['environmentName'])}"${because(payload['reason'])}`;
     case 'EnvironmentSecretSet':
-      return `Set the secret ${String(payload['name'])} in "${String(payload['environmentName'])}"${payload['applicationId'] ? ' for one application' : ''}`;
+      return `Set the secret ${String(payload['name'])} in "${String(payload['environmentName'])}"${payload['applicationId'] ? ' for one application' : ''}${because(payload['reason'])}`;
     case 'EnvironmentSecretRemoved':
-      return `Removed the secret ${String(payload['name'])} from "${String(payload['environmentName'])}"`;
+      return `Removed the secret ${String(payload['name'])} from "${String(payload['environmentName'])}"${because(payload['reason'])}`;
     case 'DeploymentRequested':
+      if (payload['action'] === 'stop') {
+        return `Asked to stop an application in "${String(payload['environmentName'])}"${because(payload['reason'])}`;
+      }
+      if (payload['action'] === 'apply') {
+        return `Asked to apply the values of "${String(payload['environmentName'])}" to what runs there${because(payload['reason'])}`;
+      }
       return payload['rollbackOf']
         ? `Asked to roll back in "${String(payload['environmentName'])}"`
         : `Asked for a ${String(payload['strategy'])} deployment to "${String(payload['environmentName'])}"${payload['needsApproval'] ? ', which needs approval' : ''}`;
@@ -116,6 +130,9 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
     case 'DeploymentAbortRequested':
       return `Asked to abort a deployment to "${String(payload['environmentName'])}"`;
     case 'DeploymentSucceeded':
+      if (payload['action'] === 'stop') {
+        return `Stopped ${String(payload['applicationName'])} in "${String(payload['environmentName'])}"`;
+      }
       return `Deployed ${String(payload['applicationName'])} ${String(payload['version'])} to "${String(payload['environmentName'])}"`;
     case 'DeploymentFailed':
       return `Deploying ${String(payload['applicationName'])} ${String(payload['version'])} to "${String(payload['environmentName'])}" failed: ${String(payload['reason'] ?? 'unknown reason')}`;

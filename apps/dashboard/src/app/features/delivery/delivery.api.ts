@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { ProductionConfirmation } from '../../shared/production-confirmation';
 
 export type BuildKind = 'feature' | 'rc' | 'final' | 'check';
 export type BuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted';
@@ -119,6 +120,29 @@ export interface Deployment {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly finishedAt: string | null;
+  /** What it does: run a version, remove what runs, or run it again with the environment's values as they are now. */
+  readonly action: 'deploy' | 'stop' | 'apply';
+  readonly reason: string | null;
+  /** The CPU and memory it runs with, once committed. */
+  readonly limits: ResourceLimits | null;
+}
+
+export interface ResourceLimits {
+  readonly cpu: string;
+  readonly memory: string;
+}
+
+/** A version that runs in an environment now. */
+export interface RunningVersion {
+  readonly deploymentId: string;
+  readonly application: { readonly id: string; readonly name: string; readonly slug: string };
+  readonly environment: { readonly id: string; readonly name: string; readonly kind: 'test' | 'production' };
+  readonly version: { readonly buildId: string; readonly kind: string; readonly tag: string; readonly version: string | null };
+  readonly strategy: Strategy;
+  readonly limits: ResourceLimits | null;
+  readonly since: string | null;
+  /** The environment's values changed since it started. */
+  readonly settingsChanged: boolean;
 }
 
 export type DeploymentAction = 'approve' | 'reject' | 'promote' | 'abort' | 'rollback';
@@ -167,12 +191,37 @@ export class DeliveryApi {
     return firstValueFrom(this.#http.get<Deployment[]>('/api/v1/company/deployments', { params }));
   }
 
-  deploy(applicationId: string, input: { environment: string; version: string; strategy: Strategy }): Promise<Deployment> {
-    return firstValueFrom(this.#http.post<Deployment>(`${applicationPath(applicationId)}/deployments`, input));
+  /** Production needs its name typed to confirm. */
+  deploy(
+    applicationId: string,
+    input: { environment: string; version: string; strategy: Strategy },
+    confirmation?: ProductionConfirmation,
+  ): Promise<Deployment> {
+    return firstValueFrom(this.#http.post<Deployment>(`${applicationPath(applicationId)}/deployments`, { ...input, ...confirmation }));
   }
 
-  act(deploymentId: string, action: DeploymentAction): Promise<unknown> {
-    return firstValueFrom(this.#http.post(`/api/v1/company/deployments/${encodeURIComponent(deploymentId)}/${action}`, {}));
+  running(filter: { application?: string; environment?: string }): Promise<RunningVersion[]> {
+    return firstValueFrom(this.#http.get<RunningVersion[]>('/api/v1/company/running', { params: { ...filter } }));
+  }
+
+  /** Stops what runs, or runs it again with the environment's values as they are now. */
+  changeRunning(
+    running: RunningVersion,
+    change: 'stop' | 'apply',
+    confirmation?: ProductionConfirmation,
+  ): Promise<Deployment> {
+    return firstValueFrom(
+      this.#http.post<Deployment>(`${applicationPath(running.application.id)}/${change}`, {
+        environment: running.environment.id,
+        ...confirmation,
+      }),
+    );
+  }
+
+  act(deploymentId: string, action: DeploymentAction, confirmation?: ProductionConfirmation): Promise<unknown> {
+    return firstValueFrom(
+      this.#http.post(`/api/v1/company/deployments/${encodeURIComponent(deploymentId)}/${action}`, { ...confirmation }),
+    );
   }
 
   rebuildFinal(releaseId: string): Promise<unknown> {

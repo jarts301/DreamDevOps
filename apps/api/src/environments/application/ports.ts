@@ -51,6 +51,8 @@ export interface SecretStore {
   remove(path: string, names: readonly string[]): Promise<void>;
   /** A short-lived token that can only read the secrets under this path. */
   issueReadToken(policyName: string, path: string): Promise<{ token: string; expiresAt: Date }>;
+  /** Reads the values at a path with a read token, or none if nothing is there. */
+  read(token: string, path: string): Promise<Record<string, string>>;
   /** Keeps the platform's own token alive. */
   renew(): Promise<void>;
 }

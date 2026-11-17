@@ -43,6 +43,7 @@ describe('manifests', () => {
       RATIO: '1.0',
       PORT: '8080',
       DREAMDEVOPS_ENVIRONMENT: 'staging',
+      DREAMDEVOPS_PRODUCTION: 'false',
       DREAMDEVOPS_VERSION: '1.4.0',
     });
     expect(byKind(files, 'ExternalSecret').spec.dataFrom).toEqual([

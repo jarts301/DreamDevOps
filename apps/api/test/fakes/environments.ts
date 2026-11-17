@@ -88,5 +88,12 @@ export class FakeSecretStore implements SecretStore {
     return { token: `read-token-${this.tokens.length}`, expiresAt: new Date(Date.now() + 2 * 3_600_000) };
   }
 
+  async read(token: string, path: string): Promise<Record<string, string>> {
+    if (!/^read-token-\d+$/.test(token)) {
+      throw new Error('Not a read token.');
+    }
+    return { ...(this.values.get(path) ?? {}) };
+  }
+
   async renew(): Promise<void> {}
 }

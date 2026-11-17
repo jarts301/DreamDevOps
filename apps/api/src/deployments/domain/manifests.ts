@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { platformVariables } from '../../environments/domain/variables.ts';
 
 export type Strategy = 'recreate' | 'rolling' | 'blue-green' | 'canary' | 'a-b';
 
@@ -60,8 +61,7 @@ export function renderApplication(release: ApplicationRelease): Map<string, stri
   const config = {
     ...release.variables,
     PORT: String(release.runtime.port),
-    DREAMDEVOPS_ENVIRONMENT: release.environment.slug,
-    DREAMDEVOPS_VERSION: release.version,
+    ...platformVariables({ slug: release.environment.slug, production: release.environment.kind === 'production' }, release.version),
   };
   // Changing a value starts a new rollout, so running pods get it.
   const configHash = createHash('sha256')

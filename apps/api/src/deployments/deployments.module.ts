@@ -17,6 +17,8 @@ import { type ModuleSettings, registerOnce, withOverrides } from '../platform/mo
 import { REPOSITORY_LOOKUP, type RepositoryLookup } from '../source-governance/application/repository-lookup.ts';
 import { SourceGovernanceModule } from '../source-governance/source-governance.module.ts';
 import { Deployments } from './application/deployments.ts';
+import { HOST_RUNTIME, type HostRuntime } from './application/ports.ts';
+import { LocalDockerRuntime } from './infrastructure/local-docker-runtime.ts';
 import { AgentController } from './http/agent.controller.ts';
 import { DeploymentsController } from './http/deployments.controller.ts';
 import { DeploymentsSubscriptions } from './messaging/deployments-subscriptions.ts';
@@ -54,6 +56,7 @@ export class DeploymentsModule {
               sources: RepositoryLookup,
               blueprints: BlueprintCatalog,
               entitlements: Entitlements,
+              runtime: HostRuntime,
             ) =>
               new Deployments(
                 database,
@@ -66,7 +69,12 @@ export class DeploymentsModule {
                 sources,
                 blueprints,
                 entitlements,
-                { targetRegistryHost: settings.config.targetRegistryHost },
+                runtime,
+                {
+                  targetRegistryHost: settings.config.targetRegistryHost,
+                  targetOtlpEndpoint: settings.config.targetOtlpEndpoint,
+                  healthTimeoutMs: settings.config.deployHealthTimeoutSeconds * 1000,
+                },
               ),
             inject: [
               TenantDatabase,
@@ -79,7 +87,23 @@ export class DeploymentsModule {
               REPOSITORY_LOOKUP,
               BLUEPRINT_CATALOG,
               Entitlements,
+              HOST_RUNTIME,
             ],
+          },
+          {
+            // This machine's Docker, which pulls with the platform's registry account only.
+            provide: HOST_RUNTIME,
+            useFactory: () =>
+              new LocalDockerRuntime({
+                enabled: settings.config.localHosting,
+                registry: {
+                  host: new URL(settings.config.forgejoPublicUrl).host,
+                  username: settings.config.forgejoUsername,
+                  password: settings.config.forgejoPassword,
+                },
+                bindAddress: settings.config.localHostingBindAddress,
+                pullTimeoutMs: settings.config.buildTimeoutMinutes * 60_000,
+              }),
           },
           {
             provide: DeploymentsSubscriptions,

@@ -3,7 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { SessionService } from '../../core/session.service';
-import { settle } from '../../testing';
+import { confirmProduction, settle } from '../../testing';
 import { EnvironmentDetail } from './environment-detail';
 
 const environment = (kind: 'test' | 'production') => ({
@@ -51,6 +51,7 @@ describe('EnvironmentDetail', () => {
     http.expectOne((request) => request.url === '/api/v1/company/environments/e-1/config').flush(CONFIG);
     await settle();
     http.expectOne((request) => request.url === '/api/v1/company/deployments').flush([]);
+    http.expectOne((request) => request.url === '/api/v1/company/running').flush([]);
     await settle();
     await fixture.whenStable();
     return fixture;
@@ -89,7 +90,13 @@ describe('EnvironmentDetail', () => {
     const production = await open('production', ['test-environment-config:manage', 'targets:connect']);
     expect(element(production).querySelectorAll('form')).toHaveLength(0);
     expect(text(production)).toContain('Tech Leads and Operators manage these.');
-    expect(text(production)).toContain('A second person approves each deployment');
+    // Whether production needs approval is for those who manage production.
+    expect(text(production)).not.toContain('A second person approves each deployment');
+    production.destroy();
+    TestBed.resetTestingModule();
+
+    const operator = await open('production', ['environment-config:manage', 'targets:connect', 'environments-production:manage']);
+    expect(text(operator)).toContain('A second person approves each deployment');
   });
 
   it('saves a secret for one application, with its value hidden as it is typed', async () => {
@@ -108,9 +115,15 @@ describe('EnvironmentDetail', () => {
 
     await type(fixture, 1, ['API_KEY', 'fake-dummy-value']);
     element(fixture).querySelectorAll('form')[1]!.querySelector<HTMLButtonElement>('button')!.click();
-    await settle();
+    // Production's values need its name and a reason.
+    expect(await confirmProduction(fixture, 'Live', 'Rotating the payment key')).toContain('Set the secret API_KEY');
     const request = http.expectOne('/api/v1/company/environments/e-1/secrets/API_KEY');
-    expect(request.request.body).toEqual({ value: 'fake-dummy-value', application: 'a-1' });
+    expect(request.request.body).toEqual({
+      value: 'fake-dummy-value',
+      application: 'a-1',
+      confirmation: 'Live',
+      reason: 'Rotating the payment key',
+    });
     request.flush(null);
     await settle();
     http.expectOne((candidate) => candidate.url === '/api/v1/company/environments/e-1/config').flush({ variables: [], secrets: [] });

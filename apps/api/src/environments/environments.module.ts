@@ -41,7 +41,7 @@ export class EnvironmentsModule {
             {
               provide: Environments,
               useFactory: (database: TenantDatabase) =>
-                new Environments(database, { agentApiUrl: config.agentApiUrl, agentChart: config.agentChart }),
+                new Environments(database, { agentApiUrl: config.agentApiUrl, agentChart: config.agentChart, localHosting: config.localHosting }),
               inject: [TenantDatabase],
             },
             {

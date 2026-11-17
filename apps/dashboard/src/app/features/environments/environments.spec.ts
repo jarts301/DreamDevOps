@@ -4,11 +4,13 @@ import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { describeEvent } from '../../core/events';
 import { SessionService } from '../../core/session.service';
-import { settle } from '../../testing';
+import { confirmProduction, settle } from '../../testing';
 import { Environments } from './environments';
 
 const TARGET = {
   id: 't-1',
+  provider: 'kubernetes',
+  settings: {},
   status: 'connected',
   registrationExpiresAt: null,
   keyFingerprint: 'ab12:cd34:ef56:7890',
@@ -40,8 +42,14 @@ const STAGING = {
   acceptedImages: ['feature', 'rc', 'final'],
   target: null,
 };
+const PROVIDERS = [
+  { key: 'local', name: 'This machine', description: 'Docker on the machine that runs DreamDevOps.', deploys: true, settings: [], unavailableReason: null },
+  { key: 'kubernetes', name: 'Kubernetes cluster', description: 'A cluster with the agent.', deploys: true, settings: [], unavailableReason: null },
+  { key: 'aws', name: 'Amazon Web Services', description: 'An AWS account.', deploys: false, settings: [], unavailableReason: "Amazon Web Services targets aren't available yet." },
+];
 const CONNECTION = {
   targetId: 't-2',
+  provider: 'kubernetes',
   registrationToken: 't-2.secret',
   expiresAt: '2026-11-09T11:00:00Z',
   command: 'helm upgrade --install dreamdevops-agent oci://charts.test/agent --set registrationToken=t-2.secret',
@@ -83,8 +91,12 @@ describe('Environments', () => {
     expect(request.request.params.get('status')).toBe(status);
     request.flush(environments);
   };
-  const open = async (environments: object[] = [PRODUCTION, STAGING], manager = true) => {
-    setUp(manager ? ['targets:connect'] : ['dashboards:view']);
+  const open = async (
+    environments: object[] = [PRODUCTION, STAGING],
+    manager = true,
+    permissions = ['targets:connect', 'environments-production:manage'],
+  ) => {
+    setUp(manager ? permissions : ['dashboards:view']);
     const fixture = TestBed.createComponent(Environments);
     fixture.detectChanges();
     await answerList(environments);
@@ -156,7 +168,19 @@ describe('Environments', () => {
       const fixture = await open();
       button(fixture, 'Connect a target to Staging')!.click();
       await settle();
-      http.expectOne({ method: 'POST', url: '/api/v1/company/environments/e-2/target' }).flush(CONNECTION);
+      http.expectOne('/api/v1/company/environments/providers').flush(PROVIDERS);
+      await render(fixture);
+      // Providers that don't deploy yet are shown, but can't be chosen.
+      const aws = element(fixture).querySelector<HTMLInputElement>('input[type="radio"][value="aws"]')!;
+      expect(aws.disabled).toBe(true);
+      expect(text(fixture)).toContain("Amazon Web Services targets aren't available yet.");
+      element(fixture).querySelector<HTMLInputElement>('input[type="radio"][value="kubernetes"]')!.click();
+      await render(fixture);
+      button(fixture, 'Connect')!.click();
+      await settle();
+      const connect = http.expectOne({ method: 'POST', url: '/api/v1/company/environments/e-2/target' });
+      expect(connect.request.body).toEqual({ provider: 'kubernetes', settings: {} });
+      connect.flush(CONNECTION);
       const pending = { ...STAGING, target: { ...TARGET, id: 't-2', status: 'pending', registrationExpiresAt: CONNECTION.expiresAt } };
       await answerList([PRODUCTION, pending]);
       await render(fixture);
@@ -177,6 +201,29 @@ describe('Environments', () => {
     }
   });
 
+  it('runs an environment on This machine, with no agent to install', async () => {
+    const fixture = await open();
+    button(fixture, 'Connect a target to Staging')!.click();
+    await settle();
+    http.expectOne('/api/v1/company/environments/providers').flush(PROVIDERS);
+    await render(fixture);
+    // The first one this server allows is chosen to start with.
+    const host = element(fixture).querySelector<HTMLInputElement>('input[placeholder="localhost"]')!;
+    host.value = 'trial.local';
+    host.dispatchEvent(new Event('input'));
+    button(fixture, 'Connect')!.click();
+    await settle();
+    const connect = http.expectOne({ method: 'POST', url: '/api/v1/company/environments/e-2/target' });
+    expect(connect.request.body).toEqual({ provider: 'local', settings: { publicHost: 'trial.local' } });
+    connect.flush({ targetId: 't-3', provider: 'local', registrationToken: null, expiresAt: null, command: null });
+    await answerList([PRODUCTION, { ...STAGING, target: { ...TARGET, id: 't-3', provider: 'local', kubernetesVersion: null } }]);
+    await render(fixture);
+
+    expect(text(fixture)).toContain('Staging runs on this machine now.');
+    expect(element(fixture).querySelector('textarea[aria-label="Connect command"]')).toBeNull();
+    expect(text(fixture)).toContain('This machine');
+  });
+
   it('asks before disconnecting a target', async () => {
     const fixture = await open();
     expect(button(fixture, 'Archive Production')).toBeUndefined();
@@ -185,11 +232,24 @@ describe('Environments', () => {
     await render(fixture);
     expect(text(fixture)).toContain("The agent's key and tokens stop working at once.");
     button(fixture, 'Confirm disconnecting')!.click();
-    await settle();
-    http.expectOne({ method: 'DELETE', url: '/api/v1/company/environments/e-1/target' }).flush(null);
+    expect(await confirmProduction(fixture, 'Production', 'Moving to the new cluster')).toContain(
+      'Disconnect the target of Production',
+    );
+    const request = http.expectOne({ method: 'DELETE', url: '/api/v1/company/environments/e-1/target' });
+    expect(request.request.body).toEqual({ confirmation: 'Production', reason: 'Moving to the new cluster' });
+    request.flush(null);
     await answerList([{ ...PRODUCTION, target: null }, STAGING]);
     await render(fixture);
 
     expect(text(fixture)).toContain('The target of Production is disconnected.');
+  });
+
+  it('leaves production to those who manage it', async () => {
+    const fixture = await open([PRODUCTION, STAGING], true, ['targets:connect']);
+
+    expect(button(fixture, 'Disconnect the target of Production')).toBeUndefined();
+    expect(button(fixture, 'Edit Production')).toBeUndefined();
+    expect(text(fixture)).toContain('Tech Leads and Operators manage production.');
+    expect(button(fixture, 'Edit Staging')).toBeDefined();
   });
 });
