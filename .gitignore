@@ -56,3 +56,4 @@ e2e-results/
 # System files
 .DS_Store
 Thumbs.db
+/.claude/
