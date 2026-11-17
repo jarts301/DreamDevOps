@@ -409,60 +409,6 @@ th {
   background: var(--color-success-surface);
 }
 
-.steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-  font-size: 0.85rem;
-}
-
-.step {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  color: var(--color-muted);
-}
-
-.step-marker {
-  font-weight: 700;
-}
-
-.step[data-state='running'],
-.step[data-state='passed'] {
-  color: inherit;
-}
-
-.step[data-state='passed'] .step-marker {
-  color: var(--color-success);
-}
-
-.step[data-state='failed'] {
-  color: var(--color-danger);
-}
-
-.step[data-state='running'] .step-marker {
-  animation: step-pulse 1.2s ease-in-out infinite;
-}
-
-.step-detail {
-  color: var(--color-muted);
-}
-
-@keyframes step-pulse {
-  50% {
-    opacity: 0.3;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .step[data-state='running'] .step-marker {
-    animation: none;
-  }
-}
-
 .status[data-tone='progress'] {
   border-color: var(--color-primary);
 }

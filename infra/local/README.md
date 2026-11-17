@@ -82,7 +82,7 @@ Platform admins, Company Admins and Tech Leads must sign in with a one-time code
 
 ## Demo users
 
-`keycloak-init` also adds one demo user for each role, `demo-platform-admin`, `demo-company-admin`, `demo-tech-lead`, `demo-developer`, `demo-operator` and `demo-viewer`, all with the password in `KEYCLOAK_DEV_USER_PASSWORD`. Users that already exist are left alone, so authenticators survive restarts. It also removes the earlier `dev-company-admin` and `dev-developer`. The local API adds the demo users to Demo Company when it starts.
+`keycloak-init` also adds one demo user for each role, `demo-platform-admin`, `demo-company-admin`, `demo-tech-lead`, `demo-developer`, `demo-operator` and `demo-viewer`, all with the password in `KEYCLOAK_DEV_USER_PASSWORD`. Users that already exist are left alone, so authenticators survive restarts. It also removes the earlier `dev-company-admin` and `dev-developer`. The local API adds the demo users to Demo Company when it starts, along with a demo application for each blueprint and a **Test** environment on This machine. `DEMO_APPLICATIONS=false` in `.env` leaves the applications out.
 
 ## OpenBao
 

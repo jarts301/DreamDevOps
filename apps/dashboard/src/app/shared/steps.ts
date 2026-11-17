@@ -89,15 +89,21 @@ export function currentStep(steps: readonly Step[]): Step | null {
   return steps.find((step) => step.status === 'running') ?? null;
 }
 
+/** A step from a short description of it, with no times, checks or findings. */
+export function plainStep(key: string, name: string, status: StepStatus, summary: string | null = null): Step {
+  return { key, name, status, startedAt: null, finishedAt: null, summary, checks: [], facts: [] };
+}
+
 /**
  * Steps in order, each with its status, how long it took, every check it made and what
- * it found, such as the digest it published or the address it started at.
+ * it found, such as the digest it published or the address it started at. Builds and
+ * deployments both show their steps with it.
  */
 @Component({
   selector: 'app-step-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <ol class="pipeline">
+    <ol class="pipeline" [attr.aria-label]="label()">
       @for (step of steps(); track step.key) {
         <li class="pipeline-step" [attr.data-status]="step.status">
           <div class="pipeline-step-header">
@@ -143,13 +149,18 @@ export function currentStep(steps: readonly Step[]): Step | null {
 })
 export class StepList {
   readonly steps = input.required<readonly Step[]>();
+  readonly label = input('Steps');
 
   protected readonly stepStatusName = stepStatusName;
   protected readonly stepSymbol = stepSymbol;
   protected readonly stepTone = stepTone;
 
+  /** How long it took, or has taken so far. Unknown for a finished step without its end. */
   protected took(step: Step): string | null {
-    return step.status === 'pending' ? null : duration(step.startedAt, step.finishedAt);
+    if (step.status === 'running') {
+      return duration(step.startedAt, null);
+    }
+    return step.status === 'pending' || step.finishedAt === null ? null : duration(step.startedAt, step.finishedAt);
   }
 
   protected outcomeName(check: Check): string {

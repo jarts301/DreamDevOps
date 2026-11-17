@@ -62,14 +62,14 @@ const runningVersion = (overrides: Partial<RunningVersion> = {}): RunningVersion
 });
 
 describe('deployment steps', () => {
-  const states = (value: Deployment) => deploymentSteps(value).map((step) => `${step.label}:${step.state}${step.detail ? ` (${step.detail})` : ''}`);
+  const states = (value: Deployment) => deploymentSteps(value).map((step) => `${step.name}:${step.status}${step.summary ? ` (${step.summary})` : ''}`);
 
   it('follow a rolling deployment from Git to the target', () => {
     expect(states(deployment())).toEqual(['Saved to Git:passed (ccccccc)', 'Applied by the target:passed', 'Rolling out:running (1 of 2 ready)']);
     expect(states(deployment({ status: 'queued', commit: null, progress: {} }))).toEqual([
       'Saved to Git:running',
-      'Applied by the target:waiting',
-      'Rolling out:waiting',
+      'Applied by the target:pending',
+      'Rolling out:pending',
     ]);
   });
 

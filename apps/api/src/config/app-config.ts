@@ -58,6 +58,8 @@ export interface AppConfig {
   readonly targetLostAfterSeconds: number;
   /** Sets up the demo company and its users at startup. Local use only. */
   readonly demoData: boolean;
+  /** Adds a demo application for each blueprint to the demo company. On with demo data, unless DEMO_APPLICATIONS is false. */
+  readonly demoApplications: boolean;
   /**
    * Whether companies may run applications on this machine's own Docker, for trying
    * things out. Off by default in production, where companies would share the machine.
@@ -226,6 +228,7 @@ export function loadConfig(env: Environment): AppConfig {
     agentChart,
     targetLostAfterSeconds: integer(env, 'TARGET_LOST_AFTER_SECONDS', 180),
     demoData,
+    demoApplications: demoData && env.DEMO_APPLICATIONS !== 'false',
     localHosting,
     localHostingBindAddress: env.LOCAL_HOSTING_BIND_ADDRESS || '127.0.0.1',
     deployHealthTimeoutSeconds: integer(env, 'DEPLOY_HEALTH_TIMEOUT_SECONDS', 120),

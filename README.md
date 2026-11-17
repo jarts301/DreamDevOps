@@ -33,17 +33,19 @@ A self-hostable platform for managing the full lifecycle of a company's software
 | Notifications | Emailed invitation links, and company rules that post chosen events to Slack or any webhook |
 | Applications | A register of each company's applications, with their type, that can be edited, archived and restored |
 | Repositories | Each application gets a private Forgejo repository from its type's blueprint, with Git Flow branches, branch and tag protection, and teams that follow company roles |
-| Blueprints | Versioned starting points: a Node.js service and an Angular frontend, each with tests, a Dockerfile and a pipeline |
+| Blueprints | Versioned starting points for RESTful services and web frontends in several languages and frameworks, 18 in all, each with tests, a Dockerfile and a pipeline |
 | Webhooks | Signed Forgejo events, checked per repository and handled once |
 | Builds | Feature, release candidate and final images, built in a platform-owned pipeline with tests, secret and vulnerability scans and an SBOM, then signed with Cosign. Each application has a version list. |
 | Releases | Git Flow releases and hotfixes: the branch, RC tags and images, the checks on the pull request into main, the version tag, the final image and the merge back |
-| Environments | Test and production environments, each run by one target cluster that connects with a one-time token and then proves itself with its own key, with health shown as connected or lost. Each has its own variables and secrets, the secrets kept in OpenBao. |
+| Environments | Test and production environments, hosted on a Kubernetes cluster, whose agent connects with a one-time token and then proves itself with its own key, or on This machine, for trying things out. Each has its own variables and secrets, the secrets kept in OpenBao, and production is protected from slips. |
 | Deployment agent | Runs in each target: sets up Flux, Argo Rollouts, Kyverno and the External Secrets Operator, lets in only images signed with the environment's key, and reports rollouts. It only calls out. |
-| Deployments | Recreate, rolling and blue/green deployments through each environment's Git repository, with progress shown step by step, approval for production, promote, abort and rollback |
+| Deployments | Recreate, rolling and blue/green deployments through each environment's Git repository, or straight to This machine, with progress shown step by step, approval for production, promote, abort, rollback, Stop and Apply now |
+| Monitoring | Metrics, logs and traces of each application in each environment, sent with OpenTelemetry through a gateway that labels them, kept in Prometheus, Loki and Jaeger |
+| Alerts | Emails to chosen members when a metric stays past its threshold, and again when it's back |
 | Editions | Every company on the free Community Edition, with a per-company setting and an extension point for the Commercial Edition |
 | Dashboard | Screens for all of the above, in light and dark themes |
 
-Monitoring isn't available yet. Companies can't be deleted.
+Companies can't be deleted.
 
 ## Prerequisites
 
@@ -118,7 +120,22 @@ Run these commands from the repository root. They work in Bash and PowerShell.
 
    Platform admins, Company Admins and Tech Leads set up an authenticator app the first time they sign in. The local API creates Demo Company and adds its members when it starts, if they're missing.
 
-To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally). Invitation emails don't leave your machine: open them in Mailpit at <http://localhost:8025>.
+   Demo Company also gets a demo application for each blueprint, 18 in all, such as *Axum Rust API* or *React TypeScript Frontend*, each with its repository, and a shared **Test** environment on This machine to deploy them to. `demo-tech-lead` registers them, as a person would. The API adds any that are missing each time it starts, and leaves alone what exists, such as an application you archived. To skip them, set `DEMO_APPLICATIONS=false` in `infra/local/.env`. See [Demo applications](#demo-applications).
+
+To try the main flow, follow the walkthrough in the [dashboard guide](apps/dashboard/README.md#run-it-locally). Invitation and alert emails don't leave your machine: open them in Mailpit at <http://localhost:8025>.
+
+### Demo applications
+
+| Type | Applications |
+|---|---|
+| RESTful Service | Fastify TypeScript API, Express TypeScript API, NestJS TypeScript API, Express JavaScript API, Fastify JavaScript API, FastAPI Python API, Flask Python API, Axum Rust API, Actix Web Rust API, cpp-httplib C++ API |
+| Web Frontend | Angular TypeScript Frontend, React TypeScript Frontend, Vue TypeScript Frontend, Svelte TypeScript Frontend, React JavaScript Frontend, Vue JavaScript Frontend, Svelte JavaScript Frontend, PyScript Python Frontend |
+
+Each is named after its framework, language and type, starts from the newest version of its blueprint, and says which in its description. A new blueprint gets its own application the next time the API starts. To try one end to end, as `demo-tech-lead`:
+
+1. Open **Applications**, choose one, and build a release candidate from its repository.
+2. Deploy the candidate to **Test**, which runs it on This machine.
+3. Open **Monitoring** to see its metrics, logs and traces, and **Alerts** to watch one of them.
 
 ## Local services
 
@@ -131,6 +148,10 @@ All of these accept connections only from your own machine.
 | Keycloak (login) | <http://localhost:8081> |
 | Forgejo (Git) | <http://localhost:3000>, with SSH on port 2222 |
 | Mailpit (caught emails) | <http://localhost:8025> |
+| OpenTelemetry collector | `localhost:4318` |
+| Prometheus (metrics) | <http://localhost:9090> |
+| Jaeger (traces) | <http://localhost:16686> |
+| Loki (logs) | `localhost:3100` |
 | PostgreSQL | `localhost:5433` |
 
 The services keep running, and restart with Docker, until you stop them:

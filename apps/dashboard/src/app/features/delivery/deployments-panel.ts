@@ -19,7 +19,7 @@ import {
   type RunningVersion,
   type Strategy,
 } from './delivery.api';
-import { ProgressSteps, type Step } from './progress-steps';
+import { plainStep, StepList, type Step, type StepStatus } from '../../shared/steps';
 
 const REFRESH_MS = 5_000;
 const ACTIVE: readonly DeploymentStatus[] = ['awaiting-approval', 'queued', 'committed', 'progressing', 'paused'];
@@ -56,43 +56,31 @@ export function deploymentSteps(deployment: Deployment): Step[] {
   const { status, progress } = deployment;
   const failed = status === 'failed' || status === 'aborted';
   const steps: Step[] = [];
+  const add = (name: string, state: StepStatus, detail: string | null = null) => steps.push(plainStep(name, name, state, detail));
   if (status === 'awaiting-approval' || status === 'rejected' || deployment.approvedBy !== null) {
-    steps.push({
-      label: 'Approved',
-      state: status === 'awaiting-approval' ? 'running' : status === 'rejected' ? 'failed' : 'passed',
-      detail: deployment.approvedBy?.displayName ? `by ${deployment.approvedBy.displayName}` : null,
-    });
+    add(
+      'Approved',
+      status === 'awaiting-approval' ? 'running' : status === 'rejected' ? 'failed' : 'passed',
+      deployment.approvedBy?.displayName ? `by ${deployment.approvedBy.displayName}` : null,
+    );
   }
   const committed = deployment.commit !== null;
-  steps.push({
-    label: 'Saved to Git',
-    state: committed ? 'passed' : status === 'queued' ? 'running' : status === 'rejected' || status === 'awaiting-approval' ? 'waiting' : 'failed',
-    detail: committed ? deployment.commit!.slice(0, 7) : null,
-  });
+  add(
+    'Saved to Git',
+    committed ? 'passed' : status === 'queued' ? 'running' : status === 'rejected' || status === 'awaiting-approval' ? 'pending' : 'failed',
+    committed ? deployment.commit!.slice(0, 7) : null,
+  );
   const applied = progress.applied === true || ['progressing', 'paused', 'succeeded', 'superseded'].includes(status);
-  steps.push({
-    label: 'Applied by the target',
-    state: applied ? 'passed' : status === 'committed' ? 'running' : failed && committed ? 'failed' : 'waiting',
-  });
+  add('Applied by the target', applied ? 'passed' : status === 'committed' ? 'running' : failed && committed ? 'failed' : 'pending');
   const counts = progress.desired === undefined ? null : `${progress.ready ?? 0} of ${progress.desired} ready`;
   // An aborted blue/green rollout did finish; it's the traffic switch that was undone.
   const rolledOut = status === 'succeeded' || status === 'superseded' || status === 'paused' || (status === 'aborted' && deployment.strategy === 'blue-green');
-  steps.push({
-    label: 'Rolling out',
-    state: rolledOut
-        ? 'passed'
-        : status === 'progressing'
-          ? 'running'
-          : failed && applied
-            ? 'failed'
-            : 'waiting',
-    detail: counts,
-  });
+  add('Rolling out', rolledOut ? 'passed' : status === 'progressing' ? 'running' : failed && applied ? 'failed' : 'pending', counts);
   if (deployment.strategy === 'blue-green') {
-    steps.push({
-      label: 'Traffic switched',
-      state: status === 'succeeded' || status === 'superseded' ? 'passed' : status === 'paused' ? 'running' : status === 'aborted' ? 'failed' : 'waiting',
-    });
+    add(
+      'Traffic switched',
+      status === 'succeeded' || status === 'superseded' ? 'passed' : status === 'paused' ? 'running' : status === 'aborted' ? 'failed' : 'pending',
+    );
   }
   return steps;
 }
@@ -104,7 +92,7 @@ export function deploymentSteps(deployment: Deployment): Step[] {
  */
 @Component({
   selector: 'app-deployments-panel',
-  imports: [DatePipe, ProductionConfirmationPanel, ProgressSteps, ReactiveFormsModule, RouterLink],
+  imports: [DatePipe, ProductionConfirmationPanel, ReactiveFormsModule, StepList, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (error(); as message) {
@@ -296,7 +284,7 @@ export function deploymentSteps(deployment: Deployment): Step[] {
                   </td>
                   <td>
                     <span class="status" [attr.data-status]="statusStyle(deployment.status)">{{ statusLabel(deployment.status) }}</span>
-                    <app-progress-steps [steps]="steps(deployment)" [label]="'Steps of deployment ' + (deployment.version.version ?? deployment.version.tag)" />
+                    <app-step-list [steps]="steps(deployment)" [label]="'Steps of deployment ' + (deployment.version.version ?? deployment.version.tag)" />
                     @if (deployment.message) {
                       <p class="cell-note">{{ deployment.message }}</p>
                     }

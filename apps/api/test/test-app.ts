@@ -69,6 +69,7 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   agentChart: 'oci://charts.test/dreamdevops-agent',
   targetLostAfterSeconds: 180,
   demoData: false,
+  demoApplications: false,
   forgejoAdminUsername: 'forgejo-admin',
   forgejoAdminPassword: 'fake-dummy-forgejo-admin-password',
   openbaoUrl: 'http://openbao.test',

@@ -191,21 +191,25 @@ describe('ApplicationDetail', () => {
         }),
       ],
     });
-    const steps = [...element(fixture).querySelectorAll<HTMLElement>('.step')].map((step) => [
-      step.dataset['state'],
-      step.textContent?.replace(/\s+/g, ' ').trim(),
+    const steps = [...element(fixture).querySelectorAll<HTMLElement>('.pipeline-step')].map((step) => [
+      step.dataset['status'],
+      step.querySelector('.pipeline-name')?.textContent?.trim(),
+      step.querySelector('.status')?.textContent?.trim(),
+      step.querySelector('.step-summary')?.textContent?.trim() ?? null,
     ]);
 
     expect(steps).toEqual([
-      ['passed', '✓Dockerfile rules: done'],
-      ['passed', '✓Secret scan: done, none found'],
-      ['passed', '✓Tests: done'],
-      ['running', '◐Image: in progress'],
-      ['waiting', '○Image rules: waiting'],
-      ['waiting', '○Vulnerability scan: waiting'],
-      ['waiting', '○SBOM: waiting'],
-      ['waiting', '○Signature: waiting'],
+      ['passed', 'Dockerfile rules', 'Passed', null],
+      ['passed', 'Secret scan', 'Passed', 'none found'],
+      ['passed', 'Tests', 'Passed', null],
+      ['running', 'Image', 'In progress', null],
+      ['pending', 'Image rules', 'Waiting', null],
+      ['pending', 'Vulnerability scan', 'Waiting', null],
+      ['pending', 'SBOM', 'Waiting', null],
+      ['pending', 'Signature', 'Waiting', null],
     ]);
+    // Only the step under way says how long it's taken so far.
+    expect(element(fixture).querySelectorAll('.pipeline-step-header .cell-note')).toHaveLength(1);
     fixture.destroy();
   });
 

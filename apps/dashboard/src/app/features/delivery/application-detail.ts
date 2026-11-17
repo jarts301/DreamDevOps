@@ -16,7 +16,7 @@ import {
   type ReleaseKind,
 } from './delivery.api';
 import { DeploymentsPanel } from './deployments-panel';
-import { ProgressSteps, type Step } from './progress-steps';
+import { StepList, type Step, type StepStatus } from '../../shared/steps';
 
 const STATUS_LABELS: Readonly<Record<BuildStatus, string>> = {
   queued: 'Waiting',
@@ -45,7 +45,7 @@ const REFRESH_MS = 5_000;
 /** One application: its repository, versions, builds and releases. */
 @Component({
   selector: 'app-application-detail',
-  imports: [DatePipe, ReactiveFormsModule, RouterLink, ProgressSteps, DeploymentsPanel],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink, StepList, DeploymentsPanel],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <p><a routerLink="/applications">← Applications</a></p>
@@ -232,7 +232,7 @@ const REFRESH_MS = 5_000;
                     <td>{{ kindLabel(build.kind) }}</td>
                     <td>
                       <span class="status" [attr.data-status]="statusStyle(build.status)">{{ statusLabel(build.status) }}</span>
-                      <app-progress-steps [steps]="buildSteps(build)" [label]="'Steps of ' + build.tag" />
+                      <app-step-list [steps]="buildSteps(build)" [label]="'Steps of ' + build.tag" />
                       @if (build.failureReason) {
                         <p class="cell-note">{{ build.failureReason }}</p>
                       }
@@ -367,10 +367,16 @@ export class ApplicationDetail implements OnInit, OnDestroy {
 
   /** The build's steps, with what each found once it's done. */
   protected buildSteps(build: Build): Step[] {
-    return build.progress.map(({ job, state }) => ({
-      label: JOB_LABELS[job],
-      state,
-      detail: state === 'passed' || state === 'failed' ? jobDetail(job, build) : null,
+    // Failed checks and warnings are listed under the build already, so steps leave them out.
+    return build.progress.map(({ job, state, startedAt }) => ({
+      key: job,
+      name: JOB_LABELS[job],
+      status: (state === 'waiting' ? 'pending' : state) satisfies StepStatus,
+      startedAt,
+      finishedAt: null,
+      summary: state === 'passed' || state === 'failed' ? jobDetail(job, build) : null,
+      checks: [],
+      facts: [],
     }));
   }
 

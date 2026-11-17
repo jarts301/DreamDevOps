@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEMO_COMPANY_NAME, DemoCompany } from '../src/demo/demo-company.ts';
+import { DEMO_ENVIRONMENT_NAME } from '../src/demo/demo-applications.ts';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider } from './fakes.ts';
@@ -42,6 +43,7 @@ beforeAll(async () => {
       jobsDatabaseUrl: database.urlFor('jobs'),
       secureCookies: false,
       demoData: true,
+      demoApplications: true,
     },
     overrides: [
       { provide: IDENTITY_PROVIDER, useValue: new FakeIdentityProvider() },
@@ -97,4 +99,33 @@ describe('the demo company', () => {
     const { rows } = await superuser.query('SELECT 1 FROM tenancy.companies WHERE name = $1', [DEMO_COMPANY_NAME]);
     expect(rows).toHaveLength(1);
   });
+
+  it('gets a demo application for each blueprint, registered by its Tech Lead, and a Test environment on This machine', async () => {
+    const applications = async () =>
+      (
+        await superuser.query<{ name: string; created_by_email: string }>(
+          `SELECT a.name, u.email AS created_by_email FROM catalog.applications a
+           JOIN tenancy.companies c ON c.id = a.company_id
+           JOIN identity.users u ON u.id = a.created_by
+           WHERE c.name = $1`,
+          [DEMO_COMPANY_NAME],
+        )
+      ).rows;
+    await vi.waitFor(async () => expect(await applications()).toHaveLength(18), { timeout: 60_000, interval: 250 });
+    expect(new Set((await applications()).map((row) => row.created_by_email))).toEqual(new Set(['demo-tech-lead@example.com']));
+    const { rows: environments } = await superuser.query<{ name: string; kind: string; provider: string | null }>(
+      `SELECT e.name, e.kind, t.provider FROM environments.environments e
+       JOIN tenancy.companies c ON c.id = e.company_id
+       LEFT JOIN environments.targets t ON t.environment_id = e.id
+       WHERE c.name = $1`,
+      [DEMO_COMPANY_NAME],
+    );
+    expect(environments).toEqual([{ name: DEMO_ENVIRONMENT_NAME, kind: 'test', provider: 'local' }]);
+
+    // Once there, nothing is added again, even for an application someone archived.
+    const companyId = (await superuser.query<{ id: string }>('SELECT id FROM tenancy.companies WHERE name = $1', [DEMO_COMPANY_NAME])).rows[0]!.id;
+    const { techLead } = await app.get(DemoCompany).setUp();
+    await app.get(DemoCompany).addApplications(companyId, techLead);
+    expect(await applications()).toHaveLength(18);
+  }, 90_000);
 });

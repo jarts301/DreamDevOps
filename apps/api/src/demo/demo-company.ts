@@ -1,9 +1,12 @@
 import { Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import type { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
+import type { Environments } from '../environments/application/environments.ts';
 import type { CompanyAccessService } from '../identity-access/application/company-access.service.ts';
 import type { UserDirectory } from '../identity-access/application/ports.ts';
 import { type Principal, toPrincipal } from '../identity-access/domain/access.ts';
 import type { CompaniesService } from '../tenancy/application/companies.service.ts';
+import { DEMO_ENVIRONMENT_NAME, seedDemoApplications } from './demo-applications.ts';
 
 export const DEMO_COMPANY_NAME = 'Demo Company';
 
@@ -40,22 +43,53 @@ export class DemoCompany implements OnApplicationBootstrap {
   readonly #directory: UserDirectory;
   readonly #companies: CompaniesService;
   readonly #access: CompanyAccessService;
+  /** Where the demo applications go, or null to leave them out. */
+  readonly #applications: { readonly catalog: ApplicationCatalog; readonly environments: Environments } | null;
 
-  constructor(directory: UserDirectory, companies: CompaniesService, access: CompanyAccessService) {
+  constructor(
+    directory: UserDirectory,
+    companies: CompaniesService,
+    access: CompanyAccessService,
+    applications: { readonly catalog: ApplicationCatalog; readonly environments: Environments } | null = null,
+  ) {
     this.#directory = directory;
     this.#companies = companies;
     this.#access = access;
+    this.#applications = applications;
   }
 
   async onApplicationBootstrap(): Promise<void> {
+    let setUp: { companyId: string; techLead: Principal };
     try {
-      await this.setUp();
+      setUp = await this.setUp();
     } catch (error) {
       this.#logger.error(`Setting up the demo company failed: ${String(error)}`);
+      return;
+    }
+    // Registering creates a repository for each, which takes a while, so the API starts meanwhile.
+    void this.addApplications(setUp.companyId, setUp.techLead).catch((error: unknown) =>
+      this.#logger.error(`Adding the demo applications failed: ${String(error)}`),
+    );
+  }
+
+  /** Adds the demo applications and their Test environment, unless they're left out. */
+  async addApplications(companyId: string, techLead: Principal): Promise<void> {
+    if (this.#applications === null) {
+      return;
+    }
+    const result = await seedDemoApplications(this.#applications, companyId, techLead);
+    if (result.registered > 0 || result.environmentCreated) {
+      this.#logger.log(
+        `Added ${result.registered} of ${result.total} demo applications` +
+          (result.environmentCreated
+            ? `, and the ${DEMO_ENVIRONMENT_NAME} environment${result.environmentConnected ? ' on This machine' : ''}.`
+            : '.'),
+      );
     }
   }
 
-  async setUp(): Promise<void> {
+  /** Makes sure the company and its members are there. Returns the company and its Tech Lead, who adds the demo applications. */
+  async setUp(): Promise<{ companyId: string; techLead: Principal }> {
     const userIds = new Map<string, string>();
     for (const user of DEMO_USERS) {
       userIds.set(
@@ -102,5 +136,6 @@ export class DemoCompany implements OnApplicationBootstrap {
       await this.#access.acceptInvitation(await principal(user.username), invitation.token);
       this.#logger.log(`${user.username} joined the demo company.`);
     }
+    return { companyId, techLead: await principal('demo-tech-lead', companyId) };
   }
 }
