@@ -60,7 +60,7 @@ Each environment has values for all its applications, and each application can h
 - **Values** are kept exactly, spaces included, and fit on one line, which is what every container runtime passes on safely. Encode multi-line values, such as keys, in base64. Each is up to 32 KB.
 - **Limits:** the environment's shared values, and each application's own, can each hold up to 100 variables and secrets, totalling 256 KB. The size of each secret is kept, never its value.
 - **From the platform:** every application also gets `PORT`, the blueprint's, `DREAMDEVOPS_ENVIRONMENT`, the environment's short name, `DREAMDEVOPS_PRODUCTION`, `true` or `false`, and `DREAMDEVOPS_VERSION`.
-- **Metrics and traces:** when `TARGET_OTLP_ENDPOINT` is set, applications in clusters also get the standard OpenTelemetry settings: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (15000), `OTEL_SERVICE_NAME`, the application's short name, and `OTEL_RESOURCE_ATTRIBUTES` with `dreamdevops.environment.id`. The environment's own values can change all but that attribute, which is always added last, so it counts. The rules are in `domain/telemetry.ts`.
+- **Metrics and traces:** applications also get the standard OpenTelemetry settings: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (15000), `OTEL_SERVICE_NAME`, the application's short name, and `OTEL_RESOURCE_ATTRIBUTES` with `dreamdevops.place.id`, `dreamdevops.environment.id` and `dreamdevops.application.id`. The environment's own values can change all but those attributes, which are always added last, so they count. The rules are in `domain/telemetry.ts`, and [Monitoring](../monitoring/README.md#how-telemetry-gets-here) says where it all goes.
 
 | | Variables | Secrets |
 |---|---|---|
@@ -125,7 +125,7 @@ All routes start with `/api/v1`.
 | `OPENBAO_URL`, `OPENBAO_TOKEN` | Where the API reaches OpenBao, and its token, which can't read secret values. The API renews it every 12 hours. |
 | `FORGEJO_ADMIN_USERNAME`, `FORGEJO_ADMIN_PASSWORD` | A Forgejo administrator, used only to create each company's registry account |
 | `TARGET_REGISTRY_HOST`, `TARGET_OPENBAO_URL`, `TARGET_GIT_SSH_URL`, `TARGET_GIT_KNOWN_HOSTS` | How targets reach the registry, OpenBao and Git, and Forgejo's SSH host keys. They default to the platform's own addresses. |
-| `TARGET_OTLP_ENDPOINT` | Where applications in clusters send metrics and traces over OTLP/HTTP, such as the collector the agent installs. Unset, they aren't told to send any. |
+| `TARGET_OTLP_ENDPOINT` | Where applications in clusters send metrics and traces over OTLP/HTTP. By default, the collector the agent installs, `http://dreamdevops-otel-collector.dreamdevops-system:4318`. `off` tells them to send none. |
 | `LOCAL_HOSTING` | `on` lets companies run applications on This machine. On by default, except in production, where companies would share the machine that runs DreamDevOps. |
 | `LOCAL_HOSTING_BIND_ADDRESS` | The address applications on This machine publish their ports on. `127.0.0.1` by default, so only this machine reaches them. |
 | `DEPLOY_HEALTH_TIMEOUT_SECONDS` | How long a new version on This machine has to become healthy before it's rolled back. Default 120. |

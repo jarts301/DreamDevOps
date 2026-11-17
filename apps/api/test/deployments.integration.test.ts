@@ -11,6 +11,10 @@ import { SigningKeys } from '../src/builds/application/signing-keys.ts';
 import { signaturePayload, signPayload } from '../src/builds/domain/cosign.ts';
 import { HOST_RUNTIME } from '../src/deployments/application/ports.ts';
 import { ENVIRONMENT_REPOSITORIES, SECRET_STORE } from '../src/environments/application/ports.ts';
+import { placeId } from '../src/environments/domain/telemetry.ts';
+import { TELEMETRY_SINK } from '../src/monitoring/application/ports.ts';
+import { AlertChecks } from '../src/alerts/application/alert-checks.ts';
+import { MAILER } from '../src/notifications/application/ports.ts';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import {
@@ -19,8 +23,11 @@ import {
   type FakeHostRuntime,
   FakeIdentityProvider,
   type FakeImageRegistry,
+  type FakeMailer,
   FakeSecretStore,
+  FakeTelemetrySink,
 } from './fakes.ts';
+import { HttpStub } from './support/http-stub.ts';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
 
@@ -205,7 +212,65 @@ const auditEvent = async (agent: Agent, eventType: string) =>
 const repositoryFiles = (setup: Setup, environment: 'staging' | 'live') =>
   repositories.files(setup.organization, `environment-${environment}`);
 
+// Stand-ins for the stores Monitoring reads, answering for whichever places a query names.
+const prometheus = new HttpStub();
+const jaeger = new HttpStub();
+const loki = new HttpStub();
+let jaegerTraces: object[] = [];
+const placesIn = (query: string) => /dreamdevops_place_id=~?"([^"]+)"/.exec(query)?.[1]!.split('|') ?? [];
+/** The CPU, as a percent of one core, each place reports; memory and the rest answer 1. */
+const cpuOf = new Map<string, string>();
+
 beforeAll(async () => {
+  await prometheus.start();
+  prometheus.on('POST', '/api/v1/query', (recorded) => {
+    const query = new URLSearchParams(String(recorded.body)).get('query') ?? '';
+    return {
+      body: {
+        status: 'success',
+        data: {
+          resultType: 'vector',
+          result: placesIn(query).map((id) => ({
+            metric: { dreamdevops_place_id: id },
+            value: [Date.now() / 1000, query.includes('process_cpu_time') ? (cpuOf.get(id) ?? '12.5') : '1'],
+          })),
+        },
+      },
+    };
+  });
+  prometheus.on('POST', '/api/v1/query_range', (recorded) => {
+    const form = new URLSearchParams(String(recorded.body));
+    const end = Number(form.get('end'));
+    return {
+      body: {
+        status: 'success',
+        data: {
+          resultType: 'matrix',
+          result: placesIn(form.get('query') ?? '').map((id) => ({ metric: { dreamdevops_place_id: id }, values: [[end, '1']] })),
+        },
+      },
+    };
+  });
+  await jaeger.start();
+  jaeger.on('GET', /^\/api\/traces\?/, () => ({ body: { data: jaegerTraces } }));
+  jaeger.on('GET', /^\/api\/traces\/[0-9a-f]+$/, (recorded) => ({
+    body: { data: jaegerTraces.filter((trace) => recorded.path.endsWith((trace as { traceID: string }).traceID)) },
+  }));
+  await loki.start();
+  loki.on('GET', /^\/loki\/api\/v1\/query_range\?/, (recorded) => {
+    const query = new URL(recorded.path, 'http://loki.test').searchParams.get('query') ?? '';
+    return {
+      body: {
+        status: 'success',
+        data: {
+          result: placesIn(query).map((id) => ({
+            stream: { dreamdevops_place_id: id },
+            values: [[`${Date.now()}000000`, '{"level":30,"msg":"request completed"}']],
+          })),
+        },
+      },
+    };
+  });
   database = await startTestDatabase();
   superuser = new pg.Pool({ connectionString: database.superuserUrl() });
   app = await buildApp({
@@ -215,10 +280,14 @@ beforeAll(async () => {
       relayDatabaseUrl: database.urlFor('relay'),
       jobsDatabaseUrl: database.urlFor('jobs'),
       secureCookies: false,
+      prometheusUrl: prometheus.url,
+      jaegerUrl: jaeger.url,
+      lokiUrl: loki.url,
     },
     overrides: [
       { provide: IDENTITY_PROVIDER, useValue: new FakeIdentityProvider() },
       { provide: GIT_PROVIDER, useValue: new FakeGitProvider() },
+      { provide: TELEMETRY_SINK, useValue: new FakeTelemetrySink() },
     ],
   });
   repositories = app.get(ENVIRONMENT_REPOSITORIES);
@@ -226,6 +295,7 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  await Promise.all([prometheus.stop(), jaeger.stop(), loki.stop()]);
   await app?.close();
   await superuser?.end();
   await database?.stop();
@@ -377,7 +447,7 @@ describe('deployments', () => {
       OTEL_SERVICE_NAME: 'billing-api',
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'http://collector.target.test:4318/v1/metrics',
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector.target.test:4318/v1/traces',
-      OTEL_RESOURCE_ATTRIBUTES: `dreamdevops.environment.id=${setup.test.id}`,
+      OTEL_RESOURCE_ATTRIBUTES: `dreamdevops.environment.id=${setup.test.id},dreamdevops.application.id=${setup.applicationId},dreamdevops.place.id=${placeId(setup.test.id, setup.applicationId)}`,
     });
     expect(parse(files.get('apps/billing-api/secrets.yaml')!).spec.dataFrom).toEqual([
       { extract: { key: `${setup.companyId}/${setup.test.id}/apps/billing-api` } },
@@ -691,3 +761,188 @@ describe('This machine', () => {
     expect(runtime.find('billing-api', 'trial')).toBeUndefined();
   });
 });
+
+describe('the telemetry gateway', () => {
+  const resource = (namespace: string, extra: object[] = []) => ({
+    resource: {
+      attributes: [
+        { key: 'service.name', value: { stringValue: 'billing-api' } },
+        { key: 'k8s.namespace.name', value: { stringValue: namespace } },
+        ...extra,
+      ],
+    },
+    scopeMetrics: [{ metrics: [{ name: 'process.memory.usage', gauge: { dataPoints: [{ asInt: '1000' }] } }] }],
+  });
+  const send = (token: string | undefined, body: object, kind = 'metrics') =>
+    request(app.getHttpServer())
+      .post(`/api/v1/telemetry/v1/${kind}`)
+      .set('content-type', 'application/json')
+      .set(token === undefined ? {} : { authorization: `Bearer ${token}` })
+      .send(JSON.stringify(body));
+
+  it("labels each application's telemetry with where it really comes from, and drops the cluster's own", async () => {
+    const setup = await setUp();
+    const sink = app.get<FakeTelemetrySink>(TELEMETRY_SINK);
+    const { body: configuration } = await setup.test.agent.call('get', '/configuration').expect(200);
+    expect(configuration.telemetry).toEqual({
+      endpoint: 'http://api.test/api/v1/telemetry',
+      token: expect.stringMatching(/^tt1\./),
+      expiresAt: expect.any(String),
+    });
+    const sent = sink.sent.length;
+
+    await send(configuration.telemetry.token, {
+      resourceMetrics: [
+        // An application pretending to be another environment, application and company.
+        resource('billing-api', [
+          { key: 'dreamdevops.environment.id', value: { stringValue: setup.production.id } },
+          { key: 'dreamdevops.company.id', value: { stringValue: 'someone-else' } },
+        ]),
+        resource('kube-system'),
+      ],
+    }).expect(200, {});
+
+    expect(sink.sent).toHaveLength(sent + 1);
+    const forwarded = sink.sent.at(-1)!;
+    expect(forwarded.kind).toBe('metrics');
+    const resources = forwarded.body['resourceMetrics'] as { resource: { attributes: { key: string; value: { stringValue: string } }[] } }[];
+    expect(resources).toHaveLength(1);
+    const attributes = Object.fromEntries(resources[0]!.resource.attributes.map((attribute) => [attribute.key, attribute.value.stringValue]));
+    expect(attributes).toEqual({
+      'service.name': 'billing-api',
+      'k8s.namespace.name': 'billing-api',
+      'dreamdevops.environment.id': setup.test.id,
+      'dreamdevops.application.id': setup.applicationId,
+      'dreamdevops.place.id': placeId(setup.test.id, setup.applicationId),
+      'dreamdevops.company.id': setup.companyId,
+    });
+  });
+
+  it('refuses a missing, wrong or forged token, and a disconnected target', async () => {
+    const setup = await setUp();
+    const { body: configuration } = await setup.test.agent.call('get', '/configuration').expect(200);
+    const body = { resourceMetrics: [resource('billing-api')] };
+
+    await send(undefined, body).expect(401);
+    await send('tt1.not-a-token', body).expect(401);
+    const [, target, expiry] = configuration.telemetry.token.split('.');
+    await send(`tt1.${target}.${expiry}.${'A'.repeat(43)}`, body).expect(401);
+    await send(configuration.telemetry.token, body, 'profiles').expect(404);
+    await send(configuration.telemetry.token, { something: 'else' }).expect(400);
+
+    await setup.operator.delete(`/api/v1/company/environments/${setup.test.id}/target`).expect(204);
+    await send(configuration.telemetry.token, body).expect(401);
+  });
+});
+
+/** Deploys a feature version to Staging, and has the agent report it healthy. */
+const running = async (setup: Setup) => {
+  const { body } = await setup.developer
+    .post(`/api/v1/company/applications/${setup.applicationId}/deployments`)
+    .send({ environment: setup.test.id, version: await setup.build('feature'), strategy: 'rolling' })
+    .expect(201);
+  await eventually(async () => expect((await deployment(setup.developer, body.id)).status).toBe('committed'));
+  await setup.test.agent.heartbeat([workload(body.id, 'Healthy')]);
+  return placeId(setup.test.id, setup.applicationId);
+};
+
+describe('monitoring', () => {
+  it('lists what runs, by application and environment, with its latest metrics and what it may use', async () => {
+    const setup = await setUp();
+    const place = await running(setup);
+
+    const { body } = await setup.developer.get('/api/v1/company/monitoring/places').expect(200);
+
+    expect(body).toMatchObject({ enabled: true, problem: null });
+    expect(body.environments).toEqual([
+      expect.objectContaining({
+        placeId: place,
+        environmentId: setup.test.id,
+        environmentName: 'Staging',
+        applicationId: setup.applicationId,
+        applicationName: 'Billing API',
+        provider: 'kubernetes',
+        limits: { cpus: 0.25, memoryBytes: 256 * 1024 * 1024 },
+        latest: expect.objectContaining({ cpu: 12.5, memory: 1 }),
+      }),
+    ]);
+    // Prometheus is asked about this company's place only.
+    const asked = prometheus.requests.map((recorded) => new URLSearchParams(String(recorded.body)).get('query') ?? '');
+    expect(asked.some((query) => query.includes(place))).toBe(true);
+  });
+
+  it('charts one place, reads its logs and traces, and never another company’s', async () => {
+    const setup = await setUp();
+    const other = await setUp();
+    const place = await running(setup);
+    const theirs = await running(other);
+    jaegerTraces = [
+      {
+        traceID: 'aaaabbbbccccddddeeeeffff00001111',
+        spans: [
+          { traceID: 'aaaabbbbccccddddeeeeffff00001111', spanID: '1111222233334444', operationName: 'GET /bills', references: [], startTime: Date.now() * 1000, duration: 5000, tags: [], processID: 'p1' },
+          { traceID: 'aaaabbbbccccddddeeeeffff00001111', spanID: '5555666677778888', operationName: 'GET /theirs', references: [], startTime: Date.now() * 1000, duration: 2000, tags: [], processID: 'p2' },
+        ],
+        processes: {
+          p1: { serviceName: 'billing-api', tags: [{ key: 'dreamdevops.place.id', type: 'string', value: place }] },
+          p2: { serviceName: 'billing-api', tags: [{ key: 'dreamdevops.place.id', type: 'string', value: theirs }] },
+        },
+      },
+    ];
+
+    const { body: chart } = await setup.developer.get(`/api/v1/company/monitoring/places/${place}?range=1h`).expect(200);
+    expect(chart.environment).toMatchObject({ placeId: place, environmentName: 'Staging' });
+    expect(chart.series.find((series: { key: string }) => series.key === 'memory').points).toHaveLength(1);
+    await setup.developer.get(`/api/v1/company/monitoring/places/${theirs}`).expect(404);
+
+    const { body: logs } = await setup.developer.get(`/api/v1/company/monitoring/places/${place}/logs`).expect(200);
+    expect(logs).toMatchObject({ placeId: place, running: true });
+    expect(logs.lines).toEqual([expect.objectContaining({ level: 'info', message: 'request completed' })]);
+
+    const { body: traces } = await setup.developer.get(`/api/v1/company/monitoring/places/${place}/traces`).expect(200);
+    expect(traces.traces.map((trace: { traceId: string; spans: number }) => [trace.traceId, trace.spans])).toEqual([
+      ['aaaabbbbccccddddeeeeffff00001111', 1],
+    ]);
+    const { body: trace } = await setup.developer.get('/api/v1/company/monitoring/traces/aaaabbbbccccddddeeeeffff00001111').expect(200);
+    expect(trace).toMatchObject({ hiddenSpans: 1, spans: [expect.objectContaining({ name: 'GET /bills', applicationName: 'Billing API' })] });
+  });
+});
+
+describe('alerts', () => {
+  it('watch one application in one environment, fire when its metric stays past the threshold, and email the members they name', async () => {
+    const setup = await setUp();
+    const place = await running(setup);
+    const { body: members } = await setup.operator.get('/api/v1/company/alerts/members').expect(200);
+    const operator = members.find((member: { displayName: string }) => member.displayName.startsWith('operator'))!;
+    const alert = {
+      name: 'High CPU',
+      environmentId: setup.test.id,
+      applicationId: setup.applicationId,
+      metric: 'cpu',
+      comparator: 'above',
+      threshold: 80,
+      forMinutes: 0,
+      recipients: [operator.userId],
+    };
+    await setup.developer.post('/api/v1/company/alerts').send(alert).expect(403);
+    await setup.operator.post('/api/v1/company/alerts').send({ ...alert, applicationId: randomUUID() }).expect(404);
+    const { body: created } = await setup.operator.post('/api/v1/company/alerts').send(alert).expect(201);
+    expect(created).toMatchObject({ placeId: place, environmentName: 'Staging', applicationName: 'Billing API', state: 'ok' });
+
+    cpuOf.set(place, '93');
+    try {
+      const summary = await runWithCompany(parseCompanyId(setup.companyId), () => app.get(AlertChecks).check());
+      expect(summary).toMatchObject({ checked: 1, triggered: 1 });
+    } finally {
+      cpuOf.delete(place);
+    }
+    const { body: alerts } = await setup.developer.get('/api/v1/company/alerts').expect(200);
+    expect(alerts.alerts[0]).toMatchObject({ state: 'firing', lastValue: 93 });
+    // The email goes out in the background, to the member's address.
+    const mailer = app.get<FakeMailer>(MAILER);
+    await eventually(() =>
+      expect(mailer.sent.some((message) => message.to === operator.email && message.subject.includes('High CPU'))).toBe(true),
+    );
+  });
+});
+

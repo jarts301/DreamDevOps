@@ -41,6 +41,18 @@ export const routes: Routes = [
         loadComponent: () => import('./features/environments/environments').then((module) => module.Environments),
       },
       {
+        path: 'monitoring',
+        title: 'Monitoring · DreamDevOps',
+        canActivate: [permissionGuard('dashboards:view')],
+        loadComponent: () => import('./features/monitoring/monitoring').then((module) => module.Monitoring),
+      },
+      {
+        path: 'alerts',
+        title: 'Alerts · DreamDevOps',
+        canActivate: [permissionGuard('dashboards:view')],
+        loadComponent: () => import('./features/alerts/alerts').then((module) => module.Alerts),
+      },
+      {
         path: 'environments/:id',
         title: 'Environment · DreamDevOps',
         canActivate: [companyGuard],

@@ -34,6 +34,8 @@ export const NOTIFIABLE_EVENTS: Readonly<Record<string, string>> = {
   DeploymentFailed: 'A deployment fails',
   DeploymentAborted: 'A deployment is aborted',
   EnvironmentSecretSet: "An environment's secret is set",
+  AlertTriggered: 'An alert starts firing',
+  AlertResolved: 'A firing alert is resolved',
 };
 
 const EDITION_NAMES: Readonly<Record<string, string>> = {
@@ -55,6 +57,11 @@ const ROLE_NAMES: Readonly<Record<string, string>> = {
 
 export function roleName(role: unknown): string {
   return typeof role === 'string' ? (ROLE_NAMES[role] ?? role) : 'a role';
+}
+
+/** Where an alert watches, such as 'Billing API in the production environment "Live"'. */
+function alertPlace(payload: Record<string, unknown>): string {
+  return `${String(payload.applicationName)} in the ${payload.production ? 'production ' : ''}environment "${String(payload.environmentName)}"`;
 }
 
 /** A one-line message about an event. Payloads hold IDs, not names or emails. */
@@ -134,6 +141,10 @@ export function summarize(event: DomainEvent, companyName: string): string {
         return `Deploying ${String(payload.applicationName)} ${String(payload.version)} to ${String(payload.environmentName)} was aborted.`;
       case 'EnvironmentSecretSet':
         return `The secret ${String(payload.name)} was set in ${String(payload.environmentName)}.`;
+      case 'AlertTriggered':
+        return `The alert "${String(payload.name)}" is firing: ${alertPlace(payload)} has ${String(payload.condition)}, at ${String(payload.value)}.`;
+      case 'AlertResolved':
+        return `The alert "${String(payload.name)}" is resolved: ${alertPlace(payload)} no longer has ${String(payload.condition)}, at ${String(payload.value)}.`;
       default:
         return `${event.eventType} happened.`;
     }

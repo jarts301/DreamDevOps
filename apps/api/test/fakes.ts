@@ -3,6 +3,7 @@ export * from './fakes/builds.ts';
 export * from './fakes/deployments.ts';
 export * from './fakes/environments.ts';
 export * from './fakes/identity-access.ts';
+export * from './fakes/monitoring.ts';
 export * from './fakes/notifications.ts';
 export * from './fakes/source-governance.ts';
 export * from './fakes/tenancy.ts';

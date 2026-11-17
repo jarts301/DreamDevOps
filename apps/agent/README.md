@@ -15,6 +15,7 @@ It's TypeScript with no dependencies; Node runs it directly.
    - A Kyverno policy lets into the managed namespaces only images signed with the environment's trusted key: the release key in production, the test key elsewhere.
    - A secret store reads the environment's secrets from OpenBao, with a two-hour token limited to them.
    - Each managed namespace gets the company's read-only registry login.
+   - Flux installs an OpenTelemetry collector on every node. It takes the applications' metrics and traces, reads their containers' logs, and sends everything to the platform's telemetry gateway with a two-hour telemetry token, kept in the Secret `dreamdevops-telemetry`. See [Monitoring](../api/src/monitoring/README.md#how-telemetry-gets-here).
 5. **Reports every 30 seconds:** which commit Flux applied, and each deployed workload's phase and ready pods. With the answer come the commands to run.
 
 It fetches its configuration again every 30 minutes, and before the secrets token runs out.

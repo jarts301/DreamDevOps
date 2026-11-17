@@ -14,6 +14,8 @@ export interface TargetConfigurationOptions {
   readonly openbaoUrl: string;
   readonly gitSshUrl: string;
   readonly gitKnownHosts: string;
+  /** Where agents reach the API, which takes their telemetry too. */
+  readonly agentApiUrl: string;
 }
 
 /** Everything a target needs to run its environment, as the agent fetches it. */
@@ -33,6 +35,8 @@ export interface TargetConfiguration {
   readonly git: { readonly url: string; readonly branch: string; readonly knownHosts: string };
   /** A short-lived token that can only read this environment's secrets. */
   readonly secrets: { readonly url: string; readonly mount: string; readonly path: string; readonly token: string; readonly expiresAt: string };
+  /** Where the target's collector sends its applications' metrics, traces and logs, and the token it sends them with. */
+  readonly telemetry: { readonly endpoint: string; readonly token: string; readonly expiresAt: string };
 }
 
 interface EnvironmentRow {
@@ -111,7 +115,7 @@ export class TargetConfigurations {
   }
 
   async configuration(accessToken: string | undefined): Promise<TargetConfiguration> {
-    const { companyId, environmentId } = await this.#agents.authenticate(accessToken);
+    const { companyId, environmentId, targetId } = await this.#agents.authenticate(accessToken);
     return runWithCompany(companyId, async () => {
       const repository = await this.repositoryOf(environmentId);
       const { environment, trustedKey } = await this.#database.transaction(async (tx) => {
@@ -124,6 +128,7 @@ export class TargetConfigurations {
       const pull = await this.#pullCredentials(repository.organization);
       const path = secretsPath(companyId, environmentId);
       const token = await this.#secrets.issueReadToken(`target-${environmentId}`, path);
+      const telemetry = this.#agents.issueTelemetryToken(targetId);
       return {
         environment: {
           id: environment.id,
@@ -145,6 +150,11 @@ export class TargetConfigurations {
           path,
           token: token.token,
           expiresAt: token.expiresAt.toISOString(),
+        },
+        telemetry: {
+          endpoint: `${this.#options.agentApiUrl.replace(/\/$/, '')}/api/v1/telemetry`,
+          token: telemetry.token,
+          expiresAt: telemetry.expiresAt.toISOString(),
         },
       };
     });

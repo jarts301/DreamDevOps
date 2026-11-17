@@ -7,6 +7,8 @@ export const SYSTEM_NAMESPACE = 'dreamdevops-system';
 export const MANAGED_LABEL = 'dreamdevops.io/managed';
 export const PULL_SECRET = 'registry-pull';
 export const GIT_SECRET = 'dreamdevops-git';
+/** The Secret the agent keeps the telemetry token in, which the collector reads from a file. */
+export const TELEMETRY_SECRET = 'dreamdevops-telemetry';
 const SECRETS_TOKEN = 'openbao-token';
 
 const secret = (name: string, namespace: string, data: Record<string, string>, type = 'Opaque'): KubernetesObject => ({
@@ -110,6 +112,8 @@ export function desiredObjects(configuration: Configuration, sshPrivateKey: stri
       },
     },
     secret(SECRETS_TOKEN, SYSTEM_NAMESPACE, { token: configuration.secrets.token }),
+    // The collector sends telemetry with this, and reads it again when it's renewed.
+    secret(TELEMETRY_SECRET, SYSTEM_NAMESPACE, { token: configuration.telemetry.token }),
     {
       apiVersion: 'external-secrets.io/v1',
       kind: 'ClusterSecretStore',

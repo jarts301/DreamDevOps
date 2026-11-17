@@ -145,6 +145,82 @@ services:
       timeout: 3s
       retries: 20
 
+  # Takes applications' metrics, traces and logs over OTLP, and passes each to its store:
+  # metrics to Prometheus, traces to Jaeger, logs to Loki. The API's telemetry gateway
+  # sends here what clusters send it, once it has checked and labelled it. Applications on
+  # This machine send here themselves, at http://host.docker.internal:4318.
+  otel-collector:
+    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.120.0}
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:${OTEL_COLLECTOR_PORT:-4318}:4318"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+      loki:
+        condition: service_healthy
+
+  # Keeps the metrics applications send: CPU, memory, requests and response times. The
+  # dashboard shows them under Monitoring, through the API. Its own page, at
+  # http://localhost:9090, can chart any of them, for every company, so it's for whoever
+  # runs this machine.
+  prometheus:
+    # The Prometheus project's own registry, where it publishes the same images as on
+    # Docker Hub (prom/prometheus), which limits and sometimes refuses anonymous pulls.
+    image: ${PROMETHEUS_IMAGE:-quay.io/prometheus/prometheus:v3.5.0}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${METRICS_RETENTION:-15d}
+      - --web.enable-otlp-receiver
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Keeps the traces applications send: each request as it passes through one application
+  # and on to the others it calls. Its own page, at http://localhost:16686, shows every
+  # company's, so it's for whoever runs this machine. Traces are kept in memory, so a
+  # restart clears them.
+  jaeger:
+    image: ${JAEGER_IMAGE:-quay.io/jaegertracing/jaeger:2.8.0}
+    restart: unless-stopped
+    environment:
+      JAEGER_LISTEN_HOST: 0.0.0.0
+    ports:
+      # Its page and query API, which the API reads traces from.
+      - "127.0.0.1:${JAEGER_PORT:-16686}:16686"
+
+  # Keeps the logs clusters send: every line their applications write. The API reads them
+  # back for the dashboard. It answers anyone who reaches it, for every company, so it
+  # listens only on this machine.
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.4.2}
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   # Creates the first Forgejo administrator, then exits. Safe to run repeatedly.
   forgejo-init:
     image: codeberg.org/forgejo/forgejo:15.0.11
@@ -419,6 +495,8 @@ services:
         condition: service_completed_successfully
       mailpit:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
 
   smoke-test:
     image: postgres:17.11-alpine
@@ -499,6 +577,8 @@ volumes:
   openbao-keys:
   k3s-data:
   k3s-config:
+  prometheus-data:
+  loki-data:
 
 networks:
   default:

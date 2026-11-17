@@ -8,6 +8,7 @@ const configuration: Configuration = {
   trustedKey: '-----BEGIN PUBLIC KEY-----\nrelease\n-----END PUBLIC KEY-----\n',
   git: { url: 'ssh://git@git.test:22/acme/environment-production.git', branch: 'main', knownHosts: '[git.test]:22 ssh-ed25519 AAAA' },
   secrets: { url: 'http://openbao.test', mount: 'dreamdevops', path: 'c-1/e-1', token: 'read-token', expiresAt: '2030-01-01T00:00:00Z' },
+  telemetry: { endpoint: 'http://api.test/api/v1/telemetry', token: 'tt1.telemetry-token', expiresAt: '2030-01-01T00:00:00Z' },
 };
 
 const objects = () => desiredObjects(configuration, 'ssh-private-key');
@@ -55,5 +56,13 @@ describe('the cluster set-up', () => {
     expect(secret).toMatchObject({ type: 'kubernetes.io/dockerconfigjson', metadata: { namespace: 'billing' } });
     expect(Object.keys(config.auths)).toEqual(['registry.test']);
     expect(Buffer.from(config.auths['registry.test'].auth, 'base64').toString()).toBe('acme-pull:pull-token');
+  });
+
+  it('keeps the telemetry token where the collector reads it', () => {
+    expect(byName('dreamdevops-telemetry')).toMatchObject({
+      kind: 'Secret',
+      metadata: { namespace: 'dreamdevops-system' },
+      stringData: { token: 'tt1.telemetry-token' },
+    });
   });
 });

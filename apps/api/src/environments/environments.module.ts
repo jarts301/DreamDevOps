@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { SigningKeys } from '../builds/application/signing-keys.ts';
@@ -47,7 +48,12 @@ export class EnvironmentsModule {
             {
               provide: TargetAgents,
               useFactory: (database: TenantDatabase) =>
-                new TargetAgents(database, { agentApiUrl: config.agentApiUrl, lostAfterSeconds: config.targetLostAfterSeconds }),
+                new TargetAgents(database, {
+                  agentApiUrl: config.agentApiUrl,
+                  lostAfterSeconds: config.targetLostAfterSeconds,
+                  // Its own key, made from the signing secret, so a telemetry token can never sign anything else.
+                  telemetryKey: createHmac('sha256', config.signingKeySecret).update('telemetry-tokens').digest('base64'),
+                }),
               inject: [TenantDatabase],
             },
             {
@@ -98,6 +104,7 @@ export class EnvironmentsModule {
                     openbaoUrl: config.targetOpenbaoUrl,
                     gitSshUrl: config.targetGitSshUrl,
                     gitKnownHosts: config.targetGitKnownHosts,
+                    agentApiUrl: config.agentApiUrl,
                   },
                 ),
               inject: [TenantDatabase, COMPANY_DIRECTORY, TargetAgents, ENVIRONMENT_REPOSITORIES, PULL_ACCOUNTS, SECRET_STORE, SigningKeys],

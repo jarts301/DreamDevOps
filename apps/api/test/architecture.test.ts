@@ -84,7 +84,15 @@ const CONTEXTS: Readonly<Record<string, Context>> = {
       'environments.module.ts',
     ],
   },
-  deployments: { schemas: ['deployments'], published: ['deployments.module.ts'] },
+  deployments: {
+    schemas: ['deployments'],
+    published: ['application/deployments.ts', 'deployments.module.ts'],
+  },
+  alerts: { schemas: ['alerts'], published: ['domain/events.ts', 'alerts.module.ts'] },
+  monitoring: {
+    schemas: [],
+    published: ['application/latest-metrics.ts', 'application/running-places.ts', 'domain/metrics.ts', 'monitoring.module.ts'],
+  },
 };
 
 /** Schemas every context may use: the shared kernel's outbox. */

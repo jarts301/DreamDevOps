@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, type KeyObject, randomBytes, timingSafeEqual, verify } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, type KeyObject, randomBytes, timingSafeEqual, verify } from 'node:crypto';
 import { EnvironmentError } from './errors.ts';
 
 /** A registration token works once, within an hour, so it can sit in a command for a while. */
@@ -146,4 +146,38 @@ export function parseVersionLabel(value: unknown): string | null {
     throw new EnvironmentError('invalid', 'Versions are up to 40 letters, digits, dots, plus signs, underscores and hyphens.');
   }
   return value;
+}
+
+/** How long a target's telemetry token lasts. The agent fetches a new one with its configuration, every half hour. */
+export const TELEMETRY_TOKEN_HOURS = 2;
+const TELEMETRY_TOKEN = /^tt1\.([0-9a-f-]{36})\.(\d{10})\.([A-Za-z0-9_-]{43})$/;
+
+/**
+ * A token a target's collector sends its telemetry with: the target, an expiry, and a
+ * signature with the platform's key. It can only send telemetry, so it's checked without
+ * a lookup of its own, but the target must still be connected each time it's used.
+ */
+export function newTelemetryToken(key: string, targetId: string, now = new Date()): { token: string; expiresAt: Date } {
+  const expiresAt = new Date(now.getTime() + TELEMETRY_TOKEN_HOURS * 3_600_000);
+  const expiry = String(Math.floor(expiresAt.getTime() / 1000));
+  return { token: `tt1.${targetId}.${expiry}.${telemetrySignature(key, targetId, expiry)}`, expiresAt };
+}
+
+/** The target a telemetry token names, if it's the platform's and hasn't expired. */
+export function verifyTelemetryToken(key: string, token: string | undefined, now = new Date()): string | null {
+  const match = TELEMETRY_TOKEN.exec(token ?? '');
+  if (match === null) {
+    return null;
+  }
+  const [, targetId, expiry, signature] = match;
+  const expected = Buffer.from(telemetrySignature(key, targetId!, expiry!));
+  const given = Buffer.from(signature!);
+  if (given.length !== expected.length || !timingSafeEqual(given, expected) || Number(expiry) * 1000 < now.getTime()) {
+    return null;
+  }
+  return targetId!;
+}
+
+function telemetrySignature(key: string, targetId: string, expiry: string): string {
+  return createHmac('sha256', key).update(`dreamdevops-telemetry\n${targetId}\n${expiry}`).digest('base64url');
 }

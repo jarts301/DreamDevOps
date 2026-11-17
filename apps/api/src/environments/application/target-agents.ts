@@ -8,9 +8,11 @@ import {
   newToken,
   parsePublicKey,
   parseToken,
+  newTelemetryToken,
   parseVersionLabel,
   secretMatches,
   verifyAssertion,
+  verifyTelemetryToken,
 } from '../domain/agent-identity.ts';
 import { acceptedImageKinds, type EnvironmentKind } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
@@ -23,6 +25,8 @@ export interface TargetAgentsOptions {
   readonly agentApiUrl: string;
   /** A connected target not heard from for this long counts as lost. */
   readonly lostAfterSeconds: number;
+  /** The key telemetry tokens are signed with. */
+  readonly telemetryKey: string;
 }
 
 export interface Registration {
@@ -218,6 +222,37 @@ export class TargetAgents {
       throw refused();
     }
     return { companyId, targetId: target.id, environmentId: target.environment_id };
+  }
+
+  /** A token the target's collector sends its telemetry with. */
+  issueTelemetryToken(targetId: string): { token: string; expiresAt: Date } {
+    return newTelemetryToken(this.#options.telemetryKey, targetId);
+  }
+
+  /**
+   * Checks a telemetry token, and says which target and environment the telemetry is
+   * from. The target must still be connected: disconnecting it stops its telemetry at once.
+   */
+  async authenticateTelemetry(token: string | undefined): Promise<{ companyId: CompanyId; targetId: string; environmentId: string }> {
+    const refused = () => new EnvironmentError('unauthorized', 'This telemetry token is not valid.');
+    const targetId = verifyTelemetryToken(this.#options.telemetryKey, token);
+    if (targetId === null) {
+      throw refused();
+    }
+    const companyId = await this.#companyOf(targetId, refused);
+    const target = await runWithCompany(companyId, () =>
+      this.#database.transaction(async (tx) => {
+        const { rows } = await tx.query<{ environment_id: string; status: TargetStatus }>(
+          'SELECT environment_id, status FROM environments.targets WHERE id = $1',
+          [targetId],
+        );
+        return rows[0] ?? null;
+      }),
+    );
+    if (target === null || (target.status !== 'connected' && target.status !== 'lost')) {
+      throw refused();
+    }
+    return { companyId, targetId, environmentId: target.environment_id };
   }
 
   /** The agent reports in. A lost target that reports in is connected again. */

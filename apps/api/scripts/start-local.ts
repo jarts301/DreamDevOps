@@ -71,6 +71,13 @@ process.env.TARGET_OPENBAO_URL ??= 'http://platform.internal:8200';
 process.env.TARGET_REGISTRY_HOST ??= '10.213.90.10:3000';
 process.env.TARGET_GIT_SSH_URL ??= 'ssh://git@platform.internal:2222';
 process.env.TARGET_GIT_KNOWN_HOSTS ??= forgejoKnownHosts();
+// Monitoring: the platform's collector takes telemetry, and Prometheus, Jaeger and Loki keep it.
+process.env.TELEMETRY_COLLECTOR_URL ??= `http://localhost:${process.env.OTEL_COLLECTOR_PORT ?? '4318'}`;
+process.env.PROMETHEUS_URL ??= `http://localhost:${process.env.PROMETHEUS_PORT ?? '9090'}`;
+process.env.JAEGER_URL ??= `http://localhost:${process.env.JAEGER_PORT ?? '16686'}`;
+process.env.LOKI_URL ??= `http://localhost:${process.env.LOKI_PORT ?? '3100'}`;
+// Applications on This machine reach the collector through Docker's name for this machine.
+process.env.LOCAL_OTLP_ENDPOINT ??= `http://host.docker.internal:${process.env.OTEL_COLLECTOR_PORT ?? '4318'}`;
 // The demo company and its users, one for each role. See infra/local/README.md.
 process.env.DEMO_DATA ??= 'true';
 

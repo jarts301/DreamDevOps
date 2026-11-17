@@ -138,7 +138,10 @@ class Agent {
     // The tools come first. Until Flux has installed them, their own kinds don't exist yet,
     // so those objects wait for a later heartbeat; the agent keeps reporting meanwhile.
     const objects = [
-      ...componentObjects({ insecureRegistry: process.env.INSECURE_REGISTRY === 'true' }),
+      ...componentObjects({
+        insecureRegistry: process.env.INSECURE_REGISTRY === 'true',
+        telemetryEndpoint: configuration.telemetry.endpoint,
+      }),
       ...desiredObjects(configuration, sshKey),
     ];
     const waiting: string[] = [];

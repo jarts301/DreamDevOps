@@ -74,6 +74,7 @@ export class DeploymentsModule {
                   targetRegistryHost: settings.config.targetRegistryHost,
                   targetOtlpEndpoint: settings.config.targetOtlpEndpoint,
                   healthTimeoutMs: settings.config.deployHealthTimeoutSeconds * 1000,
+                  localOtlpEndpoint: settings.config.localOtlpEndpoint,
                 },
               ),
             inject: [
@@ -113,7 +114,8 @@ export class DeploymentsModule {
         ],
         settings.overrides,
       ),
-      exports: [DeploymentsSubscriptions],
+      // Monitoring asks what runs, and reads the logs of what runs on This machine.
+      exports: [Deployments, DeploymentsSubscriptions],
     }));
   }
 }

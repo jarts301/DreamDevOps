@@ -10,6 +10,10 @@ Runs the shared tools DreamDevOps needs on your own machine, using Docker Deskto
 | Mailpit | Catches every email and shows it in a web page. Nothing is sent out. | <http://localhost:8025>, SMTP on `localhost:1025` |
 | OpenBao | Keeps each environment's secrets | <http://localhost:8200> |
 | k3s target | A Kubernetes cluster to deploy to, started only on request | `localhost:6443` |
+| OpenTelemetry collector | Takes the metrics, traces and logs applications send over OTLP, and passes each to its store | OTLP/HTTP on `localhost:4318` |
+| Prometheus | Keeps metrics, which the dashboard shows under **Monitoring**. Its own page charts any of them. | <http://localhost:9090> |
+| Jaeger | Keeps traces. Its own page searches all of them. | <http://localhost:16686> |
+| Loki | Keeps the log lines of applications in clusters | `localhost:3100` |
 | CI runners | Run Forgejo Actions jobs, each in a new unprivileged, short-lived container on their own Docker engine, which can't reach the other tools | Not reachable from outside |
 
 All ports bind to `127.0.0.1`, so other machines can't reach them. Every password in `.env.example` is a fake dummy value, starting with `fake-dummy-`, and must never be used on a server. The tools keep the passwords they started with, so changing one in `.env` after the first run means changing it inside the tool too, or resetting with `docker compose down -v`, which deletes all local data.
@@ -110,6 +114,17 @@ To connect it:
 
 The target shows as connected within a minute. Installing Argo Rollouts, Kyverno and the External Secrets Operator takes a few minutes more. To look inside, run `docker compose exec k3s kubectl get pods -A`. To start again from scratch, run `docker compose --profile target down` and delete the `k3s-data` and `k3s-config` volumes.
 
+## Telemetry
+
+Every application's metrics, traces and logs reach the platform's OpenTelemetry collector, whose settings are in `otel-collector/config.yaml`. It sends metrics to Prometheus, traces to Jaeger and logs to Loki.
+
+- **From the local target:** the agent installs a collector on the cluster, which sends everything to the API's telemetry gateway with the target's token. The API labels it by application and environment, and forwards it here.
+- **From This machine:** containers send straight to the collector, at `host.docker.internal:4318`, which is this machine as they see it.
+
+Each store promotes the place, environment, application and company attributes to labels: `prometheus/prometheus.yml` and `loki/config.yaml`. Prometheus keeps metrics for 15 days, or `METRICS_RETENTION` in `.env`, and Loki keeps logs for 15 days. Jaeger keeps traces in memory, so restarting it clears them. Each image can change in `.env`: `OTEL_COLLECTOR_IMAGE`, `PROMETHEUS_IMAGE`, `JAEGER_IMAGE` and `LOKI_IMAGE`.
+
+These pages show every company's data, so keep them to yourself. Backups don't include telemetry. See [Monitoring](../../apps/api/src/monitoring/README.md).
+
 ## Everyday commands
 
 | Task | Command |
@@ -162,4 +177,4 @@ A backup taken while Forgejo is receiving pushes may catch a repository mid-writ
 
 ## Not included yet
 
-This is the local version of the Platform infrastructure module. The proposal's server setup, k3s and TLS are not part of it. Other tools, such as OpenBao and the monitoring stack, get added with the modules that use them.
+This is the local version of the Platform infrastructure module. The proposal's server setup, k3s and TLS are not part of it. Other tools get added with the modules that use them.

@@ -19,6 +19,8 @@ export interface Configuration {
   readonly trustedKey: string;
   readonly git: { readonly url: string; readonly branch: string; readonly knownHosts: string };
   readonly secrets: { readonly url: string; readonly mount: string; readonly path: string; readonly token: string; readonly expiresAt: string };
+  /** Where the collector sends applications' metrics, traces and logs, and the token it sends them with. */
+  readonly telemetry: { readonly endpoint: string; readonly token: string; readonly expiresAt: string };
 }
 
 /** How one deployed workload is doing, as the agent sees it in the cluster. */

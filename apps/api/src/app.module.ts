@@ -1,6 +1,7 @@
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { AlertsModule } from './alerts/alerts.module.ts';
 import { AuditModule } from './audit/audit.module.ts';
 import { BackgroundModule } from './background/background.module.ts';
 import { BlueprintsModule } from './blueprints/blueprints.module.ts';
@@ -21,6 +22,7 @@ import { TenantContextInterceptor } from './http/tenant-context.interceptor.ts';
 import { AuthController } from './identity-access/http/auth.controller.ts';
 import { InvitationsController } from './identity-access/http/company-access.controller.ts';
 import { IdentityAccessModule } from './identity-access/identity-access.module.ts';
+import { MonitoringModule } from './monitoring/monitoring.module.ts';
 import { NotificationsModule } from './notifications/notifications.module.ts';
 import type { ModuleSettings } from './platform/module-settings.ts';
 import { tokenOf } from './platform/module-settings.ts';
@@ -72,6 +74,8 @@ export class AppModule {
       ReleasesModule.register(settings),
       EnvironmentsModule.register(settings),
       DeploymentsModule.register(settings),
+      MonitoringModule.register(settings),
+      AlertsModule.register(settings),
       BackgroundModule.register(settings),
       // Local only: the demo company and its users.
       DemoModule.register(settings),

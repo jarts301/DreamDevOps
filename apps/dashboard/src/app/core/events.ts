@@ -11,6 +11,30 @@ function because(reason: unknown): string {
   return typeof reason === 'string' && reason !== '' ? `, because "${reason}"` : '';
 }
 
+/** Where an alert watches, such as 'Billing API in the production environment "Live"'. */
+function alertPlace(payload: Readonly<Record<string, unknown>>): string {
+  return `${String(payload['applicationName'])} in the ${payload['production'] ? 'production ' : ''}environment "${String(payload['environmentName'])}"`;
+}
+
+const ALERT_CHANGES: Readonly<Record<string, string>> = {
+  name: 'its name',
+  threshold: 'its threshold',
+  forMinutes: 'how long it waits',
+  recipients: 'whom it emails',
+};
+
+/** What changed about an alert, such as ": its threshold and whom it emails", or that it was turned on or off. */
+function alertChanges(payload: Readonly<Record<string, unknown>>): string {
+  const changes = Array.isArray(payload['changes']) ? (payload['changes'] as unknown[]) : [];
+  const parts = changes.flatMap((change) => (typeof change === 'string' && ALERT_CHANGES[change] ? [ALERT_CHANGES[change]] : []));
+  const switched = changes.includes('enabled') ? (payload['enabled'] ? ', and turned it on' : ', and turned it off') : '';
+  if (parts.length === 0) {
+    return switched.replace(', and', ':');
+  }
+  const listed = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+  return `: ${listed}${switched}`;
+}
+
 /** Describes a recorded event for people. Payloads hold IDs and roles, not names or emails. */
 export function describeEvent(eventType: string, payload: Readonly<Record<string, unknown>>): string {
   const role = typeof payload['role'] === 'string' ? roleName(payload['role']) : 'a role';
@@ -138,6 +162,16 @@ export function describeEvent(eventType: string, payload: Readonly<Record<string
       return `Deploying ${String(payload['applicationName'])} ${String(payload['version'])} to "${String(payload['environmentName'])}" failed: ${String(payload['reason'] ?? 'unknown reason')}`;
     case 'DeploymentAborted':
       return `Aborted deploying ${String(payload['applicationName'])} ${String(payload['version'])} to "${String(payload['environmentName'])}"`;
+    case 'AlertCreated':
+      return `Created the alert "${String(payload['name'])}" on ${String(payload['condition'])} for ${alertPlace(payload)}`;
+    case 'AlertUpdated':
+      return `Changed the alert "${String(payload['name'])}" for ${alertPlace(payload)}${alertChanges(payload)}`;
+    case 'AlertDeleted':
+      return `Deleted the alert "${String(payload['name'])}" for ${alertPlace(payload)}`;
+    case 'AlertTriggered':
+      return `The alert "${String(payload['name'])}" fired: ${String(payload['condition'])} for ${alertPlace(payload)}, at ${String(payload['value'])}`;
+    case 'AlertResolved':
+      return `The alert "${String(payload['name'])}" was resolved: ${String(payload['condition'])} no longer holds for ${alertPlace(payload)}, at ${String(payload['value'])}`;
     case 'CompanyEditionChanged':
       return `Moved the company from the ${editionName(payload['previousEdition'])} to the ${editionName(payload['edition'])} Edition`;
     case 'UserInvited':

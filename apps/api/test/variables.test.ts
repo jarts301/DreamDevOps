@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ENVIRONMENT_ATTRIBUTE, withTelemetry } from '../src/environments/domain/telemetry.ts';
+import { ENVIRONMENT_ATTRIBUTE, placeId, withTelemetry } from '../src/environments/domain/telemetry.ts';
 import {
   assertWithinLimits,
   MAX_TOTAL_BYTES,
@@ -61,11 +61,13 @@ describe('variable values', () => {
 
   const targets = (metricsEndpoint: string | null, tracesEndpoint: string | null) => ({
     environmentId: 'env-1',
+    applicationId: 'app-1',
     serviceName: 'billing-api',
     metricsEndpoint,
     tracesEndpoint,
   });
   const METRICS = 'http://host.docker.internal:9090/api/v1/otlp/v1/metrics';
+  const PLACE = `dreamdevops.environment.id=env-1,dreamdevops.application.id=app-1,dreamdevops.place.id=${placeId('env-1', 'app-1')}`;
   const TRACES = 'http://host.docker.internal:4318/v1/traces';
 
   it('tell the container where to send its metrics and traces, and which environment and service it is', () => {
@@ -75,7 +77,7 @@ describe('variable values', () => {
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: METRICS,
       OTEL_METRIC_EXPORT_INTERVAL: '15000',
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: TRACES,
-      OTEL_RESOURCE_ATTRIBUTES: 'dreamdevops.environment.id=env-1',
+      OTEL_RESOURCE_ATTRIBUTES: PLACE,
     });
     expect(ENVIRONMENT_ATTRIBUTE).toBe('dreamdevops.environment.id');
   });
@@ -85,12 +87,12 @@ describe('variable values', () => {
       OTEL_SERVICE_NAME: 'billing-api',
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: METRICS,
       OTEL_METRIC_EXPORT_INTERVAL: '15000',
-      OTEL_RESOURCE_ATTRIBUTES: 'dreamdevops.environment.id=env-1',
+      OTEL_RESOURCE_ATTRIBUTES: PLACE,
     });
     expect(withTelemetry({}, targets(null, TRACES))).toEqual({
       OTEL_SERVICE_NAME: 'billing-api',
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: TRACES,
-      OTEL_RESOURCE_ATTRIBUTES: 'dreamdevops.environment.id=env-1',
+      OTEL_RESOURCE_ATTRIBUTES: PLACE,
     });
   });
 
@@ -109,8 +111,17 @@ describe('variable values', () => {
 
     expect(withTelemetry(own, targets(METRICS, TRACES))).toEqual({
       ...own,
-      // The last one counts, so the environment's own ID wins.
-      OTEL_RESOURCE_ATTRIBUTES: 'team=billing,dreamdevops.environment.id=someone-else,dreamdevops.environment.id=env-1',
+      // The last ones count, so the platform's own IDs win.
+      OTEL_RESOURCE_ATTRIBUTES: `team=billing,dreamdevops.environment.id=someone-else,${PLACE}`,
     });
+  });
+});
+
+describe('places', () => {
+  it('give one application in one environment the same UUID every time', () => {
+    const id = placeId('0b5f8a2c-1d3e-4f5a-8b9c-0d1e2f3a4b5c', '1c6f9b3d-2e4f-4a6b-9c0d-1e2f3a4b5c6d');
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(placeId('0B5F8A2C-1D3E-4F5A-8B9C-0D1E2F3A4B5C', '1c6f9b3d-2e4f-4a6b-9c0d-1e2f3a4b5c6d')).toBe(id);
+    expect(placeId('1c6f9b3d-2e4f-4a6b-9c0d-1e2f3a4b5c6d', '0b5f8a2c-1d3e-4f5a-8b9c-0d1e2f3a4b5c')).not.toBe(id);
   });
 });

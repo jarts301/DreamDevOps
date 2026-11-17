@@ -1,0 +1,40 @@
+# The platform's collector. It takes OTLP over HTTP, as JSON or protobuf, from the API's
+# telemetry gateway and from applications on This machine, and passes each kind to its
+# store. It labels nothing: where telemetry comes from is the gateway's to say, and
+# This machine's containers are told by the platform.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Prometheus' own OTLP receiver, at /api/v1/otlp/v1/metrics.
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  # Loki's own OTLP receiver, at /otlp/v1/logs.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]

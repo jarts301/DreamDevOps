@@ -16,7 +16,7 @@ import type { EnvironmentRepositories, FileChange } from '../../environments/app
 import type { TargetConfigurations } from '../../environments/application/target-configuration.ts';
 import type { Principal } from '../../identity-access/domain/access.ts';
 import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
-import { type HostRuntime, type HostTarget, PermanentDeploymentError } from './ports.ts';
+import { type HostRuntime, type HostTarget, type LogEntry, PermanentDeploymentError } from './ports.ts';
 import {
   advance,
   assertAccepts,
@@ -80,6 +80,10 @@ export interface RunningVersion {
   readonly limits: ResourceLimits | null;
   /** When it started running. */
   readonly since: string | null;
+  /** What runs the environment, such as kubernetes or local for This machine. */
+  readonly provider: string | null;
+  /** Where people reach it, when the platform knows, such as on This machine. */
+  readonly address: string | null;
   /** The environment's values changed since it started, so Apply now would start it with the new ones. */
   readonly settingsChanged: boolean;
 }
@@ -107,6 +111,8 @@ export interface DeploymentsOptions {
   readonly targetOtlpEndpoint: string | null;
   /** How long a new version on This machine has to become healthy before it's rolled back. */
   readonly healthTimeoutMs: number;
+  /** Where applications on This machine send metrics and traces over OTLP/HTTP, or null for nowhere. */
+  readonly localOtlpEndpoint: string | null;
 }
 
 /** A deployment as its own table has it. */
@@ -140,11 +146,17 @@ interface Row extends DeploymentRow {
   application_slug: string;
   environment_name: string;
   environment_kind: 'test' | 'production';
+  environment_provider: string | null;
   build_kind: string;
   image_tag: string;
   build_version: string | null;
   image_ref: string | null;
   digest: string | null;
+}
+
+/** An application's container on This machine: unique there, as other companies' environments may share a short name. */
+function containerName(applicationSlug: string, environment: { readonly id: string; readonly slug: string }): string {
+  return `dreamdevops-${applicationSlug}-${environment.slug}-${environment.id.replaceAll('-', '').slice(0, 12)}`;
 }
 
 /** The environment repository's root list of the applications it runs. */
@@ -386,6 +398,8 @@ export class Deployments {
       strategy: row.strategy,
       limits: row.limits,
       since: row.finished_at?.toISOString() ?? null,
+      provider: row.environment_provider,
+      address: row.progress.address ?? null,
       settingsChanged: row.config_hash !== null && row.config_hash !== hashes[index],
     }));
   }
@@ -739,7 +753,7 @@ export class Deployments {
   async #runLocal(deployment: Row, environment: EnvironmentView): Promise<void> {
     const target: HostTarget = { id: environment.target!.id, settings: environment.target!.settings };
     // Unique on the machine: environments of other companies may share a short name.
-    const name = `dreamdevops-${deployment.application_slug}-${environment.slug}-${environment.id.replaceAll('-', '').slice(0, 12)}`;
+    const name = containerName(deployment.application_slug, environment);
     const network = `${name}-net`;
     const step = (message: string, progress: Progress = { applied: false }) =>
       this.#database.transaction((tx) =>
@@ -792,12 +806,13 @@ export class Deployments {
           'dreamdevops.version': deployment.build_version ?? deployment.image_tag,
         },
         environment: {
-          // Telemetry for This machine comes with the platform's collector, in a later version.
+          // On This machine, applications send straight to the platform's collector.
           ...withTelemetry(settings.config.variables, {
             environmentId: deployment.environment_id,
+            applicationId: deployment.application_id,
             serviceName: deployment.application_slug,
-            metricsEndpoint: null,
-            tracesEndpoint: null,
+            metricsEndpoint: this.#options.localOtlpEndpoint === null ? null : `${this.#options.localOtlpEndpoint}/v1/metrics`,
+            tracesEndpoint: this.#options.localOtlpEndpoint === null ? null : `${this.#options.localOtlpEndpoint}/v1/traces`,
           }),
           ...secrets,
           PORT: String(settings.runtime.port),
@@ -839,6 +854,24 @@ export class Deployments {
       // A temporary problem, such as Docker restarting: the job runs it again from the start.
       throw error;
     }
+  }
+
+  /**
+   * The latest lines an application on This machine wrote, or null when it doesn't run on
+   * This machine. Clusters' logs go to the platform's log store instead.
+   */
+  async localLogs(
+    environmentId: string,
+    applicationId: string,
+    options: { readonly since: Date; readonly limit: number },
+  ): Promise<LogEntry[] | null> {
+    const environment = await this.#environments.get(environmentId);
+    if (environment.target?.provider !== LOCAL_PROVIDER) {
+      return null;
+    }
+    const application = await this.#applications.get(applicationId);
+    const target: HostTarget = { id: environment.target.id, settings: environment.target.settings };
+    return this.#runtime.logs(target, containerName(application.slug, environment), options);
   }
 
   /** Records how a run on This machine ended, as the agent's reports do for clusters. */
@@ -920,6 +953,7 @@ export class Deployments {
       // The standard OpenTelemetry settings, so the application's metrics and traces reach the platform.
       variables: withTelemetry(config.variables, {
         environmentId: deployment.environment_id,
+        applicationId: deployment.application_id,
         serviceName: deployment.application_slug,
         metricsEndpoint: this.#options.targetOtlpEndpoint === null ? null : `${this.#options.targetOtlpEndpoint}/v1/metrics`,
         tracesEndpoint: this.#options.targetOtlpEndpoint === null ? null : `${this.#options.targetOtlpEndpoint}/v1/traces`,
@@ -1004,6 +1038,7 @@ export class Deployments {
         application_slug: application.slug,
         environment_name: environment.name,
         environment_kind: environment.kind,
+        environment_provider: environment.target?.provider ?? null,
         build_kind: build.kind,
         image_tag: build.tag,
         build_version: build.version,

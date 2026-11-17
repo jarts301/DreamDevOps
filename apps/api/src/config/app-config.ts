@@ -67,6 +67,14 @@ export interface AppConfig {
   readonly localHostingBindAddress: string;
   /** How long a new version on this machine has to become healthy before it's rolled back. */
   readonly deployHealthTimeoutSeconds: number;
+  /** Where applications on This machine send metrics and traces over OTLP/HTTP, as they reach it. Null: nowhere. */
+  readonly localOtlpEndpoint: string | null;
+  /** The platform's OpenTelemetry collector, where the telemetry gateway forwards what targets send. Null: kept nowhere. */
+  readonly telemetryCollectorUrl: string | null;
+  /** Where the API reads metrics, traces and logs. Null: the dashboard says they aren't set up. */
+  readonly prometheusUrl: string | null;
+  readonly jaegerUrl: string | null;
+  readonly lokiUrl: string | null;
   /** A Forgejo administrator, used only to create each company's read-only pull account. */
   readonly forgejoAdminUsername: string;
   readonly forgejoAdminPassword: string;
@@ -78,8 +86,8 @@ export interface AppConfig {
   readonly targetOpenbaoUrl: string;
   readonly targetRegistryHost: string;
   /**
-   * Where applications on targets send their metrics and traces over OTLP/HTTP, such as
-   * the collector the agent installs. Null: they aren't told to send any.
+   * Where applications on targets send their metrics and traces over OTLP/HTTP: by
+   * default, the collector the agent installs. Null: they aren't told to send any.
    */
   readonly targetOtlpEndpoint: string | null;
   /** The SSH address targets clone their environment repository from, such as ssh://git@git.example.com:22. */
@@ -221,13 +229,24 @@ export function loadConfig(env: Environment): AppConfig {
     localHosting,
     localHostingBindAddress: env.LOCAL_HOSTING_BIND_ADDRESS || '127.0.0.1',
     deployHealthTimeoutSeconds: integer(env, 'DEPLOY_HEALTH_TIMEOUT_SECONDS', 120),
+    localOtlpEndpoint: env.LOCAL_OTLP_ENDPOINT ? url(env, 'LOCAL_OTLP_ENDPOINT') : null,
+    telemetryCollectorUrl: env.TELEMETRY_COLLECTOR_URL ? url(env, 'TELEMETRY_COLLECTOR_URL') : null,
+    prometheusUrl: env.PROMETHEUS_URL ? url(env, 'PROMETHEUS_URL') : null,
+    jaegerUrl: env.JAEGER_URL ? url(env, 'JAEGER_URL') : null,
+    lokiUrl: env.LOKI_URL ? url(env, 'LOKI_URL') : null,
     forgejoAdminUsername: required(env, 'FORGEJO_ADMIN_USERNAME'),
     forgejoAdminPassword: required(env, 'FORGEJO_ADMIN_PASSWORD'),
     openbaoUrl,
     openbaoToken,
     targetOpenbaoUrl: env.TARGET_OPENBAO_URL ? url(env, 'TARGET_OPENBAO_URL') : openbaoUrl,
     targetRegistryHost: env.TARGET_REGISTRY_HOST || new URL(forgejoPublicUrl).host,
-    targetOtlpEndpoint: env.TARGET_OTLP_ENDPOINT ? url(env, 'TARGET_OTLP_ENDPOINT') : null,
+    // The collector the agent installs in every cluster, unless set otherwise. "off" sends nothing.
+    targetOtlpEndpoint:
+      env.TARGET_OTLP_ENDPOINT === 'off'
+        ? null
+        : env.TARGET_OTLP_ENDPOINT
+          ? url(env, 'TARGET_OTLP_ENDPOINT')
+          : 'http://dreamdevops-otel-collector.dreamdevops-system:4318',
     targetGitSshUrl: env.TARGET_GIT_SSH_URL || `ssh://git@${new URL(forgejoPublicUrl).hostname}:22`,
     targetGitKnownHosts: env.TARGET_GIT_KNOWN_HOSTS ?? '',
     provisioningMaxAttempts: integer(env, 'PROVISIONING_MAX_ATTEMPTS', 5),

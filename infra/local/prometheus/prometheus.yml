@@ -1,0 +1,18 @@
+# Prometheus keeps the metrics applications send over OTLP, through the platform's
+# collector. Nothing is scraped: applications push. The API reads them back for the
+# dashboard's Monitoring page.
+
+otlp:
+  # Every metric carries where it comes from in these attributes, which the platform
+  # sets. As labels, the API can ask for one place's metrics: one application in one
+  # environment. Prometheus names them dreamdevops_place_id and so on.
+  promote_resource_attributes:
+    - dreamdevops.place.id
+    - dreamdevops.environment.id
+    - dreamdevops.application.id
+    - dreamdevops.company.id
+
+storage:
+  tsdb:
+    # Applications send when they can, so some samples arrive late.
+    out_of_order_time_window: 30m
