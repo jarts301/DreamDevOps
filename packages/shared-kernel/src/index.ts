@@ -8,7 +8,10 @@ export { createDomainEvent, InvalidDomainEventError } from './domain/domain-even
 export type { DomainEvent, NewDomainEvent } from './domain/domain-event.ts';
 export { AggregateRoot } from './domain/aggregate-root.ts';
 export { runWithCompany, currentCompanyId, MissingTenantContextError } from './application/tenant-context.ts';
-export { deadLetterQueueName } from './application/ports.ts';
+export { deadLetterQueueName, UnrecoverableJobError } from './application/ports.ts';
 export type { EventPublisher, Job, JobHandler, JobQueue, QueueOptions, WorkOptions } from './application/ports.ts';
 export { EventBus } from './application/event-bus.ts';
+export { deterministicJobId } from './application/job-ids.ts';
+export { withRenewal } from './application/renewal.ts';
+export { EventPayload, InvalidEventPayloadError, payloadOf } from './application/event-payload.ts';
 export type { EventHandler } from './application/event-bus.ts';

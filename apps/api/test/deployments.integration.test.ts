@@ -277,6 +277,9 @@ beforeAll(async () => {
     background: true,
     config: {
       databaseUrl: database.urlFor('app'),
+      // The smallest pool, so a transaction that waits for a second connection, such as
+      // while asking another module, would stall and fail here rather than under load.
+      databasePoolSize: 2,
       relayDatabaseUrl: database.urlFor('relay'),
       jobsDatabaseUrl: database.urlFor('jobs'),
       secureCookies: false,

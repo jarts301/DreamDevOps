@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { parseCompanyId } from '../domain/company-id.ts';
 import type { DomainEvent } from '../domain/domain-event.ts';
 import type { EventPublisher } from '../application/ports.ts';
+import { rollBack } from './tenant-database.ts';
 
 interface OutboxRow {
   sequence: string;
@@ -13,6 +14,9 @@ interface OutboxRow {
   occurred_at: Date;
   payload: object;
 }
+
+/** How many delivered events one purge statement removes, so none holds locks for long. */
+const PURGE_BATCH = 5_000;
 
 export interface OutboxRelayOptions {
   readonly batchSize?: number;
@@ -48,6 +52,7 @@ export class OutboxRelay {
   /** Publishes one batch and returns how many events it published. */
   async publishBatch(): Promise<number> {
     const client = await this.#pool.connect();
+    let broken: Error | undefined;
     try {
       await client.query('BEGIN');
       const { rows } = await client.query<OutboxRow>(
@@ -70,10 +75,29 @@ export class OutboxRelay {
       await client.query('COMMIT');
       return rows.length;
     } catch (error) {
-      await client.query('ROLLBACK');
+      broken = await rollBack(client);
       throw error;
     } finally {
-      client.release();
+      client.release(broken);
+    }
+  }
+
+  /**
+   * Removes events delivered before a time, a batch at a time, and returns how many. They're
+   * no longer needed: the audit log keeps every event, and duplicates are refused by job ID.
+   */
+  async purgePublished(publishedBefore: Date): Promise<number> {
+    let removed = 0;
+    for (;;) {
+      const { rows } = await this.#pool.query<{ removed: number }>('SELECT kernel.purge_published_outbox($1, $2) AS removed', [
+        publishedBefore,
+        PURGE_BATCH,
+      ]);
+      const batch = rows[0]?.removed ?? 0;
+      removed += batch;
+      if (batch < PURGE_BATCH) {
+        return removed;
+      }
     }
   }
 

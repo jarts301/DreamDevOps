@@ -83,6 +83,24 @@ describe('from a saved event to a running handler', () => {
     expect(seen).toEqual([{ company: companyId, visibleEvents: 1 }]);
   });
 
+  it('delivers events to consumers that subscribed in another process', async () => {
+    // Two API instances, or two services: one only publishes, the other only consumes.
+    const publisherQueue = await PgBossJobQueue.start({ connectionString: database.urlFor('jobs'), pollingIntervalSeconds: 0.5 });
+    try {
+      const consumer = new EventBus(queue);
+      const publisher = new EventBus(publisherQueue);
+      const seen: string[] = [];
+      await consumer.subscribe('ApplicationArchived', 'search', async (received) => void seen.push(received.eventId));
+      const event = createDomainEvent({ eventType: 'ApplicationArchived', companyId, payload: { name: 'api' } });
+
+      await publisher.publish(event);
+
+      await vi.waitFor(() => expect(seen).toEqual([event.eventId]), { timeout: 15_000, interval: 100 });
+    } finally {
+      await publisherQueue.stop();
+    }
+  });
+
   it('keeps job tables out of reach of the application role', async () => {
     await expect(appPool.query('SELECT * FROM pgboss.job')).rejects.toThrow('permission denied');
   });

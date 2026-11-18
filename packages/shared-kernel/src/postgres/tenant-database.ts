@@ -1,4 +1,18 @@
 import type { Pool, PoolClient } from 'pg';
+
+/**
+ * Rolls back a failed transaction. Returns the error if that failed too, which means the
+ * connection may be broken and must not go back to the pool; the original error is what
+ * the caller sees.
+ */
+export async function rollBack(client: Pick<PoolClient, 'query'>): Promise<Error | undefined> {
+  try {
+    await client.query('ROLLBACK');
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error : new Error('The rollback failed.');
+  }
+}
 import { currentCompanyId } from '../application/tenant-context.ts';
 
 /** A connection inside a transaction scoped to the current company. */
@@ -19,6 +33,8 @@ export class TenantDatabase {
   async transaction<T>(work: (transaction: TenantTransaction) => Promise<T>): Promise<T> {
     const companyId = currentCompanyId();
     const client = await this.#pool.connect();
+    // A connection whose rollback failed may be broken, so it's closed rather than reused.
+    let broken: Error | undefined;
     try {
       await client.query('BEGIN');
       await client.query("SELECT set_config('app.current_company_id', $1, true)", [companyId]);
@@ -26,10 +42,10 @@ export class TenantDatabase {
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      broken = await rollBack(client);
       throw error;
     } finally {
-      client.release();
+      client.release(broken);
     }
   }
 }

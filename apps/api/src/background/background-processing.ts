@@ -8,6 +8,12 @@ import { BACKGROUND_SUBSCRIBERS, type BackgroundSubscriber } from './background-
 
 export const BACKGROUND_PROCESSING = Symbol('BACKGROUND_PROCESSING');
 
+/** Removes events from the outbox once they've been delivered for a while. */
+export const OUTBOX_RETENTION_QUEUE = 'kernel.outbox-retention';
+/** Every day at 03:17 UTC, a quiet time, on a schedule every API process shares. */
+const OUTBOX_RETENTION_SCHEDULE = '17 3 * * *';
+const DAY_MS = 86_400_000;
+
 /**
  * Delivers saved events to the modules that react to them, by running the outbox relay
  * and the job queue. Each uses its own database role, as the shared kernel requires.
@@ -45,8 +51,19 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
     }
 
     this.#relayPool = new pg.Pool({ connectionString: this.#config.relayDatabaseUrl, max: 2 });
-    this.#relay = new OutboxRelay(this.#relayPool, bus, { pollIntervalMs: this.#config.relayPollMs, onError });
-    this.#relay.start();
+    const relay = new OutboxRelay(this.#relayPool, bus, { pollIntervalMs: this.#config.relayPollMs, onError });
+    this.#relay = relay;
+    relay.start();
+
+    // Without this, the outbox keeps every event ever saved. The audit log keeps them for good.
+    await queue.createQueue(OUTBOX_RETENTION_QUEUE, { retryLimit: 2, retryDelaySeconds: 300, exclusive: true, expireInSeconds: 3_600 });
+    await queue.work(OUTBOX_RETENTION_QUEUE, async () => {
+      const removed = await relay.purgePublished(new Date(Date.now() - this.#config.outboxRetentionDays * DAY_MS));
+      if (removed > 0) {
+        this.#logger.log(`Removed ${removed} delivered events from the outbox.`);
+      }
+    });
+    await queue.schedule(OUTBOX_RETENTION_QUEUE, OUTBOX_RETENTION_SCHEDULE);
   }
 
   async onApplicationShutdown(): Promise<void> {

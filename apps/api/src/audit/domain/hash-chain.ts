@@ -59,30 +59,52 @@ export function entryHash(previousHash: string, entry: ChainedEntry): string {
   return createHash('sha256').update(`${previousHash}\n${content}`).digest('hex');
 }
 
-/** Checks a company's entries, given in sequence order, from the first one. */
-export function verifyChain(entries: Iterable<StoredEntry>): ChainCheck {
-  let previousHash = GENESIS_HASH;
-  let expectedSequence = 1;
-  let checked = 0;
-  for (const entry of entries) {
-    const broken = (reason: string): ChainCheck => ({
-      valid: false,
-      checked,
-      brokenAtSequence: entry.sequence,
-      reason,
-    });
-    if (entry.sequence !== expectedSequence) {
-      return broken(`Entry ${expectedSequence} is missing.`);
+/**
+ * Checks a company's entries one at a time, in sequence order from the first, so a long
+ * history can be checked in batches without holding all of it in memory.
+ */
+export class ChainVerifier {
+  #previousHash = GENESIS_HASH;
+  #expectedSequence = 1;
+  #checked = 0;
+  #broken: ChainCheck | null = null;
+
+  /** Checks the next entry. Returns false once the chain is broken, when there's no point going on. */
+  add(entry: StoredEntry): boolean {
+    if (this.#broken !== null) {
+      return false;
     }
-    if (entry.previousHash !== previousHash) {
+    const broken = (reason: string): false => {
+      this.#broken = { valid: false, checked: this.#checked, brokenAtSequence: entry.sequence, reason };
+      return false;
+    };
+    if (entry.sequence !== this.#expectedSequence) {
+      return broken(`Entry ${this.#expectedSequence} is missing.`);
+    }
+    if (entry.previousHash !== this.#previousHash) {
       return broken('This entry does not follow the one before it.');
     }
-    if (entry.hash !== entryHash(previousHash, entry)) {
+    if (entry.hash !== entryHash(this.#previousHash, entry)) {
       return broken('This entry was changed after it was recorded.');
     }
-    previousHash = entry.hash;
-    expectedSequence += 1;
-    checked += 1;
+    this.#previousHash = entry.hash;
+    this.#expectedSequence += 1;
+    this.#checked += 1;
+    return true;
   }
-  return { valid: true, checked, brokenAtSequence: null, reason: null };
+
+  result(): ChainCheck {
+    return this.#broken ?? { valid: true, checked: this.#checked, brokenAtSequence: null, reason: null };
+  }
+}
+
+/** Checks a company's entries, given in sequence order, from the first one. */
+export function verifyChain(entries: Iterable<StoredEntry>): ChainCheck {
+  const verifier = new ChainVerifier();
+  for (const entry of entries) {
+    if (!verifier.add(entry)) {
+      break;
+    }
+  }
+  return verifier.result();
 }

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { Logger } from '@nestjs/common';
@@ -46,6 +46,10 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024 * 1024;
 /** Parts are 16 MiB before base64, which makes them about a third larger. */
 const MAX_PART_BYTES = 24 * 1024 * 1024;
 const MAX_IMAGE_PARTS = 256;
+/** The files a build's pipeline uploads: its image's parts, parts being written, and the joined image. */
+const UPLOAD_FILE = /^[0-9a-f-]{36}\.(?:tar|part-\d+(?:\.[0-9a-f-]{36}\.partial)?)$/;
+/** How long after the build timeout its uploads are kept, in case its last steps are still finishing. */
+const ABANDONED_UPLOAD_GRACE_MINUTES = 60;
 const MAX_REPORT_BYTES: Readonly<Record<ReportKind, number>> = {
   secrets: 5 * 1024 * 1024,
   tests: 256 * 1024,
@@ -307,7 +311,7 @@ export class Builds {
 
   /** Starts the pipeline for a requested build. Runs in the build's company. */
   async start(buildId: string): Promise<void> {
-    const build = await this.#database.transaction((tx) => findBuild(tx, buildId, { lock: true }));
+    const build = await this.#database.transaction((tx) => findBuild(tx, buildId));
     if (build === null || build.status !== 'queued') {
       return;
     }
@@ -335,14 +339,20 @@ export class Builds {
     }
     const token = randomBytes(32).toString('base64url');
     await this.#pipelines.ensurePipeline(spec.organization, this.#options.pipelines);
-    await this.#database.transaction((tx) =>
-      tx.query(
+    // Only the start that moves the build from queued to running starts its pipeline. An
+    // event can arrive twice, and then the other one finds it taken and does nothing.
+    const claimed = await this.#database.transaction(async (tx) => {
+      const { rowCount } = await tx.query(
         `UPDATE builds.builds
          SET status = 'running', token_hash = $2, token_expires_at = now() + make_interval(mins => $3), updated_at = now()
          WHERE id = $1 AND status = 'queued'`,
         [buildId, hashToken(token), this.#options.timeoutMinutes],
-      ),
-    );
+      );
+      return rowCount === 1;
+    });
+    if (!claimed) {
+      return;
+    }
     try {
       await this.#pipelines.run(spec.organization, build.kind === 'check' ? 'check.yaml' : 'build.yaml', {
         build: buildId,
@@ -571,7 +581,11 @@ export class Builds {
     const encoded = await readLimited(body, MAX_PART_BYTES);
     const content = Buffer.from(encoded.toString('ascii'), 'base64');
     await mkdir(this.#options.workDir, { recursive: true });
-    await writeFile(this.#partFile(build.id, part), content);
+    // Written beside it, then renamed, so a part is never read half written, such as when
+    // the pipeline sends it again, or another API instance joins the parts.
+    const partial = `${this.#partFile(build.id, part)}.${randomUUID()}.partial`;
+    await writeFile(partial, content);
+    await rename(partial, this.#partFile(build.id, part));
   }
 
   /**
@@ -685,8 +699,12 @@ export class Builds {
 
   // ---- Background work
 
-  /** Fails builds that ran past the timeout, such as when a job died without reporting. */
+  /**
+   * Fails builds that ran past the timeout, such as when a job died without reporting,
+   * and removes uploads nothing will use any more.
+   */
   async expireStale(): Promise<void> {
+    await this.#removeAbandonedUploads();
     const stale = await runWithCompany(NO_COMPANY, () =>
       this.#database.transaction(async (tx) => {
         const { rows } = await tx.query<{ build_id: string; company_id: string }>(
@@ -773,51 +791,68 @@ export class Builds {
     return { companyId, build };
   }
 
-  /** Decides the build once a report or the image arrives. Runs in the build's company. */
+  /**
+   * Decides the build once a report or the image arrives. Runs in the build's company.
+   *
+   * The reports decide it under a short lock. Signing then needs the registry and other
+   * modules, so it happens with no transaction open, and a last one records the outcome,
+   * if nothing else decided the build meanwhile.
+   */
   async #decide(buildId: string): Promise<void> {
-    await this.#database.transaction(async (tx) => {
+    const signable = await this.#database.transaction(async (tx) => {
       const build = await findBuild(tx, buildId, { lock: true });
       if (build === null || build.status !== 'running') {
-        return;
+        return null;
       }
       const outcome = evaluate(build.reports, build.kind);
       if (outcome.state === 'waiting') {
-        return;
+        return null;
       }
       if (outcome.state === 'failed') {
         await this.#finish(tx, build, 'failed', outcome.reason);
-        return;
+        return null;
       }
       if (build.kind === 'check') {
         await this.#finish(tx, build, 'succeeded', null);
+        return null;
+      }
+      return build;
+    });
+    if (signable === null) {
+      return;
+    }
+    const spec = await this.#repositories.locate(signable.application_id);
+    const application = await this.#catalog.get(signable.application_id);
+    const digest = signable.digest;
+    if (spec === null || digest === null) {
+      await this.#fail(buildId, 'The image was not stored.');
+      return;
+    }
+    const repository = `${spec.organization}/${application.slug}`;
+    const payload = signaturePayload(`${this.#registry.imageHost}/${repository}`, digest);
+    const purpose = signingPurposeFor(signable.kind);
+    const privateKey = await this.#database.transaction((tx) => this.#keys.privateKey(tx, purpose));
+    await this.#registry.pushSignature(repository, digest, payload, signPayload(privateKey, payload));
+    // Reads the signature back, as a target would, and checks it with the public key.
+    const publicKey = await this.#database.transaction((tx) => this.#keys.publicKey(tx, purpose));
+    const imageName = `${this.#registry.imageHost}/${repository}@${digest}`;
+    const verification = checkStoredSignature(
+      payload,
+      await this.#registry.readSignature(repository, digest),
+      (stored, storedSignature) => verifyPayload(publicKey, stored, storedSignature),
+      `cosign verify --key ${purpose}.pub --insecure-ignore-tlog=true ${imageName}`,
+    );
+    const broken = failedChecksReason("The signature doesn't check out", verification.checks);
+    await this.#database.transaction(async (tx) => {
+      const build = await findBuild(tx, buildId, { lock: true });
+      // Decided meanwhile, such as by the timeout, or by another report that signed it too.
+      if (build === null || build.status !== 'running' || build.digest !== digest) {
         return;
       }
-      const spec = await this.#repositories.locate(build.application_id);
-      const application = await this.#catalog.get(build.application_id);
-      if (spec === null || build.digest === null) {
-        await this.#finish(tx, build, 'failed', 'The image was not stored.');
-        return;
-      }
-      const repository = `${spec.organization}/${application.slug}`;
-      const payload = signaturePayload(`${this.#registry.imageHost}/${repository}`, build.digest);
-      const purpose = signingPurposeFor(build.kind);
-      const signature = signPayload(await this.#keys.privateKey(tx, purpose), payload);
-      await this.#registry.pushSignature(repository, build.digest, payload, signature);
-      await tx.query('UPDATE builds.builds SET signed_at = now() WHERE id = $1', [buildId]);
-      // Reads the signature back, as a target would, and checks it with the public key.
-      const publicKey = await this.#keys.publicKey(tx, purpose);
-      const imageName = `${this.#registry.imageHost}/${repository}@${build.digest}`;
-      const verification = checkStoredSignature(
-        payload,
-        await this.#registry.readSignature(repository, build.digest),
-        (stored, storedSignature) => verifyPayload(publicKey, stored, storedSignature),
-        `cosign verify --key ${purpose}.pub --insecure-ignore-tlog=true ${imageName}`,
+      await tx.query(
+        `UPDATE builds.builds SET signed_at = now(), reports = reports || $2::jsonb, updated_at = now() WHERE id = $1`,
+        [buildId, JSON.stringify({ verification })],
       );
-      await tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
-        buildId,
-        JSON.stringify({ verification }),
-      ]);
-      const broken = failedChecksReason("The signature doesn't check out", verification.checks);
       await this.#finish(tx, build, broken === null ? 'succeeded' : 'failed', broken);
     });
   }
@@ -859,7 +894,32 @@ export class Builds {
         },
       }),
     ]);
-    await rm(this.#imageFile(build.id), { force: true });
+    await this.#removeUploads(build.id);
+  }
+
+  /** Removes what a build's pipeline uploaded: the joined image and any parts left. */
+  async #removeUploads(buildId: string): Promise<void> {
+    await rm(this.#imageFile(buildId), { force: true });
+    const names = await readdir(this.#options.workDir).catch(() => [] as string[]);
+    for (const name of names.filter((entry) => entry.startsWith(`${buildId}.part-`))) {
+      await rm(join(this.#options.workDir, name), { force: true });
+    }
+  }
+
+  /**
+   * Removes uploads nothing will use: files older than any build can run, such as those of
+   * a build that ended while its API instance was down.
+   */
+  async #removeAbandonedUploads(): Promise<void> {
+    const cutoff = Date.now() - (this.#options.timeoutMinutes + ABANDONED_UPLOAD_GRACE_MINUTES) * 60_000;
+    const names = await readdir(this.#options.workDir).catch(() => [] as string[]);
+    for (const name of names.filter((entry) => UPLOAD_FILE.test(entry))) {
+      const path = join(this.#options.workDir, name);
+      const modified = await stat(path).then((found) => found.mtimeMs, () => null);
+      if (modified !== null && modified < cutoff) {
+        await rm(path, { force: true });
+      }
+    }
   }
 
   #imageFile(buildId: string): string {

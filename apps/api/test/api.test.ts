@@ -56,6 +56,16 @@ class SampleController {
   crash(): object {
     throw new Error('Connection to db.internal:5432 failed for user admin');
   }
+
+  @Public()
+  @Get('race')
+  race(): object {
+    // What the database driver throws when a unique rule refuses a change.
+    throw Object.assign(new Error('duplicate key value violates unique constraint "companies_name_idx"'), {
+      code: '23505',
+      constraint: 'companies_name_idx',
+    });
+  }
 }
 
 
@@ -331,6 +341,14 @@ describe('API', () => {
       expect(response.body.status).toBe(500);
     });
 
+    it('answers a change a unique rule refused, such as after a race, as a conflict without its details', async () => {
+      const response = await request(app.getHttpServer()).get('/api/v1/sample/race').expect(409);
+
+      expect(response.headers['content-type']).toContain('application/problem+json');
+      expect(response.text).not.toContain('companies_name_idx');
+      expect(response.body.detail).toBe('Something with these details already exists. Refresh and try again.');
+    });
+
     it('answers unknown routes in the same format', async () => {
       const response = await request(app.getHttpServer()).get('/api/v1/nothing-here');
 
@@ -403,6 +421,27 @@ describe('rate limits', () => {
 
       await request(server).get('/api/v1/auth/login').expect(429);
       await request(server).get('/api/v1/sample/public').expect(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('applies only the general limit to what agents call every heartbeat, however many share an address', async () => {
+    const app = await createTestApp({ config: { rateLimitPerMinute: 100, authRateLimitPerMinute: 2 } });
+    try {
+      const server = app.getHttpServer();
+      const withToken = { Authorization: 'Bearer not-a-valid-access-token' };
+      for (let index = 0; index < 5; index += 1) {
+        await request(server).post('/api/v1/agent/heartbeat').set(withToken).send({}).expect(401);
+        await request(server).get('/api/v1/agent/configuration').set(withToken).expect(401);
+        // The key is checked before the token, so a missing one is refused first.
+        await request(server).put('/api/v1/agent/deploy-key').set(withToken).send({}).expect(400);
+      }
+
+      // Getting an access token is a sign-in, so it keeps the stricter limit.
+      await request(server).post('/api/v1/agent/token').send({}).expect(401);
+      await request(server).post('/api/v1/agent/token').send({}).expect(401);
+      await request(server).post('/api/v1/agent/token').send({}).expect(429);
     } finally {
       await app.close();
     }

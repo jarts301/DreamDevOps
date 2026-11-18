@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Req } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { type TargetConfiguration, TargetConfigurations } from '../../environments/application/target-configuration.ts';
@@ -11,7 +12,12 @@ const bearer = (request: ApiRequest): string | undefined =>
 /**
  * Called by the agent in each target, which has no session and only makes outbound
  * calls. Each route checks its own proof: a registration token, a signed assertion or an
- * access token. These routes share the stricter sign-in rate limit.
+ * access token.
+ *
+ * Registering and getting an access token share the stricter sign-in rate limit. The
+ * routes that need an access token only have the general one: agents call them every
+ * heartbeat, and many targets behind one address, such as a company's network, would
+ * otherwise use up the sign-in limit and be marked as lost.
  */
 @Controller('agent')
 @Public()
@@ -31,6 +37,7 @@ export class AgentController {
   }
 
   /** The agent says how a promote or abort command went. */
+  @SkipThrottle({ auth: true })
   @Post('commands/:id')
   @HttpCode(204)
   async commandDone(
@@ -43,6 +50,7 @@ export class AgentController {
   }
 
   /** Registers the read-only SSH key Flux uses for the environment repository. */
+  @SkipThrottle({ auth: true })
   @Put('deploy-key')
   @HttpCode(204)
   deployKey(@Req() request: ApiRequest, @Body() body: { publicKey?: unknown }): Promise<void> {
@@ -50,6 +58,7 @@ export class AgentController {
   }
 
   /** What the target needs to run its environment. */
+  @SkipThrottle({ auth: true })
   @Get('configuration')
   configuration(@Req() request: ApiRequest): Promise<TargetConfiguration> {
     return this.#configurations.configuration(bearer(request));
@@ -73,15 +82,15 @@ export class AgentController {
   }
 
   /** Reports in, with how the environment's rollouts are doing; gets back commands to run. */
+  @SkipThrottle({ auth: true })
   @Post('heartbeat')
   @HttpCode(200)
   async heartbeat(
     @Req() request: ApiRequest,
     @Body() body: { agentVersion?: unknown; kubernetesVersion?: unknown; sync?: unknown; workloads?: unknown },
   ): Promise<{ heartbeatSeconds: number; commands: AgentCommand[] }> {
-    const token = bearer(request);
-    const { heartbeatSeconds } = await this.#agents.heartbeat(token, body ?? {});
-    const { companyId, environmentId } = await this.#agents.authenticate(token);
+    // The heartbeat checks the access token, and says whose target it is.
+    const { heartbeatSeconds, companyId, environmentId } = await this.#agents.heartbeat(bearer(request), body ?? {});
     return { heartbeatSeconds, commands: await this.#deployments.onReport(companyId, environmentId, body ?? {}) };
   }
 }

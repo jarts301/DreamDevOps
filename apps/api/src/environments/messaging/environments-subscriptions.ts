@@ -1,29 +1,33 @@
-import { Logger, type OnApplicationShutdown } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
+import { payloadOf } from '@dreamdevops/shared-kernel';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
 import type { SecretStore } from '../application/ports.ts';
 import type { TargetAgents } from '../application/target-agents.ts';
 import type { TargetConfigurations } from '../application/target-configuration.ts';
 
-/** How often targets that stopped reporting are looked for. */
-const SWEEP_MS = 30_000;
-/** The platform's OpenBao token is periodic: it stays valid while it's renewed. */
-const RENEWAL_MS = 12 * 3_600_000;
-
-type Payload = Record<string, unknown>;
+/** Marks targets that stopped reporting as lost. */
+export const LOST_TARGETS_QUEUE = 'environments.mark-lost-targets';
+/**
+ * Every minute, in UTC. The schedule is shared by every API process, so each minute's
+ * sweep runs once, wherever, and never piles up behind a slow one.
+ */
+export const LOST_TARGETS_SCHEDULE = '* * * * *';
+/** Renews the platform's OpenBao token, which is periodic: it stays valid while it's renewed. */
+export const RENEWAL_QUEUE = 'environments.renew-secrets-token';
+/** Every six hours, in UTC, well within the token's period. */
+export const RENEWAL_SCHEDULE = '0 */6 * * *';
 
 /**
  * Removes a revoked target's deploy key, marks targets that stopped reporting as lost,
  * and keeps the platform's OpenBao token valid.
  */
-export class EnvironmentsSubscriptions implements BackgroundSubscriber, OnApplicationShutdown {
+export class EnvironmentsSubscriptions implements BackgroundSubscriber {
   readonly #logger = new Logger(EnvironmentsSubscriptions.name);
   readonly #agents: TargetAgents;
   readonly #configurations: TargetConfigurations;
   readonly #secrets: SecretStore;
   readonly #config: AppConfig;
-  #sweep: ReturnType<typeof setInterval> | undefined;
-  #renewal: ReturnType<typeof setInterval> | undefined;
 
   constructor(agents: TargetAgents, configurations: TargetConfigurations, secrets: SecretStore, config: AppConfig) {
     this.#agents = agents;
@@ -32,16 +36,15 @@ export class EnvironmentsSubscriptions implements BackgroundSubscriber, OnApplic
     this.#config = config;
   }
 
-  async subscribe({ bus }: BackgroundWork): Promise<void> {
-    const onError = (error: unknown) => this.#logger.error(error);
+  async subscribe({ bus, queue }: BackgroundWork): Promise<void> {
     await bus.subscribe(
       'TargetRevoked',
       'target-deploy-keys',
       (event) => {
-        const { environmentId, targetId, wasConnected, provider } = event.payload as Payload;
+        const payload = payloadOf(event);
         // This machine has no agent, so it has no deploy key.
-        return wasConnected === true && provider !== 'local'
-          ? this.#configurations.removeDeployKey(String(environmentId), String(targetId))
+        return payload.optionalFlag('wasConnected') && payload.optionalText('provider') !== 'local'
+          ? this.#configurations.removeDeployKey(payload.text('environmentId'), payload.text('targetId'))
           : Promise.resolve();
       },
       {
@@ -49,15 +52,14 @@ export class EnvironmentsSubscriptions implements BackgroundSubscriber, OnApplic
         retryDelaySeconds: this.#config.provisioningRetrySeconds,
       },
     );
-    this.#sweep = setInterval(() => {
-      this.#agents.markSilentTargetsLost().catch(onError);
-    }, SWEEP_MS);
-    await this.#secrets.renew().catch(onError);
-    this.#renewal = setInterval(() => this.#secrets.renew().catch(onError), RENEWAL_MS);
-  }
+    await queue.createQueue(LOST_TARGETS_QUEUE, { retryLimit: 0, exclusive: true, expireInSeconds: 600 });
+    await queue.work(LOST_TARGETS_QUEUE, () => this.#agents.markSilentTargetsLost());
+    await queue.schedule(LOST_TARGETS_QUEUE, LOST_TARGETS_SCHEDULE);
 
-  onApplicationShutdown(): void {
-    clearInterval(this.#sweep);
-    clearInterval(this.#renewal);
+    // Renewed at every start as well, in case the API was down for longer than the schedule's gap.
+    await this.#secrets.renew().catch((error: unknown) => this.#logger.error(error));
+    await queue.createQueue(RENEWAL_QUEUE, { retryLimit: 3, retryDelaySeconds: 60, exclusive: true });
+    await queue.work(RENEWAL_QUEUE, () => this.#secrets.renew());
+    await queue.schedule(RENEWAL_QUEUE, RENEWAL_SCHEDULE);
   }
 }

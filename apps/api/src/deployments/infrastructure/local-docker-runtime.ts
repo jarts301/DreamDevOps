@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { type CommandResult, CommandNotFoundError, lastLines, runCommand } from '../../shared/run-command.ts';
+import { type CommandResult, CommandNotFoundError, lastLines, runCommand, withoutSecrets } from '../../shared/run-command.ts';
 import {
   type ContainerLimits,
   type ContainerRequest,
@@ -81,7 +81,7 @@ export class LocalDockerRuntime implements HostRuntime {
   constructor(options: LocalDockerRuntimeOptions) {
     this.#options = options;
     const docker = options.docker ?? 'docker';
-    this.#exec = options.exec ?? ((args, { timeoutMs }) => runCommand(docker, args, { timeoutMs }));
+    this.#exec = options.exec ?? ((args, { timeoutMs }) => runCommand(docker, args, { timeoutMs, env: withoutSecrets(process.env) }));
     this.#pollMs = options.pollMs ?? 1_000;
   }
 

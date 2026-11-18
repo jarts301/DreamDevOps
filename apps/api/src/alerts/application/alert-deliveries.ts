@@ -1,11 +1,10 @@
-import { describeError, type JobQueue, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { describeError, deterministicJobId, type JobQueue, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { CompanyMembers } from '../../identity-access/application/company-members.ts';
 import type { AlertEmails } from '../../notifications/application/alert-emails.ts';
 import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
 import { describeCondition } from '../domain/alert.ts';
 import type { AlertResolved, AlertTriggered } from '../domain/events.ts';
-import { jobIdFor } from './job-ids.ts';
 
 export const EMAIL_QUEUE = 'alerts.email';
 
@@ -50,7 +49,7 @@ export class AlertDeliveries {
     });
     for (const member of await this.#members.find(recipientIds)) {
       const job: EmailJob = { event, userId: member.userId };
-      await queue.send(EMAIL_QUEUE, job, { id: jobIdFor('alert-email', event.eventId, member.userId) });
+      await queue.send(EMAIL_QUEUE, job, { id: deterministicJobId('alert-email', event.eventId, member.userId) });
     }
   }
 

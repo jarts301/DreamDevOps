@@ -1,7 +1,8 @@
-import { currentCompanyId, type DomainEvent } from '@dreamdevops/shared-kernel';
+import { currentCompanyId, type DomainEvent, isUuid } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { Pool } from 'pg';
-import { type ChainCheck, entryHash, GENESIS_HASH, type StoredEntry, verifyChain } from '../domain/hash-chain.ts';
+import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
+import { ChainVerifier, type ChainCheck, entryHash, GENESIS_HASH } from '../domain/hash-chain.ts';
 
 const PAGE_SIZE = 50;
 const VERIFY_BATCH = 1_000;
@@ -39,10 +40,12 @@ interface EntryRow {
 export class AuditLog {
   readonly #database: TenantDatabase;
   readonly #pool: Pool;
+  readonly #companies: CompanyDirectory;
 
-  constructor(database: TenantDatabase, pool: Pool) {
+  constructor(database: TenantDatabase, pool: Pool, companies: CompanyDirectory) {
     this.#database = database;
     this.#pool = pool;
+    this.#companies = companies;
   }
 
   /** Records an event in its company's history. Runs in the event's company context. */
@@ -118,37 +121,49 @@ export class AuditLog {
     });
   }
 
-  /** One person's own actions across companies, newest first. */
+  /**
+   * One person's own actions across companies, newest first. Pages continue from the cursor
+   * the previous page returned, which combines a time and an event ID.
+   */
   async listByActor(actorId: string, beforeValue: unknown): Promise<{ entries: ActorEntryView[]; nextBefore: string | null }> {
-    const before = typeof beforeValue === 'string' && !Number.isNaN(Date.parse(beforeValue)) ? beforeValue : null;
+    const before = actorCursor(beforeValue);
     const { rows } = await this.#pool.query<{
       company_id: string;
-      company_name: string;
+      event_id: string;
       event_type: string;
       occurred_at: Date;
       payload: object;
-    }>('SELECT * FROM audit.actor_entries($1, $2, $3)', [actorId, before, PAGE_SIZE]);
+    }>('SELECT * FROM audit.actor_entries($1, $2, $3, $4)', [actorId, before?.time ?? null, before?.eventId ?? null, PAGE_SIZE]);
+    // Company names come from Tenancy, which owns them, once per company on the page.
+    const names = new Map<string, string>();
+    for (const companyId of new Set(rows.map((row) => row.company_id))) {
+      names.set(companyId, (await this.#companies.find(companyId))?.name ?? 'A company that no longer exists');
+    }
     const entries = rows.map((row) => ({
       companyId: row.company_id,
-      companyName: row.company_name,
+      companyName: names.get(row.company_id)!,
       eventType: row.event_type,
       occurredAt: row.occurred_at.toISOString(),
       payload: row.payload,
     }));
-    return { entries, nextBefore: entries.length === PAGE_SIZE ? (entries.at(-1)?.occurredAt ?? null) : null };
+    const oldest = rows.at(-1);
+    return {
+      entries,
+      nextBefore: rows.length === PAGE_SIZE && oldest !== undefined ? `${oldest.occurred_at.toISOString()}|${oldest.event_id}` : null,
+    };
   }
 
-  /** Recomputes the current company's whole chain. */
+  /** Recomputes the current company's whole chain, a batch at a time, so a long history needs little memory. */
   verify(): Promise<ChainCheck> {
     return this.#database.transaction(async (tx) => {
-      const entries: StoredEntry[] = [];
+      const verifier = new ChainVerifier();
       for (let after = 0; ; ) {
         const { rows } = await tx.query<EntryRow>(
           'SELECT * FROM audit.entries WHERE sequence > $1 ORDER BY sequence LIMIT $2',
           [after, VERIFY_BATCH],
         );
-        entries.push(
-          ...rows.map((row) => ({
+        for (const row of rows) {
+          const intact = verifier.add({
             companyId: row.company_id,
             sequence: Number(row.sequence),
             eventId: row.event_id,
@@ -159,16 +174,33 @@ export class AuditLog {
             payload: row.payload,
             previousHash: row.previous_hash,
             hash: row.hash,
-          })),
-        );
+          });
+          if (!intact) {
+            return verifier.result();
+          }
+        }
         if (rows.length < VERIFY_BATCH) {
-          break;
+          return verifier.result();
         }
         after = Number(rows.at(-1)!.sequence);
       }
-      return verifyChain(entries);
     });
   }
+}
+
+/**
+ * The actor history's cursor: a time and an event ID. A cursor from before event IDs were
+ * part of it is just a time, and then continues after every entry of that time.
+ */
+function actorCursor(value: unknown): { time: string; eventId: string } | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const [time = '', eventId] = value.split('|');
+  if (Number.isNaN(Date.parse(time))) {
+    return null;
+  }
+  return { time, eventId: eventId !== undefined && isUuid(eventId) ? eventId : 'ffffffff-ffff-ffff-ffff-ffffffffffff' };
 }
 
 function cursor(value: unknown): { time: string; sequence: number } | null {

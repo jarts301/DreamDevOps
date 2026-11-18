@@ -35,7 +35,7 @@ Each context is a folder in `apps/api/src`, with its own guide.
 | [Alerts](apps/api/src/alerts/README.md) | Alerts on each place's metrics, checked every minute, and their history | `alerts` | Alert events | Monitoring's `LatestMetrics`, Environments, Catalog, `CompanyDirectory`, Identity's `CompanyMembers` and `MemberRemoved`, Notifications' `AlertEmails` |
 | Demo | Local only: Demo Company, a demo user for each role, and a demo application for each blueprint | None | Nothing | Identity and access, Tenancy, Catalog, Environments |
 
-The dependencies form no cycle. Tenancy publishes `CompanyDirectory` in a Nest module of its own, so contexts that only read companies don't depend on the rest of Tenancy.
+Tenancy publishes `CompanyDirectory` in a Nest module of its own, so contexts that only read companies don't depend on the rest of Tenancy. One cycle remains between contexts: Identity and access, Notifications and Tenancy depend on each other, through invitation emails and the company directory. The architecture test knows it, fails on any new cycle, and fails when this one is broken, so its entry is removed.
 
 ## Inside a context
 
@@ -72,12 +72,18 @@ These are checked by `apps/api/test/architecture.test.ts`:
 | Every context has a Nest module | The module is the unit that moves to a new service |
 | Contexts import only each other's published files | Everything else can change freely, and is what a service keeps private |
 | The domain uses no framework, database or outer layer | Domain rules stay testable and portable |
-| Application code doesn't use adapters, controllers or NestJS | Use cases don't depend on how they're called or what they call |
+| Application code doesn't use adapters, controllers, NestJS, or packages other than the shared kernel's | Use cases don't depend on how they're called or what they call |
 | Each context's SQL touches only its own schemas, and the kernel's | Each context's data can move to its own database |
 | Only the platform wires other contexts' background work | A context's subscriptions move with it |
 | Every published event has a dashboard description, and every notifiable event exists | The audit log and notification settings never show unknown events |
+| Contexts have no cycles between them, other than the known one | A context in a cycle can't move without the others |
+| Contexts use only the platform files meant for them, such as access decorators and the background work contract | The platform's guards and wiring stay the platform's business |
+| Only the composition root, `app.module.ts`, `background.module.ts` and `demo/`, imports contexts from the platform | The platform doesn't grow into a context |
+| Every migration names its context's schema, and uses no other, except known couplings | Each context's data can move to its own database |
 
-Exceptions are listed in the test with a reason, and the list should only shrink. Today there are two: NestJS's logger in two application files, and the `@casl/ability` permission library in the identity domain.
+Exceptions are listed in the test with a reason, and the list should only shrink, so the test also fails when an exception is no longer needed. Today they are: NestJS's logger in three application files, the `yaml` library and the database driver's types in two application files, the cycle above, the guards and request type that belong to Identity and access, and the migrations that use another context's schema, such as through foreign keys.
+
+Lint rules, run by `npm run lint` with oxlint, catch code mistakes such as loose equality, `any` and import cycles between files.
 
 ## Platform code
 
@@ -86,12 +92,12 @@ Folders that aren't contexts are the platform every context runs on:
 | Folder | Holds |
 |---|---|
 | `platform/` | The global module with settings and the database, and helpers that put modules together |
-| `http/` | Guards, the company context for each request, and the single error format. `DomainError` kinds map to HTTP statuses in one place. |
-| `background/` | The outbox relay and job queue. Each context's `messaging/` subscriptions are plugged in by `background.module.ts`. |
+| `http/` | Guards, the company context for each request, and the single error format. `DomainError` kinds map to HTTP statuses in one place, and a change the database's unique rules refuse, such as after two requests race, answers 409. |
+| `background/` | The outbox relay, the job queue, and the outbox's daily clean-up. Each context's `messaging/` subscriptions are plugged in by `background.module.ts`. Recurring work, such as each context's sweeps, runs on job queue schedules that every API process shares, never on timers in each process. |
 | `config/` | Settings, read and checked once at startup |
 | `session/`, `database/`, `health/` | Sessions, migrations and health checks |
 | `shared/` | Small helpers with no business meaning: slugs, names, step progress, running command-line tools, and the Forgejo HTTP client shared by three contexts' adapters |
-| `sample-data/` | Local development only: the sample company and accounts, and a sample application for each blueprint with a Test environment, set up through the contexts' own services when `SAMPLE_DATA` is on |
+| `demo/` | Local development only: the demo company and accounts, and a demo application for each blueprint with a Test environment, set up through the contexts' own services when `DEMO_DATA` is on |
 
 `app.module.ts` is the composition root. It lists the contexts' modules, the guards and the error filter, and nothing else.
 
@@ -116,7 +122,7 @@ Still to do, per context, when the time comes:
 | Database functions that read other schemas | `catalog.applications_view`, `builds.builds_view` and `audit.company_entries` read user names from `identity`, and `source.member_accounts` reads `identity` and `tenancy` | Ask Identity for names, or keep a copy fed by its events, such as `RoleGranted` |
 | A shared transaction | Tenancy creates a company and its first admin's invitation in one transaction, through `CompanyAccessService.inviteFirstAdminIn` | Make it a saga: Identity creates the invitation when it hears `CompanyCreated`, and the token is delivered by email only |
 | In-process calls | `CompanyDirectory`, `RepositoryLookup`, `BlueprintCatalog`, `ApplicationCatalog.get`, `InvitationEmails`, `AlertEmails`, `RunningEnvironments`, `EnvironmentLogs`, `LatestMetrics`, `CompanyMembers` | Implement each interface with an HTTP client, in the calling service |
-| One outbox and job queue | `kernel.outbox` and the `pgboss` schema | Give each service its own outbox and relay, and publish events to a shared broker |
+| One outbox and job queue | `kernel.outbox` and the `pgboss` schema | Give each service its own outbox and relay. Which consumer gets which event is already kept in the job queue's tables, not in each process, so a relay in one service reaches consumers in another. Moving to a broker means implementing `JobQueue`'s `publish` and `subscribe` with it |
 | One login session | The API is the dashboard's backend, with a session cookie | Keep the backend for the dashboard, and let it call services with a signed token for the user and company |
 | One settings object | `config/app-config.ts` holds every context's settings | Split it into a section per context before moving one |
 

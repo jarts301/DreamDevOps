@@ -1,4 +1,7 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import pg from 'pg';
 import request from 'supertest';
@@ -572,6 +575,15 @@ describe('feature images', () => {
       .send({ branch: 'feature/stuck' })
       .expect(201);
     await eventually(() => expect(pipelines.tokenOf(body.id)).toBeDefined());
+    // The pipeline got as far as sending part of its image.
+    await request(app.getHttpServer())
+      .post(`/api/v1/pipeline/builds/${body.id}/image/parts/0`)
+      .set({ Authorization: `Bearer ${pipelines.tokenOf(body.id)}` })
+      .set('Content-Type', 'text/plain')
+      .send(Buffer.from('abc').toString('base64'))
+      .expect(204);
+    const part = join(testConfig().buildWorkDir, `${body.id}.part-0`);
+    expect(existsSync(part)).toBe(true);
     const superuser = new pg.Pool({ connectionString: database.superuserUrl() });
     try {
       await superuser.query("UPDATE builds.builds SET created_at = now() - interval '2 hours' WHERE id = $1", [body.id]);
@@ -585,6 +597,30 @@ describe('feature images', () => {
       status: 'failed',
       failureReason: "The build didn't finish within 60 minutes.",
     });
+    // What it uploaded goes with it, so the folder doesn't fill up.
+    expect(existsSync(part)).toBe(false);
+  });
+
+  it('leave no uploads behind once nothing can use them, such as after a crash', async () => {
+    const folder = testConfig().buildWorkDir;
+    await mkdir(folder, { recursive: true });
+    const abandoned = join(folder, `${randomUUID()}.part-3`);
+    const recent = join(folder, `${randomUUID()}.part-0`);
+    const unrelated = join(folder, 'notes.txt');
+    for (const file of [abandoned, recent, unrelated]) {
+      await writeFile(file, 'x');
+    }
+    const longAgo = new Date(Date.now() - 3 * 3_600_000);
+    await utimes(abandoned, longAgo, longAgo);
+    await utimes(unrelated, longAgo, longAgo);
+
+    try {
+      await app.get(Builds).expireStale();
+
+      expect([existsSync(abandoned), existsSync(recent), existsSync(unrelated)]).toEqual([false, true, true]);
+    } finally {
+      await Promise.all([recent, unrelated].map((file) => rm(file, { force: true })));
+    }
   });
 
   it('are deleted when their branch is deleted', async () => {

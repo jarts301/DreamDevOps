@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import * as client from 'openid-client';
 import type {
   AuthorizationRequest,
@@ -19,6 +20,7 @@ const PLATFORM_ADMIN_ROLE = 'platform-admin';
 
 /** The Keycloak adapter. Keycloak's concepts stay inside this file. */
 export class KeycloakIdentityProvider implements IdentityProvider {
+  readonly #logger = new Logger(KeycloakIdentityProvider.name);
   readonly #options: KeycloakOptions;
   #configuration: Promise<client.Configuration> | undefined;
 
@@ -55,10 +57,14 @@ export class KeycloakIdentityProvider implements IdentityProvider {
       });
     } catch (error) {
       // The provider or its response refused the login. Network failures still surface.
-      if (error instanceof client.AuthorizationResponseError || error instanceof client.ResponseBodyError) {
-        return null;
-      }
-      if (error instanceof client.ClientError) {
+      // The reason is logged, because a refusal can also mean the API's own settings are
+      // wrong, such as its client secret, which people would otherwise see only as failed logins.
+      if (
+        error instanceof client.AuthorizationResponseError ||
+        error instanceof client.ResponseBodyError ||
+        error instanceof client.ClientError
+      ) {
+        this.#logger.warn(`The login provider refused a login: ${error.name}: ${error.message}`);
         return null;
       }
       throw error;

@@ -35,6 +35,9 @@ export interface CheckSummary {
 
 const NOTHING_CHECKED: CheckSummary = { checked: 0, triggered: 0, resolved: 0, problem: null };
 
+/** Platform-wide reads run in a placeholder company, which matches no company's rows. */
+const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
+
 const SELECT_WATCHED = `
   SELECT id, name, place_id, environment_id, application_id, metric, comparator, threshold, for_minutes, state, pending_since
   FROM alerts.alerts WHERE enabled`;
@@ -70,20 +73,19 @@ export class AlertChecks {
     if (!this.#metrics.enabled) {
       return [];
     }
-    const companies = (await this.#companies.all()).filter((company) => company.status === 'active');
-    const due: string[] = [];
-    for (const company of companies) {
-      const watching = await runWithCompany(parseCompanyId(company.id), () =>
-        this.#database.transaction(async (tx) => {
-          const { rows } = await tx.query<{ watching: boolean }>('SELECT EXISTS (SELECT 1 FROM alerts.alerts WHERE enabled) AS watching');
-          return rows[0]?.watching === true;
-        }),
-      );
-      if (watching) {
-        due.push(company.id);
-      }
+    // One query for every company, rather than one for each, every minute.
+    const watching = await runWithCompany(NO_COMPANY, () =>
+      this.#database.transaction(async (tx) => {
+        const { rows } = await tx.query<{ company_id: string }>('SELECT company_id FROM alerts.companies_with_enabled_alerts()');
+        return new Set(rows.map((row) => row.company_id));
+      }),
+    );
+    if (watching.size === 0) {
+      return [];
     }
-    return due;
+    return (await this.#companies.all())
+      .filter((company) => company.status === 'active' && watching.has(company.id))
+      .map((company) => company.id);
   }
 
   /** Checks the current company's alerts that are on. */

@@ -14,7 +14,7 @@ npm run db:migrate
 npm run start:api
 ```
 
-The API listens on <http://localhost:4000>, and only accepts connections from your PC.
+The API listens on <http://localhost:4000>, and only accepts connections from your PC. In a container, or behind a load balancer, set `API_HOST=0.0.0.0`.
 
 ## Sign in
 
@@ -68,15 +68,28 @@ Each request runs in the signed-in user's company, which comes only from the ser
 - **Session limits:** sessions end after 30 minutes idle or 8 hours in total. Login replaces any previous session, and logout also ends the Keycloak session.
 - **Login:** the flow uses `state`, a nonce and PKCE, and redirects only to the configured dashboard address. In production, the API refuses to start without https for Keycloak, secure cookies and verified emails for invitations.
 - **Cross-site requests:** state-changing requests from an unknown `Origin` are refused, and no CORS access is granted.
-- **Rate limits:** 300 requests a minute per address, and 20 for login and invitation routes. Counts are held in memory, so each API instance counts separately.
-- **Errors:** every error uses the `application/problem+json` format and hides internal details.
+- **Rate limits:** 300 requests a minute per address, and 20 for login and invitation routes, and for agents registering or getting an access token. What agents call every heartbeat needs an access token, so it has only the general limit: many targets behind one address would otherwise use up the stricter one. Counts are held in memory, so each API instance counts separately.
+- **Errors:** every error uses the `application/problem+json` format and hides internal details. A change the database's unique rules refuse, such as when two requests race to take one name, answers 409.
 - **Headers and bodies:** Helmet sets the security headers, and request bodies are limited to 1 MB.
 
 Behind a reverse proxy, set `TRUSTED_PROXIES` to the number of proxies, or every client appears to share one address for rate limits.
 
+## Settings for servers
+
+The API refuses to start when a setting is missing, out of range or unsafe. `NODE_ENV` must be `development`, `test` or `production`, so a misspelled production can't skip production's checks. In production, no password, key, token or connection string may be one of the local stack's `fake-dummy-` samples.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `API_HOST` | `127.0.0.1` | The address the API listens on |
+| `API_DATABASE_POOL_SIZE` | `10` | The most database connections the API keeps open. A request that can't get one within 10 seconds fails, rather than waiting for ever. |
+| `OUTBOX_RETENTION_DAYS` | `7` | How long delivered events stay in the outbox |
+| `BUILD_WORK_DIR` | A temporary folder | Where image uploads wait while a build runs. Required in production, where it must be storage every API instance shares. |
+
 ## Background processing
 
 The API also runs the outbox relay and the job queue, which deliver saved events to the modules that react to them: company provisioning, the audit log and chat notifications. Each uses its own database role. They start and stop with the API.
+
+Which module gets which event is kept in the job queue's tables, so every API instance's relay reaches every module, wherever it subscribed. Recurring work, such as failing builds and rollouts that stopped, marking silent targets as lost, catching up on releases and cleaning the outbox, runs on schedules every instance shares, so each run happens once, wherever. An event a module can't read, because it lacks a field, goes straight to its queue's dead letter queue.
 
 Each queue's worker takes up to 10 jobs at a time and keeps going while a backlog remains. Each job succeeds or fails on its own, so one failure never repeats the jobs beside it.
 

@@ -243,8 +243,7 @@ export class Deployments {
   }
 
   async get(idValue: unknown): Promise<DeploymentView> {
-    const id = parseId(idValue, 'deployment');
-    return toView(await this.#database.transaction((tx) => this.#findOrFail(tx, id)));
+    return toView(await this.#find(parseId(idValue, 'deployment')));
   }
 
   /** Asks to run a version in an environment. Production may need a second person's approval first. */
@@ -432,10 +431,11 @@ export class Deployments {
     return this.#decide(actor, idValue, false, {});
   }
 
-  #decide(actor: Principal, idValue: unknown, approved: boolean, request: Confirmed): Promise<void> {
+  async #decide(actor: Principal, idValue: unknown, approved: boolean, request: Confirmed): Promise<void> {
     const id = parseId(idValue, 'deployment');
-    return this.#database.transaction(async (tx) => {
-      const deployment = await this.#findOrFail(tx, id, { lock: true });
+    const known = await this.#find(id);
+    await this.#database.transaction(async (tx) => {
+      const deployment = await this.#locked(tx, known);
       if (approved) {
         authorize({ name: deployment.environment_name, kind: deployment.environment_kind }, 'approve', request);
       }
@@ -469,7 +469,7 @@ export class Deployments {
 
   /** Writes the version to the environment's repository. Runs in the background. */
   async commit(idValue: string): Promise<void> {
-    const deployment = await this.#database.transaction((tx) => this.#findOrFail(tx, idValue));
+    const deployment = await this.#find(parseId(idValue, 'deployment'));
     const environment = await this.#environments.get(deployment.environment_id);
     if (environment.target?.provider === LOCAL_PROVIDER) {
       // A run that stopped half-way, such as when the API restarted, starts again from the beginning.
@@ -483,11 +483,12 @@ export class Deployments {
     }
     const repository = await this.#configurations.repositoryOf(deployment.environment_id);
     const version = deployment.build_version ?? deployment.image_tag;
+    const runtime = deployment.action === 'stop' ? null : await this.#runtimeOf(deployment.application_id);
     const rendered =
-      deployment.action === 'stop'
+      runtime === null
         ? { files: new Map<string, string>(), limits: null, configHash: null }
         : await this.#database.transaction(async (tx) => ({
-            ...(await this.#render(tx, deployment)),
+            ...(await this.#render(tx, deployment, environment, runtime)),
             configHash: await this.#config.fingerprint(tx, deployment.environment_id, deployment.application_id),
           }));
     const message =
@@ -521,19 +522,22 @@ export class Deployments {
 
   /** After a failed or aborted rollout, Git goes back to the last version that ran well, so Flux keeps it. */
   async restorePrevious(idValue: string): Promise<void> {
-    const deployment = await this.#database.transaction((tx) => this.#findOrFail(tx, idValue));
-    if ((await this.#environments.get(deployment.environment_id)).target?.provider === LOCAL_PROVIDER) {
+    const deployment = await this.#find(parseId(idValue, 'deployment'));
+    const environment = await this.#environments.get(deployment.environment_id);
+    if (environment.target?.provider === LOCAL_PROVIDER) {
       // This machine's runtime has put the version before back already.
       return;
     }
-    const previous = await this.#database.transaction((tx) => this.#previousSuccess(tx, deployment, { otherVersion: false }));
+    const previousRow = await this.#database.transaction((tx) => this.#previousSuccess(tx, deployment, { otherVersion: false }));
     const repository = await this.#configurations.repositoryOf(deployment.environment_id);
-    if (previous === null) {
+    if (previousRow === null) {
       // Nothing ran here before: the application's folder goes, and with it what was applied.
       await this.#write(repository, deployment, new Map(), `Remove ${deployment.application_slug}: its first deployment did not succeed`);
       return;
     }
-    const { files } = await this.#database.transaction((tx) => this.#render(tx, previous));
+    const previous = (await this.#enrich([previousRow]))[0]!;
+    const runtime = await this.#runtimeOf(previous.application_id);
+    const { files } = await this.#database.transaction((tx) => this.#render(tx, previous, environment, runtime));
     await this.#write(repository, previous, files, `Restore ${previous.application_slug} ${previous.build_version ?? previous.image_tag}`);
   }
 
@@ -561,10 +565,8 @@ export class Deployments {
   /** Runs the last version that ran well before this one, with the same strategy. */
   async rollback(actor: Principal, idValue: unknown, request: Confirmed = {}): Promise<DeploymentView> {
     const id = parseId(idValue, 'deployment');
-    const { deployment, previous } = await this.#database.transaction(async (tx) => {
-      const deployment = await this.#findOrFail(tx, id);
-      return { deployment, previous: await this.#previousSuccess(tx, deployment, { otherVersion: true }) };
-    });
+    const deployment = await this.#find(id);
+    const previous = await this.#database.transaction((tx) => this.#previousSuccess(tx, deployment, { otherVersion: true }));
     if (deployment.action === 'stop') {
       throw new DeploymentError('conflict', 'A stop has nothing to roll back. Deploy a version to run one again.');
     }
@@ -591,8 +593,9 @@ export class Deployments {
     check: (deployment: Row) => void,
   ): Promise<void> {
     const id = parseId(idValue, 'deployment');
+    const known = await this.#find(id);
     await this.#database.transaction(async (tx) => {
-      const deployment = await this.#findOrFail(tx, id, { lock: true });
+      const deployment = await this.#locked(tx, known);
       assertMayDeploy(actor, deployment.environment_kind);
       check(deployment);
       authorize({ name: deployment.environment_name, kind: deployment.environment_kind }, action, request);
@@ -619,6 +622,10 @@ export class Deployments {
   /**
    * Takes an agent's report: moves its environment's rollouts along, and hands back the
    * commands waiting for it. Called with each heartbeat.
+   *
+   * What other modules know of the rollouts and commands is read first. Then one short
+   * transaction locks the rollouts, reads them again, and moves them along, so no
+   * connection is held while other modules are asked.
    */
   onReport(
     companyId: CompanyId,
@@ -627,19 +634,41 @@ export class Deployments {
   ): Promise<AgentCommand[]> {
     const sync = parseSync(report.sync);
     const workloads = parseWorkloads(report.workloads);
-    return runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
+    return runWithCompany(companyId, async () => {
+      const { rows, pending } = await this.#database.transaction(async (tx) => {
         const { rows } = await tx.query<DeploymentRow>(
-          `${SELECT} WHERE d.environment_id = $1 AND d.status = ANY($2)`,
+          `${SELECT} WHERE d.environment_id = $1 AND d.status = ANY($2) ORDER BY d.id`,
           [environmentId, ROLLING_OUT],
         );
+        const { rows: pending } = await tx.query<{ application_id: string }>(
+          `SELECT DISTINCT d.application_id FROM deployments.commands c
+           JOIN deployments.deployments d ON d.id = c.deployment_id
+           WHERE c.environment_id = $1 AND c.status = 'pending'`,
+          [environmentId],
+        );
+        return { rows, pending };
+      });
+      const known = await this.#enrich(rows);
+      // Each application runs in a namespace named after it, as its rollout is.
+      const slugs = new Map(known.map((deployment) => [deployment.application_id, deployment.application_slug]));
+      for (const [id, application] of await this.#applicationsById(pending.map((row) => row.application_id).filter((id) => !slugs.has(id)))) {
+        slugs.set(id, application.slug);
+      }
+
+      return this.#database.transaction(async (tx) => {
         // Which application each reported workload belongs to, for stops, which have none of their own.
         const { rows: reported } = await tx.query<{ application_id: string }>(
           'SELECT DISTINCT application_id FROM deployments.deployments WHERE id = ANY($1)',
           [workloads.map((workload) => workload.deploymentId)],
         );
         const running = new Set(reported.map((row) => row.application_id));
-        for (const deployment of await this.#enrich(rows)) {
+        // Locked one by one in the same order every time, so two reports can't deadlock.
+        for (const before of known) {
+          const deployment = await this.#locked(tx, before);
+          if (!ROLLING_OUT.includes(deployment.status)) {
+            // It changed since it was read, such as by an abort or the stall sweep.
+            continue;
+          }
           const next =
             deployment.action === 'stop'
               ? advanceStop(deployment, running.has(deployment.application_id), sync)
@@ -681,21 +710,20 @@ export class Deployments {
             );
           }
         }
+        // Only commands whose application was read above are sent. One made meanwhile waits for the next heartbeat.
         const { rows: commands } = await tx.query<{ id: string; action: 'promote' | 'abort'; application_id: string }>(
           `UPDATE deployments.commands c SET status = 'sent', updated_at = now()
            FROM deployments.deployments d
-           WHERE c.deployment_id = d.id AND c.environment_id = $1 AND c.status = 'pending'
+           WHERE c.deployment_id = d.id AND c.environment_id = $1 AND c.status = 'pending' AND d.application_id = ANY($2)
            RETURNING c.id, c.action, d.application_id`,
-          [environmentId],
+          [environmentId, [...slugs.keys()]],
         );
-        const applications = await this.#applicationsById(commands.map((command) => command.application_id));
         return commands.map((command) => {
-          // Each application runs in a namespace named after it, as its rollout is.
-          const slug = applications.get(command.application_id)!.slug;
+          const slug = slugs.get(command.application_id)!;
           return { id: command.id, action: command.action, namespace: slug, name: slug };
         });
-      }),
-    );
+      });
+    });
   }
 
   /** The agent says how a command went. */
@@ -725,9 +753,10 @@ export class Deployments {
       }),
     );
     for (const { deployment_id: id, company_id: company } of stalled) {
-      await runWithCompany(parseCompanyId(company), () =>
-        this.#database.transaction(async (tx) => {
-          const deployment = await this.#findOrFail(tx, id, { lock: true });
+      await runWithCompany(parseCompanyId(company), async () => {
+        const known = await this.#find(id);
+        await this.#database.transaction(async (tx) => {
+          const deployment = await this.#locked(tx, known);
           if (!['queued', 'committed', 'progressing'].includes(deployment.status) || deployment.updated_at >= cutoff) {
             return;
           }
@@ -740,8 +769,8 @@ export class Deployments {
             [id, message],
           );
           await appendToOutbox(tx, [finishedEvent(deployment, 'failed', message)]);
-        }),
-      );
+        });
+      });
     }
   }
 
@@ -786,8 +815,9 @@ export class Deployments {
       const image = `${deployment.image_ref!.replace(/:[^/:]+$/, '')}@${deployment.digest}`;
       await step('Pulling the image.');
       await this.#runtime.pull(target, image);
+      const runtime = await this.#runtimeOf(deployment.application_id);
       const settings = await this.#database.transaction(async (tx) => ({
-        runtime: await this.#runtimeOf(deployment.application_id),
+        runtime,
         config: await this.#config.resolve(tx, deployment.environment_id, { id: deployment.application_id, slug: deployment.application_slug }),
         configHash: await this.#config.fingerprint(tx, deployment.environment_id, deployment.application_id),
         preferredPort: await this.#lastPort(tx, deployment),
@@ -929,13 +959,17 @@ export class Deployments {
     return blueprint === null ? DEFAULT_RUNTIME : blueprint.runtime;
   }
 
-  /** Files for a deployment's version, with the environment's values as they are now. */
-  async #render(tx: TenantTransaction, deployment: Row): Promise<{ files: Map<string, string>; limits: ResourceLimits }> {
-    const environment = await this.#environments.get(deployment.environment_id);
-    // The application runs with the settings of the blueprint version it started from.
-    const source = (await this.#sources.find(deployment.application_id))?.blueprint ?? null;
-    const blueprint = source === null ? null : this.#blueprints.manifest(source.key, source.version);
-    const runtime: Runtime = blueprint === null ? DEFAULT_RUNTIME : blueprint.runtime;
+  /**
+   * Files for a deployment's version, with the environment's values as they are now. The
+   * environment and runtime come from other modules, so callers ask for them before the
+   * transaction, and only this module's tables are read inside it.
+   */
+  async #render(
+    tx: TenantTransaction,
+    deployment: Row,
+    environment: Pick<EnvironmentView, 'slug' | 'kind'>,
+    runtime: Runtime,
+  ): Promise<{ files: Map<string, string>; limits: ResourceLimits }> {
     const config = await this.#config.resolve(tx, deployment.environment_id, {
       id: deployment.application_id,
       slug: deployment.application_slug,
@@ -991,17 +1025,18 @@ export class Deployments {
    * What ran well before a deployment: for a rollback, the version before it; to restore
    * after a failure, whatever ran last, which may be the same version with older values.
    */
-  async #previousSuccess(tx: TenantTransaction, deployment: Row, options: { otherVersion: boolean }): Promise<Row | null> {
+  async #previousSuccess(tx: TenantTransaction, deployment: Row, options: { otherVersion: boolean }): Promise<DeploymentRow | null> {
     const { rows } = await tx.query<DeploymentRow>(
       `${SELECT} WHERE d.environment_id = $1 AND d.application_id = $2 AND d.status IN ('succeeded', 'superseded')
          AND d.action <> 'stop' AND d.created_at < $3 AND ($5 = false OR d.build_id <> $4)
        ORDER BY d.created_at DESC LIMIT 1`,
       [deployment.environment_id, deployment.application_id, deployment.created_at, deployment.build_id, options.otherVersion],
     );
-    return (await this.#enrich(rows))[0] ?? null;
+    return rows[0] ?? null;
   }
 
-  async #findOrFail(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<Row> {
+  /** A deployment's own row. It asks no other module, so it's what transactions read. */
+  async #row(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<DeploymentRow> {
     if (options.lock) {
       await tx.query('SELECT 1 FROM deployments.deployments WHERE id = $1 FOR UPDATE', [id]);
     }
@@ -1009,7 +1044,26 @@ export class Deployments {
     if (rows[0] === undefined) {
       throw new DeploymentError('not-found', 'This deployment does not exist.');
     }
-    return (await this.#enrich(rows))[0]!;
+    return rows[0];
+  }
+
+  /**
+   * A deployment, with what other modules know of it. Its row is read in a transaction of
+   * its own, and the other modules are asked once that has ended. A transaction never waits
+   * on them: each of them takes a database connection too, and with many requests at once,
+   * connections held while waiting for more could use up the pool and stall everything.
+   */
+  async #find(id: string): Promise<Row> {
+    const row = await this.#database.transaction((tx) => this.#row(tx, id));
+    return (await this.#enrich([row]))[0]!;
+  }
+
+  /**
+   * Locks a deployment's row and reads it again, keeping what other modules said of it
+   * before. Their part, such as names, doesn't change what this module decides.
+   */
+  async #locked(tx: TenantTransaction, known: Row): Promise<Row> {
+    return { ...known, ...(await this.#row(tx, known.id, { lock: true })) };
   }
 
   /**

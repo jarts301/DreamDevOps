@@ -26,6 +26,13 @@ const DOMAIN_ERROR_STATUSES: Readonly<Record<DomainErrorKind, number>> = {
   unavailable: 503,
 };
 
+/** PostgreSQL's code for a change that breaks a unique rule. */
+const UNIQUE_VIOLATION = '23505';
+
+function isUniqueViolation(error: unknown): error is { code: string; constraint?: string } {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === UNIQUE_VIOLATION;
+}
+
 /** Answers every error in one format (RFC 9457), and never reveals internal details. */
 @Catch()
 export class ProblemDetailsFilter implements ExceptionFilter {
@@ -52,6 +59,12 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     // A route that needs a company was called by a user who doesn't act for one.
     if (error instanceof MissingTenantContextError) {
       return { status: 403 };
+    }
+    // Two requests raced to make the same thing, such as two companies with one name: the
+    // database's unique rule refused the second. Its details, such as the rule's name, stay in the log.
+    if (isUniqueViolation(error)) {
+      this.#logger.warn(`A unique rule refused a change: ${error.constraint ?? 'unknown rule'}`);
+      return { status: 409, detail: 'Something with these details already exists. Refresh and try again.' };
     }
     // Errors from Express middleware, such as an oversized or malformed body.
     const status = (error as { status?: unknown } | null)?.status;

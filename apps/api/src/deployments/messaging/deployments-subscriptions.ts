@@ -1,43 +1,46 @@
-import { Logger, type OnApplicationShutdown } from '@nestjs/common';
+import { payloadOf } from '@dreamdevops/shared-kernel';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
 import type { Deployments } from '../application/deployments.ts';
 
-/** How often rollouts that stopped moving are looked for. */
-const SWEEP_MS = 30_000;
+/** Fails rollouts that stopped moving. */
+export const STALLED_QUEUE = 'deployments.fail-stalled';
+/**
+ * Every minute, in UTC. The schedule is shared by every API process, so each minute's
+ * sweep runs once, wherever, and never piles up behind a slow one.
+ */
+export const STALLED_SCHEDULE = '* * * * *';
 
 /**
  * Writes queued deployments to their environment's repository, goes back to the last
  * version that ran well after a failed or aborted one, and fails stalled rollouts.
  */
-export class DeploymentsSubscriptions implements BackgroundSubscriber, OnApplicationShutdown {
-  readonly #logger = new Logger(DeploymentsSubscriptions.name);
+export class DeploymentsSubscriptions implements BackgroundSubscriber {
   readonly #deployments: Deployments;
   readonly #config: AppConfig;
-  #sweep: ReturnType<typeof setInterval> | undefined;
 
   constructor(deployments: Deployments, config: AppConfig) {
     this.#deployments = deployments;
     this.#config = config;
   }
 
-  async subscribe({ bus }: BackgroundWork): Promise<void> {
+  async subscribe({ bus, queue }: BackgroundWork): Promise<void> {
     const retries = {
       retryLimit: this.#config.provisioningMaxAttempts + 2,
       retryDelaySeconds: this.#config.provisioningRetrySeconds,
     };
-    const deploymentOf = (event: { payload: object }) => String((event.payload as { deploymentId?: unknown }).deploymentId);
-    await bus.subscribe('DeploymentQueued', 'deployments', (event) => this.#deployments.commit(deploymentOf(event)), retries);
+    await bus.subscribe('DeploymentQueued', 'deployments', (event) => this.#deployments.commit(payloadOf(event).text('deploymentId')), retries);
     for (const eventType of ['DeploymentFailed', 'DeploymentAborted']) {
       // Git goes back to the last version that ran well, so Flux keeps running it.
-      await bus.subscribe(eventType, 'deployment-restores', (event) => this.#deployments.restorePrevious(deploymentOf(event)), retries);
+      await bus.subscribe(
+        eventType,
+        'deployment-restores',
+        (event) => this.#deployments.restorePrevious(payloadOf(event).text('deploymentId')),
+        retries,
+      );
     }
-    this.#sweep = setInterval(() => {
-      this.#deployments.failStalled().catch((error: unknown) => this.#logger.error(error));
-    }, SWEEP_MS);
-  }
-
-  onApplicationShutdown(): void {
-    clearInterval(this.#sweep);
+    await queue.createQueue(STALLED_QUEUE, { retryLimit: 0, exclusive: true, expireInSeconds: 600 });
+    await queue.work(STALLED_QUEUE, () => this.#deployments.failStalled());
+    await queue.schedule(STALLED_QUEUE, STALLED_SCHEDULE);
   }
 }

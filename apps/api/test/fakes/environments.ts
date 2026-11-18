@@ -72,11 +72,11 @@ export class FakeSecretStore implements SecretStore {
   readonly tokens: { policyName: string; path: string }[] = [];
 
   async write(path: string, values: Readonly<Record<string, string>>): Promise<void> {
-    this.values.set(path, { ...(this.values.get(path) ?? {}), ...values });
+    this.values.set(path, { ...this.values.get(path), ...values });
   }
 
   async remove(path: string, names: readonly string[]): Promise<void> {
-    const current = { ...(this.values.get(path) ?? {}) };
+    const current = { ...this.values.get(path) };
     for (const name of names) {
       delete current[name];
     }
@@ -92,7 +92,7 @@ export class FakeSecretStore implements SecretStore {
     if (!/^read-token-\d+$/.test(token)) {
       throw new Error('Not a read token.');
     }
-    return { ...(this.values.get(path) ?? {}) };
+    return { ...this.values.get(path) };
   }
 
   async renew(): Promise<void> {}

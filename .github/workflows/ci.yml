@@ -1,0 +1,58 @@
+# Checks every push and pull request: lint, types, unit tests with coverage, the build, and
+# the integration tests against throwaway containers. The browser test and the blueprint
+# scaffold test need the whole local stack, so they stay manual, as the README describes.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, types, unit tests and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      # The API and the shared kernel, with coverage, which must not drop below its thresholds.
+      - run: npm run test:coverage
+      - run: npm run test:unit -w @dreamdevops/agent -w @dreamdevops/dashboard
+      - run: npm run build
+      - name: Keep the coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            apps/api/coverage/
+            packages/shared-kernel/coverage/
+          if-no-files-found: ignore
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Real PostgreSQL, Keycloak, Forgejo and the others, in containers that Docker on the runner starts.
+      - run: npm run test:integration

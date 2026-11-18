@@ -1,5 +1,3 @@
-import { createMongoAbility } from '@casl/ability';
-
 export interface CompanyMembership {
   readonly companyId: string;
   readonly companyName: string;
@@ -61,16 +59,12 @@ export function requiresMfa(access: UserAccess): boolean {
   return access.platformPermissions.length > 0 || access.memberships.some((membership) => MFA_ROLES.has(membership.role));
 }
 
-/** Permissions are written as "subject:action", such as "releases:start". */
+/**
+ * Permissions are written as "subject:action", such as "releases:start", and each one
+ * grants exactly what it names. None stands for others: "alerts:manage" doesn't include a
+ * future "alerts:read", which has to be granted on its own.
+ */
 export function hasPermissions(principal: Principal, required: readonly string[]): boolean {
-  const ability = createMongoAbility(
-    principal.permissions.map((permission) => {
-      const [subject = '', action = ''] = permission.split(':');
-      return { action, subject };
-    }),
-  );
-  return required.every((permission) => {
-    const [subject = '', action = ''] = permission.split(':');
-    return ability.can(action, subject);
-  });
+  const granted = new Set(principal.permissions);
+  return required.every((permission) => granted.has(permission));
 }

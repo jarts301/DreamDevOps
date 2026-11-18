@@ -27,6 +27,8 @@ describe('the target tools', () => {
     const collector = componentObjects({ insecureRegistry: false, telemetryEndpoint: ENDPOINT }).find(
       (object) => object.kind === 'HelmRelease' && object.metadata.name === 'opentelemetry-collector',
     )!;
+    // The chart's values, read deep in the assertions below, so they're left untyped.
+    // oxlint-disable-next-line typescript/no-explicit-any
     const values = (collector.spec as { values: Record<string, any> }).values;
 
     expect(values).toMatchObject({

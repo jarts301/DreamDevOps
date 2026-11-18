@@ -1,0 +1,37 @@
+{
+  // oxlint rather than ESLint: typescript-eslint needs TypeScript's JavaScript API, which
+  // TypeScript 7, used by the API, the kernel and the agent, doesn't have. It runs through
+  // npm exec at a fixed version, because its native binaries are per platform.
+  "plugins": ["typescript", "unicorn", "import", "oxc", "promise", "node"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "eqeqeq": ["error", "always"],
+    "no-console": "error",
+    "typescript/no-explicit-any": "error",
+    "import/no-cycle": "error",
+    "promise/no-multiple-resolved": "error",
+    "no-var": "error",
+    "prefer-const": "error"
+  },
+  "overrides": [
+    {
+      // Entry points and scripts talk to the person running them.
+      "files": [
+        "apps/api/src/main.ts",
+        "apps/*/scripts/**",
+        "packages/*/scripts/**",
+        "apps/agent/src/**",
+        "apps/dashboard/src/main.ts",
+        "packages/shared-kernel/src/postgres/**"
+      ],
+      "rules": { "no-console": "off" }
+    },
+    {
+      "files": ["**/test/**", "**/*.spec.ts", "**/e2e/**"],
+      "rules": { "no-console": "off" }
+    }
+  ],
+  "ignorePatterns": ["blueprints/**", "**/dist/**", "**/node_modules/**", "**/.angular/**", "**/coverage/**"]
+}

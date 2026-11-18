@@ -20,6 +20,12 @@ export interface QueueOptions {
    * soon, while a slow job that's still running keeps going.
    */
   readonly heartbeatSeconds?: number;
+  /**
+   * At most one job waits or runs at a time, and jobs sent meanwhile are dropped. For
+   * recurring sweeps, so a slow one doesn't pile up more behind it. It's set when the queue
+   * is first created, and can't be changed later.
+   */
+  readonly exclusive?: boolean;
 }
 
 export interface WorkOptions {
@@ -46,6 +52,29 @@ export interface JobQueue {
    * replaces its schedule, so each start can set it.
    */
   schedule(queue: string, cron: string, data?: object): Promise<void>;
+  /**
+   * Routes every job published to a topic into a queue, from now on. Routes are kept with
+   * the jobs, not in memory, so a publisher in any process, such as another instance or
+   * another service, reaches every queue that any process subscribed. Subscribing again
+   * changes nothing.
+   */
+  subscribe(topic: string, queue: string): Promise<void>;
+  /**
+   * Sends a job to every queue subscribed to the topic. A given ID, which must be a UUID,
+   * is used in each queue, so publishing the same job again sends nothing new.
+   */
+  publish(topic: string, data: object, options?: { readonly id?: string }): Promise<void>;
+}
+
+/**
+ * A job that can never succeed, such as one whose data is malformed. Instead of being
+ * tried again, it goes straight to its queue's dead letter queue, where someone can look at it.
+ */
+export class UnrecoverableJobError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnrecoverableJobError';
+  }
 }
 
 /** Receives events leaving the outbox. Delivery is at least once. */

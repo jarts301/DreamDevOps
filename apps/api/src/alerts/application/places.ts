@@ -1,3 +1,4 @@
+import { DomainError } from '@dreamdevops/shared-kernel';
 import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
 import type { Environments } from '../../environments/application/environments.ts';
 import { placeId } from '../../environments/domain/telemetry.ts';
@@ -37,9 +38,19 @@ export class Places {
     return (await this.of([{ environment_id: environmentId, application_id: applicationId }])).get(placeId(environmentId, applicationId)) ?? null;
   }
 
-  /** Each place the company has, by its ID. Others are left out. */
+  /**
+   * Each place the company has, by its ID. Places whose environment or application no
+   * longer exists are left out. Any other failure, such as the database being down, is
+   * thrown, so it isn't mistaken for a place that's gone.
+   */
   async of(rows: readonly PlaceRow[]): Promise<Map<string, Place>> {
-    const quietly = <T>(lookup: Promise<T>) => lookup.catch(() => null);
+    const quietly = <T>(lookup: Promise<T>) =>
+      lookup.catch((error: unknown) => {
+        if (error instanceof DomainError && error.kind === 'not-found') {
+          return null;
+        }
+        throw error;
+      });
     const environments = new Map(
       await Promise.all(
         [...new Set(rows.map((row) => row.environment_id))].map(async (id) => [id, await quietly(this.#environments.get(id))] as const),
@@ -54,7 +65,7 @@ export class Places {
     for (const row of rows) {
       const environment = environments.get(row.environment_id);
       const application = applications.get(row.application_id);
-      if (environment == null || application == null) {
+      if (environment === undefined || environment === null || application === undefined || application === null) {
         continue;
       }
       const id = placeId(row.environment_id, row.application_id);

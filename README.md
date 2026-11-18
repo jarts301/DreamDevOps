@@ -173,9 +173,11 @@ Run these from the repository root.
 | `npm run db:migrate` | Applies database migrations |
 | `npm run build` | Builds every package and app |
 | `npm run typecheck` | Checks types everywhere |
+| `npm run lint` | Checks the code for mistakes, with oxlint |
 | `npm test` | Runs the unit and integration tests |
 | `npm run test:unit` | Runs only the tests that need no services |
 | `npm run test:integration` | Runs only the tests against throwaway containers |
+| `npm run test:coverage` | Runs the API's and shared kernel's unit tests with coverage, which must not drop below its thresholds |
 | `npm run test:e2e` | Runs the browser test of the main flow |
 | `npm run test:scaffolds` | Checks that every blueprint produces a project that builds and runs. Slow, and needs Docker and the internet. |
 | `npm run blueprints:publish` | Publishes new blueprint versions. See [Blueprints](blueprints/README.md). |
@@ -267,7 +269,11 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 
 ## Contributing
 
-Before you open a pull request, check that these all pass:
+Before you open a pull request, check that these all pass. The [CI workflow](.github/workflows/ci.yml) runs all but the browser test on every push and pull request.
+
+```bash
+npm run lint
+```
 
 ```bash
 npm run typecheck

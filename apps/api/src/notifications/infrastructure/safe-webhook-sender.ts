@@ -28,8 +28,14 @@ for (const [network, prefix] of [
   BLOCKED.addSubnet(network, prefix, 'ipv4');
 }
 for (const [network, prefix] of [
-  ['::', 128],
+  // Unspecified, loopback, and the old IPv4-compatible addresses, such as ::127.0.0.1.
+  ['::', 96],
   ['::1', 128],
+  // IPv4 reached through NAT64 gateways, such as 64:ff9b::10.0.0.1.
+  ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  // IPv4 inside 6to4 addresses, such as 2002:0a00:0001::.
+  ['2002::', 16],
   ['fc00::', 7],
   ['fe80::', 10],
   ['ff00::', 8],

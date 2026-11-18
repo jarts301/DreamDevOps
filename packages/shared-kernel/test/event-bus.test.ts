@@ -97,6 +97,30 @@ describe('EventBus', () => {
     expect(seen).toBe(companyId);
   });
 
+  it('delivers events published in another process, which shares only the job queue', async () => {
+    const handler = vi.fn(async () => {});
+    await bus.subscribe('ApplicationCreated', 'audit', handler);
+    // Another API instance, or another service, that has no subscriptions of its own.
+    const publisher = new EventBus(queue);
+
+    await publisher.publish(event);
+    await queue.drain();
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  it('sends an event without a valid company to the dead letter queue, without trying it again', async () => {
+    const handler = vi.fn(async () => {});
+    await bus.subscribe('ApplicationCreated', 'audit', handler);
+    const broken = { ...event, companyId: 'not-a-company' } as unknown as typeof event;
+
+    await bus.publish(broken);
+    await queue.drain();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(queue.deadLettersOf('events.audit.ApplicationCreated')).toHaveLength(1);
+  });
+
   it('rejects a duplicate subscription', async () => {
     await bus.subscribe('ApplicationCreated', 'audit', async () => {});
 

@@ -118,7 +118,7 @@ class SimulatedDocker {
       }
       case 'port': {
         const port = this.containers.get(args[1]!)?.port;
-        return port == null ? error('no public port') : ok(`127.0.0.1:${port}\n`);
+        return port === undefined || port === null ? error('no public port') : ok(`127.0.0.1:${port}\n`);
       }
       case 'logs':
         if (this.down) return error('Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?');

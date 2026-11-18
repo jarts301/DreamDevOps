@@ -7,6 +7,7 @@ import type { Principal } from '../../identity-access/domain/access.ts';
 import {
   type ApplicationStatus,
   applicationSlug,
+  MAX_SLUG_LENGTH,
   normalizeApplicationName,
   normalizeDescription,
 } from '../domain/application.ts';
@@ -125,6 +126,24 @@ export class ApplicationCatalog {
     });
   }
 
+  /**
+   * The current company's applications with these short names, active or archived, as IDs
+   * by short name. Names the company doesn't have are left out. For the telemetry gateway,
+   * which finds an application by the namespace it runs in, for every batch it's sent.
+   */
+  async idsBySlug(slugs: readonly string[]): Promise<Map<string, string>> {
+    const wanted = [...new Set(slugs)].filter((slug) => slug.length > 0 && slug.length <= MAX_SLUG_LENGTH);
+    if (wanted.length === 0) {
+      return new Map();
+    }
+    return this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query<{ id: string; slug: string }>('SELECT id, slug FROM catalog.applications WHERE slug = ANY ($1)', [
+        wanted,
+      ]);
+      return new Map(rows.map((row) => [row.slug, row.id]));
+    });
+  }
+
   async get(idValue: unknown): Promise<ApplicationView> {
     const id = parseApplicationId(idValue);
     return this.#database.transaction(async (tx) => this.#toView(await findOrFail(tx, id)));
@@ -145,7 +164,7 @@ export class ApplicationCatalog {
 
     return this.#database.transaction(async (tx) => {
       // One registration per company at a time, so two people can't take the same name or short name.
-      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalog:' || $1, 0))", [companyId]);
+      await lockCompanyNames(tx);
       const type = await availableType(tx, input.type);
       const blueprint = this.#chosenBlueprint(type.key, type.defaultBlueprint, input.blueprint);
       await assertNameFree(tx, name, null);
@@ -200,6 +219,10 @@ export class ApplicationCatalog {
     const description = input.description === undefined ? undefined : normalizeDescription(input.description);
 
     return this.#database.transaction(async (tx) => {
+      if (name !== undefined) {
+        // The lock registering takes, so a rename and a registration can't take the same name at once.
+        await lockCompanyNames(tx);
+      }
       const current = await findOrFail(tx, id, { lock: true });
       if (current.status === 'archived') {
         throw new CatalogError('conflict', 'Restore the application first.');
@@ -283,6 +306,11 @@ async function findOrFail(tx: TenantTransaction, id: string, options: { lock?: b
     throw new CatalogError('not-found', 'This application does not exist.');
   }
   return rows[0];
+}
+
+/** Lets one registration or rename at a time choose a name in the current company. */
+async function lockCompanyNames(tx: TenantTransaction): Promise<void> {
+  await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalog:' || $1, 0))", [currentCompanyId()]);
 }
 
 async function availableType(tx: TenantTransaction, value: unknown): Promise<{ key: string; defaultBlueprint: string | null }> {

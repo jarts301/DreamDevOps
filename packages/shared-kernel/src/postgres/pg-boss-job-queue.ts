@@ -1,5 +1,5 @@
 import { PgBoss } from 'pg-boss';
-import { deadLetterQueueName } from '../application/ports.ts';
+import { deadLetterQueueName, UnrecoverableJobError } from '../application/ports.ts';
 import type { JobHandler, JobQueue, QueueOptions, WorkOptions } from '../application/ports.ts';
 
 export interface PgBossJobQueueOptions {
@@ -47,6 +47,7 @@ export class PgBossJobQueue implements JobQueue {
       deadLetter,
       ...settings,
       ...(options.heartbeatSeconds !== undefined && { heartbeatSeconds: options.heartbeatSeconds }),
+      ...(options.exclusive === true && { policy: 'exclusive' }),
     });
     await this.#boss.updateQueue(queue, { deadLetter, ...settings, heartbeatSeconds: options.heartbeatSeconds ?? null });
   }
@@ -81,12 +82,38 @@ export class PgBossJobQueue implements JobQueue {
             results.push({ id: job.id, status: 'completed' });
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Job failed';
-            results.push({ id: job.id, status: 'failed', output: { message } });
+            if (error instanceof UnrecoverableJobError && (await this.#deadLetter(queue, job.id, job.data))) {
+              results.push({ id: job.id, status: 'completed', output: { deadLettered: message } });
+            } else {
+              results.push({ id: job.id, status: 'failed', output: { message } });
+            }
           }
         }
         return results;
       },
     );
+  }
+
+  /**
+   * Trying again can't help, so the job goes where failed jobs go once their retries run
+   * out. Returns false if it couldn't, so the job fails as usual and isn't lost.
+   */
+  async #deadLetter(queue: string, id: string, data: object): Promise<boolean> {
+    try {
+      await this.#boss.send(deadLetterQueueName(queue), data, { id });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** pg-boss keeps subscriptions in its own tables, so every process publishing sees them. */
+  async subscribe(topic: string, queue: string): Promise<void> {
+    await this.#boss.subscribe(topic, queue);
+  }
+
+  async publish(topic: string, data: object, options: { readonly id?: string } = {}): Promise<void> {
+    await this.#boss.publish(topic, data, options.id === undefined ? {} : { id: options.id });
   }
 
   /** pg-boss keeps schedules in its own tables, and one process at a time sends their jobs. */

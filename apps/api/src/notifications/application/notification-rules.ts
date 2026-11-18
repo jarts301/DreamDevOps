@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import {
   createDomainEvent,
   currentCompanyId,
   describeError,
+  deterministicJobId,
   type DomainEvent,
   isUuid,
   type JobQueue,
@@ -231,9 +231,7 @@ export class NotificationRules {
  * must be UUIDs, so this derives one from the pair.
  */
 export function deliveryJobId(eventId: string, ruleId: string): string {
-  const hex = createHash('sha256').update(`${eventId}:${ruleId}`).digest('hex');
-  const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  return deterministicJobId(eventId, ruleId);
 }
 
 function message(kind: RuleKind, event: DomainEvent, text: string, companyName: string): object {

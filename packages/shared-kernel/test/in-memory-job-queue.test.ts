@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InMemoryJobQueue } from '../src/testing/index.ts';
 import { describeJobQueueContract } from './job-queue-contract.ts';
 
@@ -6,10 +6,8 @@ describeJobQueueContract('in-memory fake', async () => {
   const queue = new InMemoryJobQueue();
   return {
     queue,
-    eventually: async (assertion) => {
-      await queue.drain();
-      assertion();
-    },
+    // Polls rather than drains, so a test can hold a job open while it checks something.
+    eventually: (assertion) => vi.waitFor(assertion, { timeout: 2_000, interval: 5 }),
     deadLetters: async (queueName) => {
       await queue.drain();
       return queue.deadLettersOf(queueName);

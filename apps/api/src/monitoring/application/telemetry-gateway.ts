@@ -58,18 +58,14 @@ export class TelemetryGateway {
     if (!Array.isArray(resources)) {
       throw new MonitoringError('invalid', `This isn't an OTLP ${kind} request in JSON.`);
     }
-    const applications = await runWithCompany(companyId, async () => {
-      const bySlug = new Map<string, string>();
-      for (const status of ['active', 'archived'] as const) {
-        for (const application of await this.#catalog.list(status)) {
-          bySlug.set(application.slug, application.id);
-        }
-      }
-      return bySlug;
-    });
+    const namespaceOf = (entry: Resource): unknown =>
+      (entry.resource?.attributes ?? []).find((attribute) => attribute.key === NAMESPACE_ATTRIBUTE)?.value['stringValue'];
+    // Only the applications this batch names are looked up, rather than all of the company's, for every batch.
+    const namespaces = (resources as Resource[]).map(namespaceOf).filter((namespace): namespace is string => typeof namespace === 'string');
+    const applications = await runWithCompany(companyId, () => this.#catalog.idsBySlug(namespaces));
     const kept = (resources as Resource[]).flatMap((entry) => {
       const attributes = entry.resource?.attributes ?? [];
-      const namespace = attributes.find((attribute) => attribute.key === NAMESPACE_ATTRIBUTE)?.value['stringValue'];
+      const namespace = namespaceOf(entry);
       const applicationId = typeof namespace === 'string' ? applications.get(namespace) : undefined;
       if (applicationId === undefined) {
         return [];

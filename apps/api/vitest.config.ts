@@ -1,21 +1,28 @@
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-const kernel = (path: string) => fileURLToPath(new URL(`../../packages/shared-kernel/src/${path}`, import.meta.url));
-
+/**
+ * Tests read the shared kernel's sources, through the same export condition as the type
+ * checker, so they need no build of it and can't test a stale one. The others are Vite's
+ * defaults for code that runs in Node.
+ */
 const resolve = {
-  alias: [
-    { find: '@dreamdevops/shared-kernel/postgres', replacement: kernel('postgres/index.ts') },
-    { find: '@dreamdevops/shared-kernel/testing', replacement: kernel('testing/index.ts') },
-    { find: '@dreamdevops/shared-kernel', replacement: kernel('index.ts') },
-  ],
+  conditions: ['@dreamdevops/source', 'module', 'node', 'development|production'],
 };
 
 export default defineConfig({
   test: {
+    // npm run test:coverage measures the unit tests. The thresholds are today's levels, so
+    // coverage can only go up.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      reporter: ['text-summary', 'json-summary', 'html'],
+      thresholds: { lines: 39, branches: 35, functions: 36, statements: 39 },
+    },
     projects: [
       {
         resolve,
+        ssr: { resolve },
         test: {
           name: 'unit',
           include: ['test/**/*.test.ts'],
@@ -24,6 +31,7 @@ export default defineConfig({
       },
       {
         resolve,
+        ssr: { resolve },
         test: {
           name: 'integration',
           include: ['test/**/*.integration.test.ts'],
@@ -33,6 +41,7 @@ export default defineConfig({
       },
       {
         resolve,
+        ssr: { resolve },
         test: {
           // Slow, and needs Docker and the internet, so it runs only on request.
           name: 'scaffolds',

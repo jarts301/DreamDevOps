@@ -185,6 +185,11 @@ describe('the webhook sender', () => {
     'fd00::1',
     'fe80::1',
     '::ffff:127.0.0.1',
+    // IPv4 hidden inside IPv6: NAT64, 6to4 and the old IPv4-compatible form.
+    '64:ff9b::a9fe:a9fe',
+    '64:ff9b:1::a00:1',
+    '2002:a00:1::1',
+    '::7f00:1',
   ])('blocks %s', (address) => {
     expect(isBlockedAddress(address)).toBe(true);
   });

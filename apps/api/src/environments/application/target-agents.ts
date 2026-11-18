@@ -259,7 +259,7 @@ export class TargetAgents {
   async heartbeat(
     accessToken: string | undefined,
     input: { agentVersion?: unknown; kubernetesVersion?: unknown },
-  ): Promise<{ heartbeatSeconds: number }> {
+  ): Promise<{ heartbeatSeconds: number; companyId: CompanyId; targetId: string; environmentId: string }> {
     const refused = () => new EnvironmentError('unauthorized', 'This access token is not valid.');
     const token = parseToken(accessToken);
     if (token === null) {
@@ -288,7 +288,7 @@ export class TargetAgents {
           [target.id, agentVersion, kubernetesVersion],
         );
         await this.#seen(tx, companyId, target);
-        return { heartbeatSeconds: HEARTBEAT_SECONDS };
+        return { heartbeatSeconds: HEARTBEAT_SECONDS, companyId, targetId: target.id, environmentId: target.environment_id };
       }),
     );
   }

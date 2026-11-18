@@ -35,8 +35,10 @@ export const DASHBOARD_URL = 'http://dashboard.test/';
 
 export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   environment: 'test',
+  host: '127.0.0.1',
   port: 0,
   databaseUrl: 'postgres://unused',
+  databasePoolSize: 10,
   publicUrl: PUBLIC_URL,
   dashboardUrl: DASHBOARD_URL,
   keycloakIssuerUrl: 'http://unused',
@@ -53,6 +55,7 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   jobsDatabaseUrl: 'postgres://unused',
   relayPollMs: 50,
   jobPollingSeconds: 1,
+  outboxRetentionDays: 7,
   forgejoUrl: 'http://unused',
   forgejoUsername: 'unused',
   forgejoPassword: 'unused',

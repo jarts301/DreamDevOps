@@ -1,11 +1,10 @@
 import { Logger } from '@nestjs/common';
-import { parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { deterministicJobId, parseCompanyId, payloadOf, runWithCompany } from '@dreamdevops/shared-kernel';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
 import type { MemberRemoved } from '../../identity-access/domain/events.ts';
 import type { AlertChecks } from '../application/alert-checks.ts';
 import { type AlertDeliveries, EMAIL_QUEUE, type EmailJob } from '../application/alert-deliveries.ts';
-import { jobIdFor } from '../application/job-ids.ts';
 import type { AlertRules } from '../application/alert-rules.ts';
 import type { AlertResolved, AlertTriggered } from '../domain/events.ts';
 
@@ -63,7 +62,7 @@ export class AlertsSubscriptions implements BackgroundSubscriber {
       const minute = Math.floor(this.#now().getTime() / 60_000);
       for (const companyId of await this.#checks.companiesToCheck()) {
         const job: EvaluateJob = { companyId };
-        await queue.send(EVALUATE_QUEUE, job, { id: jobIdFor('alerts-check', companyId, String(minute)) });
+        await queue.send(EVALUATE_QUEUE, job, { id: deterministicJobId('alerts-check', companyId, String(minute)) });
       }
     });
 
@@ -76,7 +75,7 @@ export class AlertsSubscriptions implements BackgroundSubscriber {
     await bus.subscribe<MemberRemoved>(
       'MemberRemoved',
       'alerts-recipients',
-      (event) => this.#rules.forgetMember(event.payload.userId),
+      (event) => this.#rules.forgetMember(payloadOf(event).text('userId')),
       { retryLimit: 5, retryDelaySeconds: 5 },
     );
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeName } from '../src/shared/names.ts';
-import { refPath, segment } from '../src/shared/forgejo/forgejo-api.ts';
+import { ForgejoApi, refPath, segment } from '../src/shared/forgejo/forgejo-api.ts';
+import { withoutSecrets } from '../src/shared/run-command.ts';
 import { normalizeApplicationName } from '../src/catalog/domain/application.ts';
 import { normalizeCompanyName } from '../src/tenancy/domain/company.ts';
 
@@ -34,5 +35,39 @@ describe('Forgejo paths', () => {
     expect(segment('a b/c')).toBe('a%20b%2Fc');
     expect(refPath('release/1.0.0')).toBe('release/1.0.0');
     expect(refPath('feature/a b')).toBe('feature/a%20b');
+  });
+});
+
+describe('the tools the API runs', () => {
+  it("get the API's environment without its passwords, keys and tokens", () => {
+    const env = withoutSecrets({
+      PATH: '/usr/bin',
+      HOME: '/home/api',
+      DOCKER_HOST: 'unix:///var/run/docker.sock',
+      API_DATABASE_URL: 'postgres://app:password@db/dreamdevops',
+      JOBS_DATABASE_URL: 'postgres://jobs:password@db/dreamdevops',
+      FORGEJO_BOT_PASSWORD: 'secret',
+      SIGNING_KEY_SECRET: 'secret',
+      WEBHOOK_SECRET_KEY: 'secret',
+      OPENBAO_TOKEN: 'secret',
+      KEYCLOAK_CLIENT_SECRET: 'secret',
+    });
+
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/api', DOCKER_HOST: 'unix:///var/run/docker.sock' });
+  });
+});
+
+describe('the Git service client', () => {
+  it('keeps why Git could not be reached, for the logs, behind a message people can read', async () => {
+    const api = new ForgejoApi({ url: 'http://127.0.0.1:9', username: 'bot', password: 'secret' }, { defaultTimeoutMs: 2_000 });
+
+    const failure: unknown = await api.request('GET', '/version').then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('The Git service could not be reached.');
+    expect((failure as Error).cause).toBeInstanceOf(Error);
   });
 });

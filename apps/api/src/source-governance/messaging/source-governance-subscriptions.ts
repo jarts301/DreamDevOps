@@ -1,14 +1,15 @@
 import { Logger } from '@nestjs/common';
-import { describeError, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { describeError, deterministicJobId, parseCompanyId, payloadOf, runWithCompany } from '@dreamdevops/shared-kernel';
 import type { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
-import type { ApplicationArchived, ApplicationRegistered, ApplicationRestored } from '../../catalog/domain/events.ts';
-import type { RepositoryRequested } from '../domain/events.ts';
 import { POLICY_VERSION, REPOSITORY_TRIGGERS, type Repositories } from '../application/repositories.ts';
 import { ACCESS_TRIGGERS, type SourceAccess } from '../application/source-access.ts';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
+
+/** Brings repositories made under older rules up to date. */
+export const UPGRADE_QUEUE = 'source.upgrade-repositories';
 
 /**
  * Creates repositories, keeps them read-only while archived, and keeps teams in line with
@@ -28,16 +29,16 @@ export class SourceGovernanceSubscriptions implements BackgroundSubscriber {
     this.#database = database;
   }
 
-  async subscribe({ bus }: BackgroundWork): Promise<void> {
+  async subscribe({ bus, queue }: BackgroundWork): Promise<void> {
     const retries = {
       retryLimit: this.#config.provisioningMaxAttempts + 2,
       retryDelaySeconds: this.#config.provisioningRetrySeconds,
     };
     for (const eventType of REPOSITORY_TRIGGERS) {
-      await bus.subscribe<ApplicationRegistered | RepositoryRequested>(
+      await bus.subscribe(
         eventType,
         'source-repositories',
-        (event) => this.#repositories.provision(event.payload.applicationId),
+        (event) => this.#repositories.provision(payloadOf(event).text('applicationId')),
         retries,
       );
     }
@@ -45,18 +46,22 @@ export class SourceGovernanceSubscriptions implements BackgroundSubscriber {
       ['ApplicationArchived', true],
       ['ApplicationRestored', false],
     ] as const) {
-      await bus.subscribe<ApplicationArchived | ApplicationRestored>(
+      await bus.subscribe(
         eventType,
         'source-archiving',
-        (event) => this.#repositories.syncArchived(event.payload.applicationId, archived),
+        (event) => this.#repositories.syncArchived(payloadOf(event).text('applicationId'), archived),
         retries,
       );
     }
     for (const eventType of ACCESS_TRIGGERS) {
       await bus.subscribe(eventType, 'source-access', () => this.#access.syncCompany(), retries);
     }
-    // In the background, so a slow Git service doesn't hold up the start.
-    void this.#upgradeRepositories().catch((error: unknown) => this.#logger.error(error));
+    // A job rather than work at every start: its ID names the rules' version, so however
+    // many API processes start, repositories are brought up to date once per version, and
+    // a slow Git service doesn't hold up the start.
+    await queue.createQueue(UPGRADE_QUEUE, { ...retries, expireInSeconds: 3_600 });
+    await queue.work(UPGRADE_QUEUE, () => this.#upgradeRepositories());
+    await queue.send(UPGRADE_QUEUE, { policyVersion: POLICY_VERSION }, { id: deterministicJobId(UPGRADE_QUEUE, String(POLICY_VERSION)) });
   }
 
   /** Brings repositories made under older rules up to date, company by company. */

@@ -1,6 +1,7 @@
-import { createDomainEvent, isUuid, parseCompanyId } from '@dreamdevops/shared-kernel';
+import { Places } from '../src/alerts/application/places.ts';
+import { CatalogError } from '../src/catalog/domain/errors.ts';
+import { createDomainEvent, deterministicJobId as jobIdFor, isUuid, parseCompanyId } from '@dreamdevops/shared-kernel';
 import { describe, expect, it } from 'vitest';
-import { jobIdFor } from '../src/alerts/application/job-ids.ts';
 import {
   describeCondition,
   describeValue,
@@ -244,5 +245,35 @@ describe('alert jobs', () => {
     expect(isUuid(id)).toBe(true);
     expect(jobIdFor('alert-email', 'event-1', 'ops@example.com')).toBe(id);
     expect(jobIdFor('alert-email', 'event-1', 'lead@example.com')).not.toBe(id);
+  });
+});
+
+describe('the places alerts watch', () => {
+  const environment = { id: 'env-1', name: 'Live', kind: 'production' };
+  const application = { id: 'app-1', name: 'Billing API' };
+  const row = { environment_id: 'env-1', application_id: 'app-1' };
+
+  it('leave out a place whose environment or application is gone', async () => {
+    const gone = new CatalogError('not-found', 'This application does not exist.');
+    const places = new Places({ get: async () => environment as never }, { get: async () => Promise.reject(gone) });
+
+    expect((await places.of([row])).size).toBe(0);
+  });
+
+  it('fail when a lookup fails for any other reason, rather than treat the place as gone', async () => {
+    const places = new Places(
+      { get: async () => environment as never },
+      { get: async () => Promise.reject(new Error('The database is unavailable.')) },
+    );
+
+    await expect(places.of([row])).rejects.toThrow('The database is unavailable.');
+  });
+
+  it('name the places that exist', async () => {
+    const places = new Places({ get: async () => environment as never }, { get: async () => application as never });
+
+    expect([...(await places.of([row])).values()]).toEqual([
+      expect.objectContaining({ environmentName: 'Live', applicationName: 'Billing API', production: true }),
+    ]);
   });
 });

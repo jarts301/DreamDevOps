@@ -1,4 +1,4 @@
-import { createDomainEvent, currentCompanyId, describeError } from '@dreamdevops/shared-kernel';
+import { createDomainEvent, currentCompanyId, describeError, withRenewal } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
 import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
@@ -20,6 +20,19 @@ export const POLICY_VERSION = 3;
 export const REPOSITORY_TRIGGERS = ['ApplicationRegistered', 'RepositoryRequested'] as const;
 
 export type RepositoryStatus = 'creating' | 'ready' | 'failed';
+
+/** How long a job's claim on a repository lasts, unless the job renews it. */
+const CLAIM_SECONDS = 120;
+/** How often a working job renews its claim, well within the claim's length. */
+const RENEW_MS = 30_000;
+
+/** Another job is creating the same repository. Thrown so this job is tried again later. */
+export class RepositoryBusyError extends Error {
+  constructor() {
+    super('Another job is creating this repository. It will be tried again.');
+    this.name = 'RepositoryBusyError';
+  }
+}
 
 export interface RepositoryView {
   readonly applicationId: string;
@@ -105,6 +118,8 @@ export class Repositories implements RepositoryLookup {
     if (application.status === 'archived') {
       throw new SourceError('conflict', 'Restore the application first.');
     }
+    // Asked before the transaction, so it never waits on another module.
+    const company = await this.#currentCompany();
     await this.#database.transaction(async (tx) => {
       const row = await lockRow(tx, application.id);
       if (row?.status === 'ready') {
@@ -113,7 +128,7 @@ export class Repositories implements RepositoryLookup {
       if (row?.status === 'creating') {
         return;
       }
-      await upsertCreating(tx, application.id, (await this.#currentCompany()).slug, application.slug);
+      await upsertCreating(tx, application.id, company.slug, application.slug);
       await appendToOutbox(tx, [
         createDomainEvent<'RepositoryRequested', RepositoryRequestedPayload>({
           eventType: 'RepositoryRequested',
@@ -125,11 +140,19 @@ export class Repositories implements RepositoryLookup {
     });
   }
 
-  /** Runs in the application's company. Throws to have the job tried again later. */
+  /**
+   * Runs in the application's company. Throws to have the job tried again later.
+   *
+   * Git is called with no transaction open. A short one first claims the repository, so two
+   * jobs never create it at once, and chooses its blueprint version once, so every try uses
+   * the same scaffold. Another records what happened.
+   */
   async provision(applicationId: string): Promise<void> {
+    // Other modules are asked first, so no transaction waits on them.
     const application = await this.#catalog.get(applicationId);
-    const failure = await this.#database.transaction(async (tx) => {
-      const company = await this.#currentCompany();
+    const company = await this.#currentCompany();
+
+    const claimed = await this.#database.transaction(async (tx) => {
       let row = await lockRow(tx, applicationId);
       if (row?.status === 'ready') {
         return null;
@@ -138,51 +161,69 @@ export class Repositories implements RepositoryLookup {
         await upsertCreating(tx, applicationId, company.slug, application.slug);
         row = (await lockRow(tx, applicationId))!;
       }
-      const spec: RepositorySpec = { organization: row.organization, name: row.name, applicationId };
+      if (!(await claimRepository(tx, applicationId))) {
+        throw new RepositoryBusyError();
+      }
+      let blueprint = row.blueprint_key !== null && row.blueprint_version !== null ? { key: row.blueprint_key, version: row.blueprint_version } : null;
+      if (blueprint === null) {
+        // The newest version of the blueprint chosen when the application was registered.
+        const newest =
+          application.blueprint === null
+            ? this.#blueprints.latestForType(application.type.key)
+            : this.#blueprints.latestOf(application.blueprint.key);
+        if (newest !== null) {
+          blueprint = { key: newest.key, version: newest.version };
+          await tx.query('UPDATE source.repositories SET blueprint_key = $2, blueprint_version = $3 WHERE application_id = $1', [
+            applicationId,
+            blueprint.key,
+            blueprint.version,
+          ]);
+        }
+      }
+      return { spec: { organization: row.organization, name: row.name, applicationId } satisfies RepositorySpec, blueprint };
+    });
+    if (claimed === null) {
+      return;
+    }
+    const { spec, blueprint } = claimed;
 
-      try {
+    let outcome: { repositoryId: string; blueprint: { key: string; version: string } } | { error: unknown };
+    try {
+      const renew = () => this.#database.transaction((tx) => renewClaim(tx, applicationId));
+      outcome = await withRenewal(renew, { everyMs: RENEW_MS }, async () => {
         if (company.status !== 'active') {
           throw new Error("The company's Git organization isn't ready yet.");
         }
-        let blueprintKey = row.blueprint_key;
-        let blueprintVersion = row.blueprint_version;
-        if (blueprintKey === null || blueprintVersion === null) {
-          // The newest version of the blueprint chosen when the application was registered.
-          const blueprint =
-            application.blueprint === null
-              ? this.#blueprints.latestForType(application.type.key)
-              : this.#blueprints.latestOf(application.blueprint.key);
-          if (blueprint === null) {
-            throw new PermanentSourceError(`No blueprint exists for the ${application.type.name} type.`);
-          }
-          blueprintKey = blueprint.key;
-          blueprintVersion = blueprint.version;
-          await tx.query(
-            'UPDATE source.repositories SET blueprint_key = $2, blueprint_version = $3 WHERE application_id = $1',
-            [applicationId, blueprintKey, blueprintVersion],
-          );
+        if (blueprint === null) {
+          throw new PermanentSourceError(`No blueprint exists for the ${application.type.name} type.`);
         }
-
         await this.#host.ensureTeams(spec.organization);
         const repository = await this.#host.ensureRepository(spec);
         if (repository.empty) {
-          const files = this.#blueprints.render(blueprintKey, blueprintVersion, {
+          const files = this.#blueprints.render(blueprint.key, blueprint.version, {
             name: application.name,
             slug: application.slug,
           });
-          await this.#host.commitInitialFiles(spec, files, `Start from the ${blueprintKey} ${blueprintVersion} blueprint`);
+          await this.#host.commitInitialFiles(spec, files, `Start from the ${blueprint.key} ${blueprint.version} blueprint`);
         }
         await this.#applyPolicy(spec);
         if (application.status === 'archived') {
           await this.#host.setArchived(spec, true);
         }
+        return { repositoryId: repository.id, blueprint };
+      });
+    } catch (error) {
+      outcome = { error };
+    }
 
+    const failure = await this.#database.transaction(async (tx) => {
+      if ('repositoryId' in outcome) {
         await tx.query(
           `UPDATE source.repositories
            SET status = 'ready', external_id = $2, attempts = 0, last_error = NULL,
-               policy_version = $3, updated_at = now()
+               policy_version = $3, claimed_until = NULL, updated_at = now()
            WHERE application_id = $1`,
-          [applicationId, repository.id, POLICY_VERSION],
+          [applicationId, outcome.repositoryId, POLICY_VERSION],
         );
         await appendToOutbox(tx, [
           createDomainEvent<'RepositoryCreated', RepositoryCreatedPayload>({
@@ -192,33 +233,34 @@ export class Repositories implements RepositoryLookup {
               applicationId,
               name: application.name,
               repository: `${spec.organization}/${spec.name}`,
-              blueprint: blueprintKey,
-              blueprintVersion,
+              blueprint: outcome.blueprint.key,
+              blueprintVersion: outcome.blueprint.version,
             },
           }),
         ]);
         return null;
-      } catch (error) {
-        const reason = describeError(error);
-        const attempts = row.attempts + 1;
-        const failed = error instanceof PermanentSourceError || attempts >= this.#options.maxAttempts;
-        await tx.query(
-          `UPDATE source.repositories SET status = $2, attempts = $3, last_error = $4, updated_at = now()
-           WHERE application_id = $1`,
-          [applicationId, failed ? 'failed' : 'creating', attempts, reason],
-        );
-        if (failed) {
-          await appendToOutbox(tx, [
-            createDomainEvent({
-              eventType: 'RepositoryCreationFailed',
-              companyId: currentCompanyId(),
-              payload: { applicationId, name: application.name, reason },
-            }),
-          ]);
-          return null;
-        }
-        return error;
       }
+      const { error } = outcome;
+      const row = (await lockRow(tx, applicationId))!;
+      const reason = describeError(error);
+      const attempts = row.attempts + 1;
+      const failed = error instanceof PermanentSourceError || attempts >= this.#options.maxAttempts;
+      await tx.query(
+        `UPDATE source.repositories SET status = $2, attempts = $3, last_error = $4, claimed_until = NULL, updated_at = now()
+         WHERE application_id = $1`,
+        [applicationId, failed ? 'failed' : 'creating', attempts, reason],
+      );
+      if (failed) {
+        await appendToOutbox(tx, [
+          createDomainEvent({
+            eventType: 'RepositoryCreationFailed',
+            companyId: currentCompanyId(),
+            payload: { applicationId, name: application.name, reason },
+          }),
+        ]);
+        return null;
+      }
+      return error;
     });
 
     // Thrown after the transaction commits, so the failed attempt stays recorded.
@@ -334,6 +376,23 @@ async function lockRow(tx: TenantTransaction, applicationId: string): Promise<Re
     [applicationId],
   );
   return rows[0] ?? null;
+}
+
+/** Claims the repository for this job, unless another job's claim still holds. */
+async function claimRepository(tx: TenantTransaction, applicationId: string): Promise<boolean> {
+  const { rowCount } = await tx.query(
+    `UPDATE source.repositories SET claimed_until = now() + make_interval(secs => $2)
+     WHERE application_id = $1 AND (claimed_until IS NULL OR claimed_until < now())`,
+    [applicationId, CLAIM_SECONDS],
+  );
+  return rowCount === 1;
+}
+
+async function renewClaim(tx: TenantTransaction, applicationId: string): Promise<void> {
+  await tx.query('UPDATE source.repositories SET claimed_until = now() + make_interval(secs => $2) WHERE application_id = $1', [
+    applicationId,
+    CLAIM_SECONDS,
+  ]);
 }
 
 async function upsertCreating(tx: TenantTransaction, applicationId: string, organization: string, name: string) {

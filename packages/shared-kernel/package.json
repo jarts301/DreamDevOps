@@ -6,14 +6,17 @@
   "type": "module",
   "exports": {
     ".": {
+      "@dreamdevops/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./postgres": {
+      "@dreamdevops/source": "./src/postgres/index.ts",
       "types": "./dist/postgres/index.d.ts",
       "default": "./dist/postgres/index.js"
     },
     "./testing": {
+      "@dreamdevops/source": "./src/testing/index.ts",
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
     }
@@ -24,6 +27,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:coverage": "vitest run --project unit --coverage",
     "db:migrate": "node --env-file=../../infra/local/.env scripts/migrate.ts"
   },
   "dependencies": {

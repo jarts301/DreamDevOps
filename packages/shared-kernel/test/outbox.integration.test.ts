@@ -174,6 +174,28 @@ describe('tenant isolation and the outbox', () => {
   });
 
   describe('relay', () => {
+    it('removes delivered events after a while, and never those still waiting', async () => {
+      const delivered = eventFor(companyA, 'delivered');
+      const waiting = eventFor(companyA, 'waiting');
+      const relay = new OutboxRelay(relayPool, { publish: async () => {} }, { batchSize: 1000 });
+      await save(delivered);
+      await relay.publishBatch();
+      await save(waiting);
+
+      // Nothing was delivered before an hour ago, so nothing goes yet.
+      await relay.purgePublished(new Date(Date.now() - 3_600_000));
+      expect(await visibleEventIds(companyA)).toEqual(expect.arrayContaining([delivered.eventId, waiting.eventId]));
+
+      expect(await relay.purgePublished(new Date(Date.now() + 60_000))).toBeGreaterThanOrEqual(1);
+      const left = await visibleEventIds(companyA);
+      expect(left).toContain(waiting.eventId);
+      expect(left).not.toContain(delivered.eventId);
+    });
+
+    it('lets only the relay remove events', async () => {
+      await expect(appPool.query('SELECT kernel.purge_published_outbox(now(), 10)')).rejects.toThrow('permission denied');
+    });
+
     it('publishes events from every company in the order they were saved', async () => {
       const first = eventFor(companyA, 'first');
       const second = eventFor(companyB, 'second');

@@ -32,7 +32,11 @@ const production = {
   SIGNING_KEY_SECRET: 'a-real-signing-key-secret-that-is-long-enough',
   IMAGE_RUNNER_LABEL: 'image-runner-3f9a2c7d41e6',
   OPENBAO_TOKEN: 'a-real-openbao-token-that-is-long-enough',
+  KEYCLOAK_CLIENT_SECRET: 'a-real-client-secret',
+  FORGEJO_BOT_PASSWORD: 'a-real-bot-password',
+  FORGEJO_ADMIN_PASSWORD: 'a-real-admin-password',
   AGENT_API_URL: 'https://api.example.com',
+  BUILD_WORK_DIR: '/srv/dreamdevops/builds',
 };
 
 describe('loadConfig', () => {
@@ -65,6 +69,66 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...production, [name]: valid[name as keyof typeof valid] })).toThrow(
       'must not be the sample values in production',
     );
+  });
+
+  it.each([
+    ['KEYCLOAK_CLIENT_SECRET', 'fake-dummy-client-secret'],
+    ['FORGEJO_BOT_PASSWORD', 'fake-dummy-bot-password'],
+    ['FORGEJO_ADMIN_PASSWORD', 'fake-dummy-admin-password'],
+    ['SMTP_PASSWORD', 'fake-dummy-smtp-password'],
+    ['API_DATABASE_URL', 'postgres://dreamdevops_app:fake-dummy-db-app-password@db/dreamdevops'],
+    ['JOBS_DATABASE_URL', 'postgres://dreamdevops_jobs:fake-dummy-db-jobs-password@db/dreamdevops'],
+  ])('refuses the sample %s in production, and names it', (name, value) => {
+    expect(() => loadConfig({ ...production, [name]: value })).toThrow(`${name} must not be the sample values in production`);
+  });
+
+  it.each(['prod', 'staging', 'Production'])('refuses an unknown NODE_ENV such as %s, rather than skipping the production checks', (value) => {
+    expect(() => loadConfig({ ...production, NODE_ENV: value })).toThrow('NODE_ENV must be development, test or production');
+  });
+
+  it.each([
+    ['API_PORT', '0'],
+    ['API_PORT', '70000'],
+    ['SMTP_PORT', '0'],
+    ['SESSION_IDLE_MINUTES', '0'],
+    ['RATE_LIMIT_PER_MINUTE', '0'],
+    ['AUTH_RATE_LIMIT_PER_MINUTE', '0'],
+    ['JOB_POLLING_SECONDS', '0'],
+    ['RELAY_POLL_MS', '5'],
+    ['BUILD_TIMEOUT_MINUTES', '0'],
+    ['TARGET_LOST_AFTER_SECONDS', '30'],
+    ['PROVISIONING_MAX_ATTEMPTS', '0'],
+    ['API_DATABASE_POOL_SIZE', '1'],
+    ['OUTBOX_RETENTION_DAYS', '0'],
+    ['TRUSTED_PROXIES', '-1'],
+  ])('refuses %s=%s, which is out of range', (name, value) => {
+    expect(() => loadConfig({ ...valid, [name]: value })).toThrow(`${name} must be a whole number`);
+  });
+
+  it('refuses a session that goes idle after it has already ended', () => {
+    expect(() => loadConfig({ ...valid, SESSION_IDLE_MINUTES: '600', SESSION_ABSOLUTE_MINUTES: '60' })).toThrow(
+      'SESSION_IDLE_MINUTES can be at most SESSION_ABSOLUTE_MINUTES',
+    );
+  });
+
+  it('listens on this machine only, unless API_HOST says otherwise', () => {
+    expect(loadConfig(valid).host).toBe('127.0.0.1');
+    expect(loadConfig({ ...valid, API_HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
+    expect(() => loadConfig({ ...valid, API_HOST: 'not a host' })).toThrow('API_HOST must be');
+  });
+
+  it('keeps published events for a week, and ten database connections, unless told otherwise', () => {
+    const config = loadConfig(valid);
+
+    expect([config.outboxRetentionDays, config.databasePoolSize]).toEqual([7, 10]);
+    expect(loadConfig({ ...valid, OUTBOX_RETENTION_DAYS: '30', API_DATABASE_POOL_SIZE: '25' })).toMatchObject({
+      outboxRetentionDays: 30,
+      databasePoolSize: 25,
+    });
+  });
+
+  it('requires a build work folder in production, which every API instance must share', () => {
+    expect(() => loadConfig({ ...production, BUILD_WORK_DIR: '' })).toThrow('BUILD_WORK_DIR must be set in production');
   });
 
   it('accepts a safe production setup', () => {

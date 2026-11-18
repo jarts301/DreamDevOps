@@ -16,8 +16,12 @@ const release = (overrides: Partial<ApplicationRelease> = {}): ApplicationReleas
   ...overrides,
 });
 
+/** A parsed manifest. Assertions read deep into it, so it's left untyped. */
+// oxlint-disable-next-line typescript/no-explicit-any
+type Manifest = Record<string, any>;
+
 const objects = (files: Map<string, string>) =>
-  [...files.entries()].filter(([path]) => !path.endsWith('kustomization.yaml')).map(([, text]) => parse(text) as Record<string, any>);
+  [...files.entries()].filter(([path]) => !path.endsWith('kustomization.yaml')).map(([, text]) => parse(text) as Manifest);
 const byKind = (files: Map<string, string>, kind: string) => objects(files).find((object) => object.kind === kind)!;
 
 describe('manifests', () => {

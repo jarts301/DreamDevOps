@@ -4,6 +4,9 @@ import pg from 'pg';
 import { APP_CONFIG, DATABASE_POOL } from '../tokens.ts';
 import { type ModuleSettings, withOverrides } from './module-settings.ts';
 
+/** How long a request waits for a free database connection before it fails. */
+const DATABASE_CONNECT_TIMEOUT_MS = 10_000;
+
 /**
  * What every module shares: the settings and the database. It's global, so modules use
  * it without importing it, and Nest shuts it down last, after every module that uses
@@ -24,7 +27,16 @@ export class PlatformModule implements OnApplicationShutdown {
       providers: withOverrides(
         [
           { provide: APP_CONFIG, useValue: config },
-          { provide: DATABASE_POOL, useFactory: () => new pg.Pool({ connectionString: config.databaseUrl }) },
+          {
+            provide: DATABASE_POOL,
+            useFactory: () =>
+              new pg.Pool({
+                connectionString: config.databaseUrl,
+                max: config.databasePoolSize,
+                // A request that can't get a connection in time fails, rather than waiting forever.
+                connectionTimeoutMillis: DATABASE_CONNECT_TIMEOUT_MS,
+              }),
+          },
           { provide: TenantDatabase, useFactory: (pool: pg.Pool) => new TenantDatabase(pool), inject: [DATABASE_POOL] },
         ],
         overrides,

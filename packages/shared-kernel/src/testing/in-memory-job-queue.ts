@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { deadLetterQueueName } from '../application/ports.ts';
+import { deadLetterQueueName, UnrecoverableJobError } from '../application/ports.ts';
 import type { Job, JobHandler, JobQueue, QueueOptions, WorkOptions } from '../application/ports.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,10 +11,18 @@ export class InMemoryJobQueue implements JobQueue {
   readonly #seenIds = new Set<string>();
   readonly #deadLetters = new Map<string, Job[]>();
   readonly #schedules = new Map<string, { readonly cron: string; readonly data: object }>();
+  /** The queues subscribed to each topic. Shared by everything using this queue, as pg-boss's table is. */
+  readonly #subscriptions = new Map<string, Set<string>>();
+  /** Exclusive queues, and how many of their jobs are waiting or running. */
+  readonly #active = new Map<string, number>();
   #pending: Promise<void> = Promise.resolve();
 
   async createQueue(queue: string, options: QueueOptions = {}): Promise<void> {
     this.#retryLimits.set(queue, options.retryLimit ?? 3);
+    // As in pg-boss, a queue keeps the policy it was first created with.
+    if (options.exclusive === true && !this.#active.has(queue)) {
+      this.#active.set(queue, 0);
+    }
   }
 
   async send(queue: string, data: object, options: { readonly id?: string } = {}): Promise<string | null> {
@@ -27,8 +35,23 @@ export class InMemoryJobQueue implements JobQueue {
     if (this.#seenIds.has(key)) {
       return null;
     }
+    const active = this.#active.get(queue);
+    if (active !== undefined && active > 0) {
+      return null;
+    }
     this.#seenIds.add(key);
-    this.#pending = this.#pending.then(() => this.#run(queue, { id, data }));
+    if (active !== undefined) {
+      this.#active.set(queue, active + 1);
+    }
+    this.#pending = this.#pending.then(async () => {
+      try {
+        await this.#run(queue, { id, data });
+      } finally {
+        if (this.#active.has(queue)) {
+          this.#active.set(queue, this.#active.get(queue)! - 1);
+        }
+      }
+    });
     return id;
   }
 
@@ -36,6 +59,17 @@ export class InMemoryJobQueue implements JobQueue {
   async work(queue: string, handler: JobHandler, _options?: WorkOptions): Promise<void> {
     this.#assertQueueExists(queue);
     this.#handlers.set(queue, handler);
+  }
+
+  async subscribe(topic: string, queue: string): Promise<void> {
+    this.#assertQueueExists(queue);
+    this.#subscriptions.set(topic, (this.#subscriptions.get(topic) ?? new Set()).add(queue));
+  }
+
+  async publish(topic: string, data: object, options: { readonly id?: string } = {}): Promise<void> {
+    for (const queue of this.#subscriptions.get(topic) ?? []) {
+      await this.send(queue, data, options);
+    }
   }
 
   /** Keeps the schedule. Nothing runs on its own: tests call runSchedules, as if its time came. */
@@ -83,8 +117,11 @@ export class InMemoryJobQueue implements JobQueue {
       try {
         await handler(job);
         return;
-      } catch {
-        // The job runs again until its attempts are used up.
+      } catch (error) {
+        // The job runs again until its attempts are used up, unless trying again can't help.
+        if (error instanceof UnrecoverableJobError) {
+          break;
+        }
       }
     }
     const deadLetterQueue = deadLetterQueueName(queue);

@@ -3,7 +3,9 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "sourceMap": true
+    "sourceMap": true,
+    // The build uses the shared kernel's compiled output, as the running API does.
+    "customConditions": []
   },
   "include": ["src"]
 }

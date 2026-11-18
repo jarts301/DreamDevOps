@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
  */
 
 const SRC = fileURLToPath(new URL('../src', import.meta.url));
+const MIGRATIONS = fileURLToPath(new URL('../migrations', import.meta.url));
 const DASHBOARD_EVENTS = fileURLToPath(new URL('../../dashboard/src/app/core/events.ts', import.meta.url));
 
 interface Context {
@@ -98,6 +99,64 @@ const CONTEXTS: Readonly<Record<string, Context>> = {
 /** Schemas every context may use: the shared kernel's outbox. */
 const SHARED_SCHEMAS = ['kernel'];
 
+/** Folders in src that aren't contexts: the platform every context runs on. */
+const PLATFORM_FOLDERS = ['background', 'config', 'database', 'demo', 'health', 'http', 'platform', 'session', 'shared'];
+
+/**
+ * The platform files contexts may import: how modules are put together, route access
+ * rules, background work, settings, and small helpers. Anything else in the platform,
+ * such as the guards, is the platform's own business.
+ */
+const PLATFORM_API = [
+  'background/background-subscriber.ts',
+  'config/app-config.ts',
+  'http/access.decorators.ts',
+  'http/request.ts',
+  'platform/module-settings.ts',
+  'shared/forgejo/forgejo-api.ts',
+  'shared/names.ts',
+  'shared/progress.ts',
+  'shared/run-command.ts',
+  'shared/sealed-box.ts',
+  'shared/slug.ts',
+  'tokens.ts',
+];
+
+/** The platform files that put contexts together, and so may import any context's module. */
+const COMPOSITION = ['app.module.ts', 'background/background.module.ts', 'demo/'];
+
+/** The schema each migration belongs to, by its number. Every new migration needs an entry. */
+const MIGRATION_OWNERS: Readonly<Record<string, string>> = {
+  '0001': 'api',
+  '0002': 'api',
+  '0003': 'identity',
+  '0004': 'tenancy',
+  '0005': 'audit',
+  '0006': 'notification',
+  '0007': 'audit',
+  '0008': 'editions',
+  '0009': 'catalog',
+  '0010': 'source',
+  '0011': 'webhooks',
+  '0012': 'builds',
+  '0013': 'releases',
+  '0014': 'builds',
+  '0015': 'environments',
+  '0016': 'environments',
+  '0017': 'deployments',
+  '0018': 'catalog',
+  '0019': 'catalog',
+  '0020': 'releases',
+  '0021': 'environments',
+  '0022': 'deployments',
+  '0023': 'environments',
+  '0024': 'alerts',
+  '0025': 'source',
+  '0026': 'tenancy',
+  '0027': 'audit',
+  '0028': 'alerts',
+};
+
 /**
  * Known exceptions, each with its reason. The list should only ever shrink.
  */
@@ -109,9 +168,42 @@ const EXCEPTIONS = {
     'notifications/application/invitation-emails.ts',
   ],
   /** Pure libraries the domain may use. They do no I/O and tie it to no framework. */
-  librariesInDomain: ['@casl/ability'],
+  librariesInDomain: [] as string[],
+  /** Pure libraries application code may use, besides the shared kernel and Node. */
+  librariesInApplication: ['yaml'],
+  /** Application code that names the database driver's types, rather than going through a port. */
+  databaseInApplication: ['audit/application/audit-log.ts', 'identity-access/application/company-access.service.ts'],
   /** Events created but never saved, so the audit log never shows them. */
   unrecordedEvents: ['NotificationTest'],
+  /**
+   * Contexts that depend on each other, in a circle, so none of them can move on its own.
+   * Each group is one cycle's members. The plan is to break them, so the list must only shrink.
+   */
+  contextCycles: [['identity-access', 'notifications', 'tenancy']],
+  /** Platform code that reaches into a context. The guards and the request belong to Identity and access. */
+  platformIntoContexts: ['http/guards.ts -> identity-access', 'http/request.ts -> identity-access'],
+  /**
+   * Migrations that use another context's schema, such as a foreign key to its table or a
+   * function that reads it. Each has to go before its context can have its own database.
+   */
+  crossSchemaMigrations: [
+    '0004 (tenancy) uses identity',
+    '0005 (audit) uses identity, tenancy',
+    '0006 (notification) uses identity, tenancy',
+    '0007 (audit) uses identity',
+    '0008 (editions) uses identity, tenancy',
+    '0009 (catalog) uses identity, tenancy',
+    '0010 (source) uses catalog, identity, tenancy',
+    '0011 (webhooks) uses catalog, source, tenancy',
+    '0012 (builds) uses catalog, identity, source, tenancy',
+    '0013 (releases) uses catalog, identity, tenancy',
+    '0015 (environments) uses identity, tenancy',
+    '0016 (environments) uses tenancy',
+    '0017 (deployments) uses builds, catalog, environments, identity, tenancy',
+    '0018 (catalog) uses identity',
+    '0022 (deployments) uses identity',
+    '0024 (alerts) uses identity',
+  ],
 };
 
 function sourceFiles(directory: string): string[] {
@@ -135,10 +227,14 @@ function locate(path: string): { context: string; layer: string; rest: string } 
   return { context, layer: rest.length > 1 ? rest[0]! : 'module', rest: rest.join('/') };
 }
 
-/** Every import in the source, resolved to a path from src, or kept as a package name. */
+/**
+ * Every import in the source, resolved to a path from src, or kept as a package name:
+ * imports and re-exports, imports only for their effect, and dynamic imports.
+ */
+const IMPORT_PATTERN = /^\s*(?:import|export)\b[^'"]*?from\s+['"]([^'"]+)['"]|^\s*import\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/gm;
 const imports = files.flatMap(({ path, text }) =>
-  [...text.matchAll(/^\s*(?:import|export)\b[^'"]*?from\s+'([^']+)'/gm)].map((match) => {
-    const target = match[1]!;
+  [...text.matchAll(IMPORT_PATTERN)].map((match) => {
+    const target = (match[1] ?? match[2] ?? match[3])!;
     return {
       from: path,
       target: target.startsWith('.') ? relative(SRC, resolve(SRC, dirname(path), target)).split(sep).join('/') : target,
@@ -150,9 +246,7 @@ const imports = files.flatMap(({ path, text }) =>
 describe('the architecture', () => {
   it('knows every context in the source', () => {
     const folders = readdirSync(SRC).filter((name) => statSync(join(SRC, name)).isDirectory());
-    // demo holds the local demo company until it joins the sample data.
-    const platform = ['background', 'config', 'database', 'demo', 'health', 'http', 'platform', 'sample-data', 'session', 'shared'];
-    expect(folders.filter((folder) => !platform.includes(folder)).sort()).toEqual(Object.keys(CONTEXTS).sort());
+    expect(folders.filter((folder) => !PLATFORM_FOLDERS.includes(folder)).sort()).toEqual(Object.keys(CONTEXTS).sort());
   });
 
   it('gives each context a Nest module, which is how the application puts it together', () => {
@@ -201,8 +295,13 @@ describe('the architecture', () => {
         return [];
       }
       if (!isRelative) {
-        const framework = target.startsWith('@nestjs/') || target === 'express';
-        return framework && !EXCEPTIONS.frameworkInApplication.includes(from) ? [`${from} -> ${target}`] : [];
+        const allowed =
+          target.startsWith('node:') ||
+          target.startsWith('@dreamdevops/shared-kernel') ||
+          EXCEPTIONS.librariesInApplication.includes(target) ||
+          (target === '@nestjs/common' && EXCEPTIONS.frameworkInApplication.includes(from)) ||
+          (target === 'pg' && EXCEPTIONS.databaseInApplication.includes(from));
+        return allowed ? [] : [`${from} -> ${target}`];
       }
       const destination = locate(target);
       const adapter = destination !== null && ['infrastructure', 'http', 'messaging', 'module'].includes(destination.layer);
@@ -235,6 +334,86 @@ describe('the architecture', () => {
         : [];
     });
     expect(violations).toEqual([]);
+  });
+
+  it('has no cycles between contexts, other than the known ones', () => {
+    // The contexts each context imports, then the groups of contexts that reach each other.
+    const uses = new Map<string, Set<string>>(Object.keys(CONTEXTS).map((context) => [context, new Set<string>()]));
+    for (const { from, target, relative: isRelative } of imports) {
+      const source = locate(from);
+      const destination = isRelative ? locate(target) : null;
+      if (source !== null && destination !== null && source.context !== destination.context) {
+        uses.get(source.context)!.add(destination.context);
+      }
+    }
+    const reaches = (start: string, goal: string): boolean => {
+      const seen = new Set<string>();
+      const stack = [...uses.get(start)!];
+      while (stack.length > 0) {
+        const next = stack.pop()!;
+        if (next === goal) {
+          return true;
+        }
+        if (!seen.has(next)) {
+          seen.add(next);
+          stack.push(...uses.get(next)!);
+        }
+      }
+      return false;
+    };
+    const cycles = new Map<string, string[]>();
+    for (const context of Object.keys(CONTEXTS).sort()) {
+      const group = Object.keys(CONTEXTS)
+        .filter((other) => other === context || (reaches(context, other) && reaches(other, context)))
+        .sort();
+      if (group.length > 1) {
+        cycles.set(group.join(), group);
+      }
+    }
+
+    expect([...cycles.values()]).toEqual(EXCEPTIONS.contextCycles);
+  });
+
+  it('lets contexts use only what the platform publishes', () => {
+    const violations = imports.flatMap(({ from, target, relative: isRelative }) => {
+      const source = locate(from);
+      if (source === null || !isRelative || locate(target) !== null) {
+        return [];
+      }
+      // Identity and access runs the sessions, which are kept in the platform's folder for now.
+      const allowed = PLATFORM_API.includes(target) || (source.context === 'identity-access' && target.startsWith('session/'));
+      return allowed ? [] : [`${from} -> ${target}`];
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('lets only the composition root reach into contexts from the platform', () => {
+    const reaching = new Set(
+      imports.flatMap(({ from, target, relative: isRelative }) => {
+        const destination = isRelative ? locate(target) : null;
+        if (locate(from) !== null || destination === null || COMPOSITION.some((root) => from.startsWith(root))) {
+          return [];
+        }
+        return [`${from} -> ${destination.context}`];
+      }),
+    );
+    expect([...reaching].sort()).toEqual(EXCEPTIONS.platformIntoContexts);
+  });
+
+  it('gives every migration an owner, and keeps it to its own schema, other than the known couplings', () => {
+    const schemas = [...new Set(['api', ...Object.values(CONTEXTS).flatMap((context) => context.schemas)])];
+    const reference = new RegExp(`\\b(${schemas.join('|')})\\.[a-z_]+`, 'g');
+    const migrations = readdirSync(MIGRATIONS).filter((name) => name.endsWith('.sql')).sort();
+
+    expect(migrations.filter((name) => MIGRATION_OWNERS[name.slice(0, 4)] === undefined)).toEqual([]);
+    const couplings = migrations.flatMap((name) => {
+      const owner = MIGRATION_OWNERS[name.slice(0, 4)]!;
+      // Only what a migration does going up: going down puts back what was there before.
+      const sql = readFileSync(join(MIGRATIONS, name), 'utf8').split('-- Down Migration')[0]!.replace(/--.*$/gm, '');
+      const others = [...new Set([...sql.matchAll(reference)].map((match) => match[1]!))].filter((schema) => schema !== owner).sort();
+      return others.length === 0 ? [] : [`${name.slice(0, 4)} (${owner}) uses ${others.join(', ')}`];
+    });
+    expect(couplings).toEqual(EXCEPTIONS.crossSchemaMigrations);
   });
 });
 

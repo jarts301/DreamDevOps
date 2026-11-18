@@ -88,6 +88,16 @@ describe('hasPermissions', () => {
     expect(hasPermissions(principal, ['deployments:start'])).toBe(false);
   });
 
+  it('treats no permission as a wildcard for others', () => {
+    const holding = (permissions: string[]) => ({ ...principal, permissions });
+
+    // "manage" grants only itself, not other actions on the same subject.
+    expect(hasPermissions(holding(['alerts:manage']), ['alerts:read'])).toBe(false);
+    // "all" grants only itself, not the same action on every subject.
+    expect(hasPermissions(holding(['all:read']), ['audit:read'])).toBe(false);
+    expect(hasPermissions(holding(['all:manage']), ['companies:manage'])).toBe(false);
+  });
+
   it('refuses everything for a user with no permissions', () => {
     expect(hasPermissions(toPrincipal(access({ memberships: [] }), null), ['code:push'])).toBe(false);
   });

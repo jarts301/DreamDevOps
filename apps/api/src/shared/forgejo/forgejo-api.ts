@@ -50,8 +50,9 @@ export class ForgejoApi {
         ...(body !== undefined && { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(options.timeoutMs ?? this.#timeoutMs),
       });
-    } catch {
-      throw new Error('The Git service could not be reached.');
+    } catch (error) {
+      // The cause, such as a timeout or a refused connection, stays for the logs; people see only this.
+      throw new Error('The Git service could not be reached.', { cause: error });
     }
   }
 }

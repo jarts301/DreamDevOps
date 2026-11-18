@@ -11,6 +11,17 @@ export interface CommandResult {
 const MAX_STDOUT = 64 * 1024 * 1024;
 const MAX_STDERR_TAIL = 16 * 1024;
 
+/** Names of settings that hold passwords, keys, tokens and connection strings with passwords. */
+const SECRET_NAME = /PASSWORD|SECRET|TOKEN|PRIVATE_KEY|_DATABASE_URL$/i;
+
+/**
+ * The environment without the API's own secrets, for the tools it runs, such as Docker.
+ * They don't need them, and a tool's crash report or debug output could show them.
+ */
+export function withoutSecrets(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !SECRET_NAME.test(name)));
+}
+
 export class CommandNotFoundError extends Error {
   constructor(command: string) {
     super(`The ${command} command isn't installed on the API's machine.`);

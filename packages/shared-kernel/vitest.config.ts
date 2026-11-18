@@ -2,6 +2,14 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // npm run test:coverage measures the unit tests. The thresholds are today's levels, so
+    // coverage can only go up.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      reporter: ['text-summary', 'json-summary', 'html'],
+      thresholds: { lines: 65, branches: 59, functions: 62, statements: 65 },
+    },
     projects: [
       {
         test: {
