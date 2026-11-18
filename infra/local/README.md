@@ -74,6 +74,15 @@ Jobs get no Docker socket, no volumes and no privileged mode. Each job runs in a
 
 Forgejo's webhooks reach the API at the same address. The first pipeline run downloads the tool images and Trivy's vulnerability database, which takes a few minutes.
 
+**When a job fails on the network.** The 18 demo applications each start two pipeline runs when their repositories are made, so about 36 jobs queue at once on the first start. Docker Desktop's DNS drops lookups now and then, so some of these jobs can fail on downloading rather than on the project. Signs of a network failure:
+
+- `unable to clone 'https://data.forgejo.org/actions/checkout'`
+- `no such package` from `apk add`
+- `Could not resolve host` or `download of config.json failed` from Cargo
+- `no such host` while pulling an image
+
+Re-run the job from its page in Forgejo. If it keeps happening, restart Docker Desktop.
+
 **The image runner's label.** Only the platform's pipeline uses the image runner. Its label, `IMAGE_RUNNER_LABEL`, is set in `.env`, and the API puts it in the pipeline it copies to each company. Use your own value outside this machine.
 
 ## Second factor

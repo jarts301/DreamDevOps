@@ -137,6 +137,8 @@ Each is named after its framework, language and type, starts from the newest ver
 2. Deploy the candidate to **Test**, which runs it on This machine.
 3. Open **Monitoring** to see its metrics, logs and traces, and **Alerts** to watch one of them.
 
+Their repositories' first pipeline runs all start together on the first start, so builds you start then wait their turn. A run that fails on downloading can be run again. See [the CI runners](infra/local/README.md#the-ci-runners).
+
 ## Local services
 
 All of these accept connections only from your own machine.

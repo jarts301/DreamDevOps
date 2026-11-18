@@ -87,4 +87,4 @@ Each queue's worker takes up to 10 jobs at a time and keeps going while a backlo
 | `npm run test:unit` | The real application with in-memory fakes, with no Docker |
 | `npm run test:integration` | Access rules and company provisioning against a throwaway PostgreSQL, plus login through a throwaway Keycloak and organizations in a throwaway Forgejo, using Docker Desktop |
 | `npm test` | Both |
-| `npm run test:scaffolds` | Every blueprint version, rendered, installed, tested, built and run as a container. Needs Docker and the internet. |
+| `npm run test:scaffolds` | Every blueprint version, rendered, installed, tested, built and run as a container. Needs Docker and the internet, and tries a command again when the network fails. See [Blueprints](../../blueprints/README.md#publishing-a-version). |

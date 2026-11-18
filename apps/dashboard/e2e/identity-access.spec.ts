@@ -271,7 +271,7 @@ test('from starting a company to managing its team', async ({ browser, page }) =
   await test.step('the company admin registers an application', async () => {
     await adminPage.getByRole('link', { name: 'Applications' }).click();
     await adminPage.getByLabel('Name', { exact: true }).fill('Billing API');
-    await adminPage.getByLabel('Type').selectOption({ label: 'RESTful Service' });
+    await adminPage.getByLabel(/^Type/).selectOption({ label: 'RESTful Service' });
     await adminPage.getByLabel('Description (optional)').fill('Charges customers');
     await adminPage.getByRole('button', { name: 'Register application' }).click();
     await expect(adminPage.getByText('Billing API is registered.')).toBeVisible();
@@ -283,7 +283,7 @@ test('from starting a company to managing its team', async ({ browser, page }) =
   await test.step('its repository is created in Forgejo from the blueprint', async () => {
     // The page refreshes on its own while the repository is being created.
     await expect(adminPage.getByRole('link', { name: repository })).toBeVisible({ timeout: 60_000 });
-    await expect(adminPage.getByText('From node-service 1.0.0')).toBeVisible();
+    await expect(adminPage.getByText(/^From node-service \d+\.\d+\.\d+$/)).toBeVisible();
   });
 
   await test.step('the company admin signs in to Forgejo through Keycloak and joins their team', async () => {
@@ -298,7 +298,8 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage.getByText("You're in the Readers team now.")).toBeVisible();
 
     await forgejo.goto(`http://localhost:3000/${repository}`);
-    await expect(forgejo.getByText('package.json', { exact: true })).toBeVisible();
+    // The file in the repository's listing, as its README names it too.
+    await expect(forgejo.getByRole('link', { name: 'package.json', exact: true })).toBeVisible();
     await expect(forgejo.getByText('develop', { exact: true }).first()).toBeVisible();
     await forgejo.close();
   });
@@ -317,16 +318,19 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     await expect(adminPage).toHaveURL(/\/applications$/);
   });
 
-  await test.step('the company admin creates a production environment and connects its target', async () => {
+  await test.step('the company admin creates a test environment and connects its cluster', async () => {
     await adminPage.getByRole('link', { name: 'Environments' }).click();
     await expect(adminPage.getByText('No environments yet.')).toBeVisible();
-    await adminPage.getByLabel('Name', { exact: true }).fill('Production');
-    await adminPage.getByLabel('Kind').selectOption('production');
+    // Production is for Tech Leads and Operators; Company Admins manage test environments.
+    await expect(adminPage.getByLabel(/^Kind/).locator('option[value="production"]')).toHaveCount(0);
+    await adminPage.getByLabel('Name', { exact: true }).fill('Staging');
     await adminPage.getByRole('button', { name: 'Create environment' }).click();
-    await expect(adminPage.getByText('Production is created.', { exact: false })).toBeVisible();
-    await expect(adminPage.getByRole('cell', { name: 'Final images' })).toBeVisible();
+    await expect(adminPage.getByText('Staging is created.', { exact: false })).toBeVisible();
+    await expect(adminPage.getByRole('cell', { name: 'Feature, RC and final images' })).toBeVisible();
 
-    await adminPage.getByRole('button', { name: 'Connect a target to Production' }).click();
+    await adminPage.getByRole('button', { name: 'Connect a target to Staging' }).click();
+    await adminPage.getByRole('radio', { name: /^Kubernetes cluster/ }).check();
+    await adminPage.getByRole('button', { name: 'Connect', exact: true }).click();
     const command = await adminPage.getByRole('textbox', { name: 'Connect command' }).inputValue();
     const registrationToken = /registrationToken=(\S+)/.exec(command)![1]!;
     await expect(adminPage.getByText('Waiting for the agent')).toBeVisible();
@@ -345,16 +349,15 @@ test('from starting a company to managing its team', async ({ browser, page }) =
     });
     expect(registered.status).toBe(201);
 
-    await expect(adminPage.getByText('The target of Production is connected.')).toBeVisible({ timeout: 15_000 });
+    await expect(adminPage.getByText('The target of Staging is connected.')).toBeVisible({ timeout: 15_000 });
     await expect(adminPage.getByText('Kubernetes v1.31.2+k3s1, agent 0.1.0')).toBeVisible();
   });
 
-  await test.step("production's values belong to Tech Leads and Operators, and it can require approval", async () => {
-    await adminPage.getByRole('link', { name: 'Production', exact: true }).click();
-    await expect(adminPage.getByRole('heading', { name: 'Production', level: 1 })).toBeVisible();
-    await expect(adminPage.getByText('Tech Leads and Operators manage these.')).toBeVisible();
-    await adminPage.getByLabel('A second person approves each deployment').check();
-    await expect(adminPage.getByText('Each deployment now needs a second person to approve it.')).toBeVisible();
+  await test.step("a test environment's values belong to Company Admins too, and only production asks for approval", async () => {
+    await adminPage.getByRole('link', { name: 'Staging', exact: true }).click();
+    await expect(adminPage.getByRole('heading', { name: 'Staging', level: 1 })).toBeVisible();
+    await expect(adminPage.getByRole('button', { name: 'Save secret' })).toBeVisible();
+    await expect(adminPage.getByLabel('A second person approves each deployment')).toHaveCount(0);
     await adminPage.getByRole('link', { name: '← Environments' }).click();
   });
 

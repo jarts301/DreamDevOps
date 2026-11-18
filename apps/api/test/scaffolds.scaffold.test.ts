@@ -22,13 +22,30 @@ const PIPELINES = fileURLToPath(new URL('../../../pipelines', import.meta.url));
 const library = BlueprintLibrary.load(BLUEPRINTS);
 const folders: string[] = [];
 
+/**
+ * What a command prints when the network let it down, rather than the project: a name that
+ * didn't resolve, or a connection that dropped, such as Docker Desktop's DNS does now and then.
+ */
+const NETWORK_FAILURE =
+  /no such host|DNS: |TLS: unspecified error|Could not resolve host|Temporary failure in name resolution|EAI_AGAIN|ECONNRESET|ETIMEDOUT|i\/o timeout|TLS handshake timeout|failed to fetch oauth token|unexpected EOF/i;
+const ATTEMPTS = 3;
+
 function run(command: string, args: string[], cwd: string): string {
-  // Pipelines and builds print a lot, such as every crate Cargo compiles.
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 256 * 1024 * 1024 });
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed:\n${result.stdout}\n${result.stderr}`.slice(-4_000));
+  for (let attempt = 1; ; attempt += 1) {
+    // Pipelines and builds print a lot, such as every crate Cargo compiles.
+    const result = spawnSync(command, args, { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 256 * 1024 * 1024 });
+    if (result.status === 0) {
+      return result.stdout.trim();
+    }
+    const output = `${result.stdout}\n${result.stderr}`;
+    // Only a network failure is tried again: anything else is the project's own failure.
+    if (attempt < ATTEMPTS && NETWORK_FAILURE.test(output)) {
+      // A pause for the network to recover; the tests run one at a time, so waiting here is fine.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5_000);
+      continue;
+    }
+    throw new Error(`${command} ${args.join(' ')} failed${attempt > 1 ? ` after ${attempt} attempts` : ''}:\n${output}`.slice(-4_000));
   }
-  return result.stdout.trim();
 }
 
 /**
@@ -41,8 +58,14 @@ function runPipeline(workflow: string, folder: string): void {
   const container = run('docker', ['run', '-d', '--entrypoint', 'sleep', image, 'infinity'], folder);
   try {
     run('docker', ['cp', `${folder}/.`, `${container}:/app`], folder);
-    for (const step of steps) {
-      run('docker', ['exec', '-w', '/app', container, 'sh', '-ec', step], folder);
+    // Each step from a file, not a quoted command, so Windows' shell can't split it.
+    const scripts = mkdtempSync(join(tmpdir(), 'scaffold-steps-'));
+    folders.push(scripts);
+    for (const [index, step] of steps.entries()) {
+      const script = join(scripts, `step-${index}.sh`);
+      writeFileSync(script, `${step}\n`);
+      run('docker', ['cp', script, `${container}:/step-${index}.sh`], folder);
+      run('docker', ['exec', '-w', '/app', container, 'sh', '-e', `/step-${index}.sh`], folder);
     }
   } finally {
     spawnSync('docker', ['rm', '-f', container]);

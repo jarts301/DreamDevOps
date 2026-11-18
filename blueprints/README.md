@@ -127,11 +127,20 @@ To change a blueprint, copy its newest folder to a new version number, change th
 npm run blueprints:publish
 ```
 
-Then check that every version still produces a working project. This runs each scaffold's own pipeline, step by step, in a container of the pipeline's image, as Forgejo would, builds its image, runs it until the health check passes, and checks the container sends its metrics, from 1.2.0, and logs and traces a request, from 1.3.0. It needs Docker and the internet, and takes a while, as the Rust and C++ services compile:
+Then check that every version still produces a working project. For each version, this:
+
+- Runs the platform's test job on it, as the build pipeline does, and checks the job finds its tests.
+- Runs the scaffold's own pipeline, step by step, in a container of the pipeline's image, as Forgejo would.
+- Builds its image and runs it, read-only and as a non-root user, until the health check passes.
+- Checks the container sends its metrics, from 1.2.0, and logs and traces a request, from 1.3.0.
+
+It needs Docker and the internet, and takes a while, as the Rust and C++ services compile:
 
 ```bash
 npm run test:scaffolds
 ```
+
+It downloads a lot: packages, crates and base images. When a command fails because the network did, such as a name that didn't resolve, it tries that command again, up to three times. Docker Desktop's DNS drops lookups now and then. Any other failure counts at once. It runs on Linux, macOS and Windows.
 
 Line endings are always LF, set in `.gitattributes`, so checksums match on every operating system.
 

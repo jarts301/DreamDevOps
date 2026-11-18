@@ -256,7 +256,7 @@ const REFRESH_MS = 5_000;
                       @if (build.status === 'failed' && build.reports.tests?.passed === false) {
                         <details>
                           <summary>Test output</summary>
-                          <pre class="log">{{ build.reports.tests?.log }}</pre>
+                          <pre class="log">{{ build.reports.tests.log }}</pre>
                         </details>
                       }
                       @if (build.status === 'failed' && build.reports.buildLog) {
