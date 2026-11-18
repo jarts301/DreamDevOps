@@ -9,7 +9,6 @@ import {
   parseCompanyId,
   runWithCompany,
 } from '@dreamdevops/shared-kernel';
-import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { Unchecked } from '@dreamdevops/contracts/http';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type {
@@ -24,20 +23,9 @@ import { normalizeName } from '../../shared/names.ts';
 import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { NOTIFIABLE_EVENTS, summarize } from '../domain/event-catalog.ts';
 import { NotificationError } from '../domain/errors.ts';
-import { RefusedWebhookError, type WebhookSender } from './ports.ts';
+import { RefusedWebhookError, type RulesStore, type StoredRule, type WebhookSender } from './ports.ts';
 
 export const DELIVERY_QUEUE = 'notifications.deliver';
-
-interface RuleRow {
-  id: string;
-  name: string;
-  kind: RuleKind;
-  url: string;
-  event_types: string[];
-  enabled: boolean;
-  last_delivery_at: Date | null;
-  last_error: string | null;
-}
 
 export interface DeliveryJob {
   readonly ruleId: string;
@@ -51,18 +39,13 @@ export interface NotificationRulesOptions {
 
 /** Company rules that post chosen events to a chat tool, and their delivery. */
 export class NotificationRules {
-  readonly #database: TenantDatabase;
+  readonly #store: RulesStore;
   readonly #companies: CompanyDirectory;
   readonly #sender: WebhookSender;
   readonly #options: NotificationRulesOptions;
 
-  constructor(
-    database: TenantDatabase,
-    companies: CompanyDirectory,
-    sender: WebhookSender,
-    options: NotificationRulesOptions,
-  ) {
-    this.#database = database;
+  constructor(store: RulesStore, companies: CompanyDirectory, sender: WebhookSender, options: NotificationRulesOptions) {
+    this.#store = store;
     this.#companies = companies;
     this.#sender = sender;
     this.#options = options;
@@ -73,10 +56,7 @@ export class NotificationRules {
   }
 
   list(): Promise<RuleView[]> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RuleRow>('SELECT * FROM notification.rules ORDER BY lower(name), id');
-      return rows.map(toView);
-    });
+    return this.#store.transaction(async (session) => (await session.list()).map(toView));
   }
 
   create(actor: Principal, input: Unchecked<CreateRule>): Promise<RuleView> {
@@ -84,15 +64,7 @@ export class NotificationRules {
     const kind = ruleKind(input.kind);
     const url = this.#webhookUrl(input.url);
     const eventTypes = chosenEvents(input.eventTypes);
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RuleRow>(
-        `INSERT INTO notification.rules (company_id, name, kind, url, event_types, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING *`,
-        [currentCompanyId(), name, kind, url, eventTypes, actor.userId],
-      );
-      return toView(rows[0]!);
-    });
+    return this.#store.transaction(async (session) => toView(await session.add({ name, kind, url, eventTypes, createdBy: actor.userId })));
   }
 
   update(idValue: unknown, input: Unchecked<UpdateRule>): Promise<RuleView> {
@@ -102,29 +74,20 @@ export class NotificationRules {
     if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
       throw new NotificationError('invalid', 'Enabled must be true or false.');
     }
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RuleRow>(
-        `UPDATE notification.rules SET
-           name = coalesce($2, name),
-           event_types = coalesce($3, event_types),
-           enabled = coalesce($4, enabled),
-           updated_at = now()
-         WHERE id = $1
-         RETURNING *`,
-        [id, name, eventTypes, input.enabled ?? null],
-      );
-      if (rows[0] === undefined) {
+    const enabled = (input.enabled as boolean | undefined) ?? null;
+    return this.#store.transaction(async (session) => {
+      const rule = await session.update(id, { name, eventTypes, enabled });
+      if (rule === null) {
         throw new NotificationError('not-found', 'This rule does not exist.');
       }
-      return toView(rows[0]);
+      return toView(rule);
     });
   }
 
   delete(idValue: unknown): Promise<void> {
     const id = ruleId(idValue);
-    return this.#database.transaction(async (tx) => {
-      const { rowCount } = await tx.query('DELETE FROM notification.rules WHERE id = $1', [id]);
-      if (rowCount === 0) {
+    return this.#store.transaction(async (session) => {
+      if (!(await session.delete(id))) {
         throw new NotificationError('not-found', 'This rule does not exist.');
       }
     });
@@ -157,13 +120,7 @@ export class NotificationRules {
     if (NOTIFIABLE_EVENTS[event.eventType] === undefined) {
       return;
     }
-    const ruleIds = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ id: string }>(
-        'SELECT id FROM notification.rules WHERE enabled AND $1 = ANY (event_types)',
-        [event.eventType],
-      );
-      return rows.map((row) => row.id);
-    });
+    const ruleIds = await this.#store.transaction((session) => session.enabledFor(event.eventType));
     for (const ruleId of ruleIds) {
       const job: DeliveryJob = { ruleId, event };
       await queue.send(DELIVERY_QUEUE, job, { id: deliveryJobId(event.eventId, ruleId) });
@@ -190,11 +147,8 @@ export class NotificationRules {
     });
   }
 
-  async #find(id: string): Promise<RuleRow | null> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RuleRow>('SELECT * FROM notification.rules WHERE id = $1', [id]);
-      return rows[0] ?? null;
-    });
+  #find(id: string): Promise<StoredRule | null> {
+    return this.#store.transaction((session) => session.find(id));
   }
 
   async #companyName(): Promise<string> {
@@ -202,9 +156,7 @@ export class NotificationRules {
   }
 
   async #recordDelivery(id: string, error: string | null): Promise<void> {
-    await this.#database.transaction((tx) =>
-      tx.query('UPDATE notification.rules SET last_delivery_at = now(), last_error = $2 WHERE id = $1', [id, error]),
-    );
+    await this.#store.transaction((session) => session.recordDelivery(id, error));
   }
 
   #webhookUrl(value: unknown): string {
@@ -243,16 +195,16 @@ function message(kind: RuleKind, event: DomainEvent, text: string, companyName: 
   };
 }
 
-function toView(row: RuleRow): RuleView {
+function toView(rule: StoredRule): RuleView {
   return {
-    id: row.id,
-    name: row.name,
-    kind: row.kind,
-    destination: new URL(row.url).origin,
-    eventTypes: row.event_types,
-    enabled: row.enabled,
-    lastDeliveryAt: row.last_delivery_at?.toISOString() ?? null,
-    lastError: row.last_error,
+    id: rule.id,
+    name: rule.name,
+    kind: rule.kind,
+    destination: new URL(rule.url).origin,
+    eventTypes: rule.eventTypes,
+    enabled: rule.enabled,
+    lastDeliveryAt: rule.lastDeliveryAt?.toISOString() ?? null,
+    lastError: rule.lastError,
   };
 }
 

@@ -5,6 +5,8 @@ import { contractFor } from './contracts.ts';
 
 const companyId = parseCompanyId('a1b2c3d4-0000-4000-8000-00000000000a');
 const event = createDomainEvent({ eventType: 'ApplicationCreated', companyId, payload: { name: 'api' } });
+/** A first delivery, with retries still to come. */
+const firstTry = { last: false };
 
 describe('EventBus', () => {
   let queue: InMemoryJobQueue;
@@ -24,8 +26,8 @@ describe('EventBus', () => {
     await bus.publish(event);
     await queue.drain();
 
-    expect(audit).toHaveBeenCalledWith(event);
-    expect(notifications).toHaveBeenCalledWith(event);
+    expect(audit).toHaveBeenCalledWith(event, firstTry);
+    expect(notifications).toHaveBeenCalledWith(event, firstTry);
   });
 
   it('does not deliver other event types', async () => {
@@ -74,6 +76,24 @@ describe('EventBus', () => {
     expect(healthy).toHaveBeenCalledTimes(1);
   });
 
+  it('tells a handler when it has the last try, once its retries are used up', async () => {
+    const tries: boolean[] = [];
+    await bus.subscribe(
+      contractFor('ApplicationCreated'),
+      'builds',
+      async (_received, attempt) => {
+        tries.push(attempt.last);
+        throw new Error('The Git service could not be reached.');
+      },
+      { retryLimit: 2 },
+    );
+
+    await bus.publish(event);
+    await queue.drain();
+
+    expect(tries).toEqual([false, false, true]);
+  });
+
   it('delivers every event type to a consumer of all events', async () => {
     const seen: string[] = [];
     await bus.subscribeToAll('audit', async (received) => void seen.push(received.eventType));
@@ -107,7 +127,7 @@ describe('EventBus', () => {
     await publisher.publish(event);
     await queue.drain();
 
-    expect(handler).toHaveBeenCalledWith(event);
+    expect(handler).toHaveBeenCalledWith(event, firstTry);
   });
 
   it('sends an event without a valid company to the dead letter queue, without trying it again', async () => {
@@ -149,8 +169,8 @@ describe('EventBus', () => {
     await bus.publish(newer);
     await queue.drain();
 
-    expect(first.mock.calls).toEqual([[event]]);
-    expect(second.mock.calls).toEqual([[newer]]);
+    expect(first.mock.calls).toEqual([[event, firstTry]]);
+    expect(second.mock.calls).toEqual([[newer, firstTry]]);
   });
 
   it('rejects a duplicate subscription', async () => {

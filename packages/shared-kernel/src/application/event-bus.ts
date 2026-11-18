@@ -1,10 +1,15 @@
 import { InvalidCompanyIdError, parseCompanyId } from '../domain/company-id.ts';
 import type { DomainEvent } from '../domain/domain-event.ts';
 import { type EventContract, InvalidEventPayloadError } from './event-contract.ts';
-import { type EventPublisher, type JobQueue, type QueueOptions, UnrecoverableJobError } from './ports.ts';
+import { type Attempt, type EventPublisher, type JobQueue, type QueueOptions, UnrecoverableJobError } from './ports.ts';
 import { runWithCompany } from './tenant-context.ts';
 
-export type EventHandler<TEvent extends DomainEvent = DomainEvent> = (event: TEvent) => Promise<void>;
+/**
+ * Handles one delivery of an event. A handler that throws gets the event again later,
+ * until the queue's retries run out; on the last try, attempt.last is true, so a handler
+ * can settle what would otherwise be left waiting, such as failing the work it started.
+ */
+export type EventHandler<TEvent extends DomainEvent = DomainEvent> = (event: TEvent, attempt: Attempt) => Promise<void>;
 
 const CONSUMER_PATTERN = /^[a-z][a-z0-9-]*$/;
 
@@ -60,7 +65,7 @@ export class EventBus implements EventPublisher {
       throw new Error(`Consumer "${consumer}" already subscribes to ${contract.type}, version ${contract.version}.`);
     }
     const topic = topicOf(contract.type, contract.version);
-    await this.#listen(queueName, topic, (event) => handler(checked(contract, event)), options);
+    await this.#listen(queueName, topic, (event, attempt) => handler(checked(contract, event), attempt), options);
   }
 
   /**
@@ -85,9 +90,9 @@ export class EventBus implements EventPublisher {
   async #listen(queueName: string, topic: string, handler: EventHandler, options: QueueOptions | undefined): Promise<void> {
     this.#subscribed.add(queueName);
     await this.#queue.createQueue(queueName, options);
-    await this.#queue.work(queueName, async (job) => {
+    await this.#queue.work(queueName, async (job, attempt) => {
       const event = job.data as DomainEvent;
-      await runWithCompany(companyOf(event), () => handler(event));
+      await runWithCompany(companyOf(event), () => handler(event, attempt));
     });
     await this.#queue.subscribe(topic, queueName);
   }

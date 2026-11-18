@@ -5,10 +5,10 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import { IMAGE_REGISTRY } from '../src/builds/application/ports.ts';
+import { BUILDS_STORE, type BuildsStore, IMAGE_REGISTRY } from '../src/builds/application/ports.ts';
 import { SigningKeys } from '../src/builds/application/signing-keys.ts';
 import { signaturePayload, signPayload } from '../src/builds/domain/cosign.ts';
+import { Deployments } from '../src/deployments/application/deployments.ts';
 import { HOST_RUNTIME } from '../src/deployments/application/ports.ts';
 import { ENVIRONMENT_REPOSITORIES, SECRET_STORE } from '../src/environments/application/ports.ts';
 import { placeId } from '@dreamdevops/contracts/environments/telemetry';
@@ -194,7 +194,7 @@ const signBuild = async (setup: Setup, buildId: string) => {
   const { rows } = await superuser.query<{ digest: string }>('SELECT digest FROM builds.builds WHERE id = $1', [buildId]);
   const digest = rows[0]!.digest;
   const privateKey = await runWithCompany(parseCompanyId(setup.companyId), () =>
-    app.get(TenantDatabase).transaction((tx) => app.get(SigningKeys).privateKey(tx, 'test')),
+    app.get<BuildsStore>(BUILDS_STORE).transaction((session) => app.get(SigningKeys).privateKey(session, 'test')),
   );
   const repository = `${setup.organization}/billing-api`;
   const payload = signaturePayload(`registry.test/${repository}`, digest);
@@ -664,6 +664,27 @@ describe('deployments', () => {
       expect(restored.metadata.annotations['dreamdevops.io/deployment']).toBe(good.id);
     });
   });
+
+  it('fail a rollout its target stopped reporting on, once it has stalled for long enough', async () => {
+    const setup = await setUp();
+    const { body: requested } = await setup.developer
+      .post(`/api/v1/company/applications/${setup.applicationId}/deployments`)
+      .send({ environment: setup.test.id, version: await setup.build('feature'), strategy: 'rolling' })
+      .expect(201);
+    await eventually(async () => expect((await deployment(setup.developer, requested.id)).status).toBe('committed'));
+
+    await app.get(Deployments).failStalled();
+    expect((await deployment(setup.developer, requested.id)).status).toBe('committed');
+    await superuser.query("UPDATE deployments.deployments SET updated_at = now() - interval '1 hour' WHERE id = $1", [requested.id]);
+    await app.get(Deployments).failStalled();
+
+    expect(await deployment(setup.developer, requested.id)).toMatchObject({
+      status: 'failed',
+      message: "The target didn't finish the rollout in 15 minutes.",
+      finishedAt: expect.any(String),
+    });
+    await eventually(async () => expect(await auditEvent(setup.admin, 'DeploymentFailed')).toMatchObject({ deploymentId: requested.id }));
+  });
 });
 
 describe('This machine', () => {
@@ -947,5 +968,58 @@ describe('alerts', () => {
       expect(mailer.sent.some((message) => message.to === operator.email && message.subject.includes('High CPU'))).toBe(true),
     );
   });
-});
 
+  it('change, turn off, resolve, test and delete as their managers ask, and stay within their company', async () => {
+    const setup = await setUp();
+    const place = await running(setup);
+    const { body: members } = await setup.operator.get('/api/v1/company/alerts/members').expect(200);
+    const operator = members.find((member: { displayName: string }) => member.displayName.startsWith('operator'))!;
+    const { body: created } = await setup.operator
+      .post('/api/v1/company/alerts')
+      .send({
+        name: 'Slow answers',
+        environmentId: setup.test.id,
+        applicationId: setup.applicationId,
+        metric: 'cpu',
+        comparator: 'above',
+        threshold: 80,
+        forMinutes: 0,
+        recipients: [operator.userId],
+      })
+      .expect(201);
+    await setup.operator
+      .post('/api/v1/company/alerts')
+      .send({ name: 'slow ANSWERS', environmentId: setup.test.id, applicationId: setup.applicationId, metric: 'cpu', comparator: 'above', threshold: 1, forMinutes: 0, recipients: [operator.userId] })
+      .expect(409);
+
+    const { body: changed } = await setup.operator.patch(`/api/v1/company/alerts/${created.id}`).send({ threshold: 90, forMinutes: 2 }).expect(200);
+    expect(changed).toMatchObject({ threshold: 90, forMinutes: 2, condition: 'CPU above 90% for 2 minutes' });
+    await setup.operator.patch(`/api/v1/company/alerts/${created.id}`).send({ metric: 'memory' }).expect(400);
+
+    // It fires, then turning it off ends the incident without an email.
+    await setup.operator.patch(`/api/v1/company/alerts/${created.id}`).send({ forMinutes: 0 }).expect(200);
+    cpuOf.set(place, '95');
+    try {
+      await runWithCompany(parseCompanyId(setup.companyId), () => app.get(AlertChecks).check());
+    } finally {
+      cpuOf.delete(place);
+    }
+    const { body: off } = await setup.operator.patch(`/api/v1/company/alerts/${created.id}`).send({ enabled: false }).expect(200);
+    expect(off).toMatchObject({ enabled: false, state: 'ok', firingSince: null });
+    const { body: history } = await setup.developer.get('/api/v1/company/alerts/incidents').expect(200);
+    expect(history).toEqual([
+      expect.objectContaining({ alertId: created.id, alertName: 'Slow answers', startValue: '95%', endedBy: 'turned-off', endValue: 'No data' }),
+    ]);
+
+    const { body: tested } = await setup.operator.post(`/api/v1/company/alerts/${created.id}/test`).expect(200);
+    expect(tested).toEqual({ delivered: true, sent: 1, error: null });
+    const { body: afterTest } = await setup.operator.get('/api/v1/company/alerts').expect(200);
+    expect(afterTest.alerts[0]).toMatchObject({ lastNotifiedAt: expect.any(String), lastNotificationError: null, recipients: [expect.objectContaining({ userId: operator.userId })] });
+
+    const other = await setUp();
+    await other.operator.patch(`/api/v1/company/alerts/${created.id}`).send({ threshold: 1 }).expect(404);
+    await other.operator.delete(`/api/v1/company/alerts/${created.id}`).expect(404);
+    await setup.operator.delete(`/api/v1/company/alerts/${created.id}`).expect(204);
+    expect((await setup.operator.get('/api/v1/company/alerts').expect(200)).body.alerts).toEqual([]);
+  });
+});

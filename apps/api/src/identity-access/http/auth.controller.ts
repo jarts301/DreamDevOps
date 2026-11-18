@@ -1,137 +1,55 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  ForbiddenException,
-  Get,
-  HttpCode,
-  Inject,
-  Post,
-  Query,
-  Req,
-  Res,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, Query, Req, Res } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { CurrentUser, SignedOut } from '@dreamdevops/contracts/identity-access/http';
 import type { CookieOptions, Response } from 'express';
 import type { AppConfig } from '../../config/app-config.ts';
 import { Authenticated, Public, SignInRateLimit } from '../../http/access.decorators.ts';
 import { type ApiRequest, LOGIN_COOKIE, SESSION_COOKIE } from '../../http/request.ts';
-import { hashSessionId, newSessionId, SESSION_STORE, type SessionStore } from '../../session/session-store.ts';
 import { APP_CONFIG } from '../../tokens.ts';
-import { IDENTITY_PROVIDER, type IdentityProvider, USER_DIRECTORY, type UserDirectory } from '../application/ports.ts';
-import { requiresMfa } from '../domain/access.ts';
+import { SignIn } from '../application/sign-in.ts';
 
 const LOGIN_COOKIE_LIFETIME_MS = 10 * 60_000;
 
 /**
  * The backend for frontend's login. The login provider's tokens stay on the server,
- * and the browser only holds an opaque session ID that scripts can't read.
+ * and the browser only holds an opaque session ID that scripts can't read. The login
+ * itself is SignIn's; this keeps the cookies and redirects that carry it.
  */
 @Controller('auth')
 @SignInRateLimit()
 export class AuthController {
   readonly #config: AppConfig;
-  readonly #identityProvider: IdentityProvider;
-  readonly #directory: UserDirectory;
-  readonly #sessions: SessionStore;
+  readonly #signIn: SignIn;
 
-  constructor(
-    @Inject(APP_CONFIG) config: AppConfig,
-    @Inject(IDENTITY_PROVIDER) identityProvider: IdentityProvider,
-    @Inject(USER_DIRECTORY) directory: UserDirectory,
-    @Inject(SESSION_STORE) sessions: SessionStore,
-  ) {
+  constructor(@Inject(APP_CONFIG) config: AppConfig, @Inject(SignIn) signIn: SignIn) {
     this.#config = config;
-    this.#identityProvider = identityProvider;
-    this.#directory = directory;
-    this.#sessions = sessions;
+    this.#signIn = signIn;
   }
 
   @Public()
   @Get('login')
-  async login(
-    @Query('login_hint') loginHint: unknown,
-    @Query('mfa') mfa: unknown,
-    @Res() response: Response,
-  ): Promise<void> {
-    const requireMfa = mfa === '1';
-    const state = randomValue();
-    const nonce = randomValue();
-    const codeVerifier = randomValue();
-
-    const authorizationUrl = await this.#identityProvider.authorizationUrl({
-      state,
-      nonce,
-      codeChallenge: createHash('sha256').update(codeVerifier).digest('base64url'),
-      redirectUri: this.#callbackUrl(),
-      ...(typeof loginHint === 'string' && { loginHint }),
-      requireMfa,
-    });
-
-    response.cookie(
-      LOGIN_COOKIE,
-      `${state}.${nonce}.${codeVerifier}.${requireMfa ? '1' : '0'}`,
-      this.#cookieOptions(LOGIN_COOKIE_LIFETIME_MS),
-    );
+  async login(@Query('login_hint') loginHint: unknown, @Query('mfa') mfa: unknown, @Res() response: Response): Promise<void> {
+    const { authorizationUrl, attempt } = await this.#signIn.start(loginHint, mfa);
+    response.cookie(LOGIN_COOKIE, attempt, this.#cookieOptions(LOGIN_COOKIE_LIFETIME_MS));
     response.redirect(302, authorizationUrl);
   }
 
   @Public()
   @Get('callback')
-  async callback(
-    @Query('state') state: unknown,
-    @Req() request: ApiRequest,
-    @Res() response: Response,
-  ): Promise<void> {
-    const [expectedState, nonce, codeVerifier, mfaRequested] = (request.cookies[LOGIN_COOKIE] ?? '').split('.');
+  async callback(@Query('state') state: unknown, @Req() request: ApiRequest, @Res() response: Response): Promise<void> {
+    const attempt = request.cookies[LOGIN_COOKIE];
     response.clearCookie(LOGIN_COOKIE, this.#cookieOptions());
-
-    if (typeof state !== 'string' || !expectedState || !nonce || !codeVerifier || !sameText(state, expectedState)) {
-      throw new BadRequestException('This login attempt is not valid. Start again.');
-    }
-
-    const identity = await this.#identityProvider.exchangeCode({
-      callbackUrl: new URL(`${this.#config.publicUrl}${request.originalUrl}`),
-      state: expectedState,
-      nonce,
-      codeVerifier,
+    const finished = await this.#signIn.finish({
+      state,
+      attempt,
+      callbackPath: request.originalUrl,
+      previousSessionId: request.cookies[SESSION_COOKIE],
     });
-    if (identity === null) {
-      throw new UnauthorizedException('The login did not succeed.');
-    }
-    const userId = await this.#directory.recordLogin(identity);
-
-    // Admins and Tech Leads need a second factor. Without one, the login starts again and
-    // asks for it, and Keycloak only asks for the one-time code, not the password again.
-    const access = await this.#directory.loadAccess(userId);
-    if (access !== null && requiresMfa(access) && !identity.mfa) {
-      if (mfaRequested === '1') {
-        throw new ForbiddenException('Your login provider did not confirm a second factor.');
-      }
-      const stepUp = new URL(`${this.#config.publicUrl}/api/v1/auth/login`);
-      stepUp.searchParams.set('mfa', '1');
-      // Keycloak still has its own session, and the hint keeps it on the same person.
-      stepUp.searchParams.set('login_hint', identity.email);
-      response.redirect(302, stepUp.toString());
+    if ('stepUp' in finished) {
+      response.redirect(302, finished.stepUp);
       return;
     }
-
-    // A new session ID at every login stops an attacker from planting one in advance.
-    const previousSession = request.cookies[SESSION_COOKIE];
-    if (previousSession !== undefined) {
-      await this.#sessions.delete(hashSessionId(previousSession));
-    }
-    const sessionId = newSessionId();
-    await this.#sessions.create(
-      hashSessionId(sessionId),
-      { userId, chosenCompanyId: null, idToken: identity.idToken, mfa: identity.mfa },
-      { absoluteMs: this.#config.sessionAbsoluteMs, idleMs: this.#config.sessionIdleMs },
-    );
-
-    response.cookie(SESSION_COOKIE, sessionId, this.#cookieOptions(this.#config.sessionAbsoluteMs));
+    response.cookie(SESSION_COOKIE, finished.sessionId, this.#cookieOptions(this.#config.sessionAbsoluteMs));
     response.redirect(302, this.#config.dashboardUrl);
   }
 
@@ -141,14 +59,9 @@ export class AuthController {
   @Post('logout')
   @HttpCode(200)
   async logout(@Req() request: ApiRequest, @Res({ passthrough: true }) response: Response): Promise<SignedOut> {
-    await this.#sessions.delete(request.sessionIdHash!);
+    const signedOut = await this.#signIn.signOut(request.sessionIdHash!, request.session?.idToken ?? null);
     response.clearCookie(SESSION_COOKIE, this.#cookieOptions());
-    return {
-      logoutUrl: await this.#identityProvider.logoutUrl({
-        idToken: request.session?.idToken ?? null,
-        postLogoutRedirectUri: this.#config.dashboardUrl,
-      }),
-    };
+    return signedOut;
   }
 
   // The dashboard calls this often, so the strict login limit would lock people out.
@@ -165,16 +78,8 @@ export class AuthController {
   @Authenticated()
   @Post('active-company')
   @HttpCode(204)
-  async chooseCompany(@Req() request: ApiRequest, @Body() body: { companyId?: unknown }): Promise<void> {
-    const companyId = body?.companyId;
-    if (!request.principal!.memberships.some((membership) => membership.companyId === companyId)) {
-      throw new ForbiddenException('You are not a member of this company.');
-    }
-    await this.#sessions.update(request.sessionIdHash!, { ...request.session!, chosenCompanyId: companyId as string });
-  }
-
-  #callbackUrl(): string {
-    return `${this.#config.publicUrl}/api/v1/auth/callback`;
+  chooseCompany(@Req() request: ApiRequest, @Body() body: { companyId?: unknown } | undefined): Promise<void> {
+    return this.#signIn.chooseCompany(request.principal!, { idHash: request.sessionIdHash!, data: request.session! }, body?.companyId);
   }
 
   #cookieOptions(maxAge?: number): CookieOptions {
@@ -187,14 +92,4 @@ export class AuthController {
       ...(maxAge !== undefined && { maxAge }),
     };
   }
-}
-
-function randomValue(): string {
-  return randomBytes(32).toString('base64url');
-}
-
-function sameText(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
 }

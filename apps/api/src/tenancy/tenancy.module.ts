@@ -5,11 +5,13 @@ import { IdentityAccessModule } from '../identity-access/identity-access.module.
 import { NotificationsModule } from '../notifications/notifications.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { CompaniesService } from './application/companies.service.ts';
-import { GIT_PROVIDER, type GitProvider } from './application/ports.ts';
+import { GIT_PROVIDER, type GitProvider, TENANCY_STORE, type TenancyStore } from './application/ports.ts';
 import { ProvisioningSaga } from './application/provisioning.ts';
 import { CompanyDirectoryModule } from './company-directory.module.ts';
 import { CompaniesController } from './http/companies.controller.ts';
 import { ForgejoGitProvider } from './infrastructure/forgejo-git-provider.ts';
+import { postgresTenancyStore } from './infrastructure/postgres-tenancy-store.ts';
+import { INVITATION_MAILER, type InvitationMailer } from '@dreamdevops/contracts/notifications/services';
 import { TenancySubscriptions } from './messaging/tenancy-subscriptions.ts';
 
 /** The company register, and each company's resources, such as its Git organization. */
@@ -28,10 +30,12 @@ export class TenancyModule {
         controllers: [CompaniesController],
         providers: withOverrides(
           [
+            { provide: TENANCY_STORE, useFactory: postgresTenancyStore, inject: [TenantDatabase] },
             {
               provide: CompaniesService,
-              useFactory: (database: TenantDatabase, invitations: FirstAdminInvitations) => new CompaniesService(database, invitations),
-              inject: [TenantDatabase, FIRST_ADMIN_INVITATIONS],
+              useFactory: (store: TenancyStore, invitations: FirstAdminInvitations, emails: InvitationMailer) =>
+                new CompaniesService(store, invitations, emails),
+              inject: [TENANCY_STORE, FIRST_ADMIN_INVITATIONS, INVITATION_MAILER],
             },
             {
               provide: GIT_PROVIDER,
@@ -44,9 +48,9 @@ export class TenancyModule {
             },
             {
               provide: ProvisioningSaga,
-              useFactory: (database: TenantDatabase, git: GitProvider) =>
-                new ProvisioningSaga(database, git, { maxAttempts: config.provisioningMaxAttempts }),
-              inject: [TenantDatabase, GIT_PROVIDER],
+              useFactory: (store: TenancyStore, git: GitProvider) =>
+                new ProvisioningSaga(store, git, { maxAttempts: config.provisioningMaxAttempts }),
+              inject: [TENANCY_STORE, GIT_PROVIDER],
             },
             {
               provide: TenancySubscriptions,

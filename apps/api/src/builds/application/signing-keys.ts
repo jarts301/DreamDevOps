@@ -1,9 +1,8 @@
 import { createCipheriv, createDecipheriv, createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import type { PublicSigningKey } from '@dreamdevops/contracts/builds/http';
 import type { ImageSigningKeys } from '@dreamdevops/contracts/builds/services';
-import { currentCompanyId } from '@dreamdevops/shared-kernel';
-import type { TenantDatabase, TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { SigningPurpose } from '../domain/build.ts';
+import type { BuildsSession, BuildsStore } from './ports.ts';
 
 /** A company's public signing key, which targets check images with. */
 export type PublicKey = PublicSigningKey;
@@ -21,45 +20,32 @@ export class SigningKeys {
   }
 
   /** The private key for signing, made if missing. Call inside the company's transaction. */
-  async privateKey(tx: TenantTransaction, purpose: SigningPurpose): Promise<string> {
-    const { rows } = await tx.query<{ private_key: string }>(
-      'SELECT private_key FROM builds.signing_keys WHERE purpose = $1',
-      [purpose],
-    );
-    if (rows[0] !== undefined) {
-      return this.#decrypt(rows[0].private_key);
+  async privateKey(session: BuildsSession, purpose: SigningPurpose): Promise<string> {
+    const stored = await session.signingKey(purpose);
+    if (stored !== null) {
+      return this.#decrypt(stored.encryptedPrivateKey);
     }
     const { publicKey, privateKey } = generateKeyPairSync('ec', {
       namedCurve: 'P-256',
       publicKeyEncoding: { type: 'spki', format: 'pem' },
       privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
     });
-    const { rows: inserted } = await tx.query<{ private_key: string }>(
-      `INSERT INTO builds.signing_keys (company_id, purpose, public_key, private_key)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (company_id, purpose) DO NOTHING
-       RETURNING private_key`,
-      [currentCompanyId(), purpose, publicKey, this.#encrypt(privateKey)],
-    );
-    if (inserted[0] !== undefined) {
+    if (await session.addSigningKey({ purpose, publicKey, encryptedPrivateKey: this.#encrypt(privateKey) })) {
       return privateKey;
     }
     // Another build made it at the same moment, so its key is used.
-    return this.privateKey(tx, purpose);
+    return this.privateKey(session, purpose);
   }
 
   /** One public key, made with its private key if missing. Call inside the company's transaction. */
-  async publicKey(tx: TenantTransaction, purpose: SigningPurpose): Promise<string> {
-    await this.privateKey(tx, purpose);
-    return (await this.publicKeys(tx)).find((key) => key.purpose === purpose)!.publicKey;
+  async publicKey(session: BuildsSession, purpose: SigningPurpose): Promise<string> {
+    await this.privateKey(session, purpose);
+    return (await this.publicKeys(session)).find((key) => key.purpose === purpose)!.publicKey;
   }
 
   /** The company's public keys, which targets use to check images. */
-  async publicKeys(tx: TenantTransaction): Promise<PublicKey[]> {
-    const { rows } = await tx.query<{ purpose: SigningPurpose; public_key: string }>(
-      'SELECT purpose, public_key FROM builds.signing_keys ORDER BY purpose',
-    );
-    return rows.map((row) => ({ purpose: row.purpose, publicKey: row.public_key }));
+  publicKeys(session: BuildsSession): Promise<PublicKey[]> {
+    return session.publicKeys();
   }
 
   #encrypt(plain: string): string {
@@ -86,15 +72,15 @@ export class SigningKeys {
  * no other context's transaction ever reaches this context's tables.
  */
 export class CompanySigningKeys implements ImageSigningKeys {
-  readonly #database: TenantDatabase;
+  readonly #store: BuildsStore;
   readonly #keys: SigningKeys;
 
-  constructor(database: TenantDatabase, keys: SigningKeys) {
-    this.#database = database;
+  constructor(store: BuildsStore, keys: SigningKeys) {
+    this.#store = store;
     this.#keys = keys;
   }
 
   publicKey(purpose: SigningPurpose): Promise<string> {
-    return this.#database.transaction((tx) => this.#keys.publicKey(tx, purpose));
+    return this.#store.transaction((session) => this.#keys.publicKey(session, purpose));
   }
 }

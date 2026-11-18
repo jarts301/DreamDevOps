@@ -7,12 +7,13 @@ import { CatalogModule } from '../catalog/catalog.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
-import { SOURCE_HOST, type SourceHost } from './application/ports.ts';
+import { SOURCE_HOST, SOURCE_STORE, type SourceHost, type SourceStore } from './application/ports.ts';
 import { Repositories } from './application/repositories.ts';
 import { REPOSITORY_GIT, REPOSITORY_LOOKUP } from '@dreamdevops/contracts/source-governance/services';
 import { SourceAccess } from './application/source-access.ts';
 import { SourceController } from './http/source.controller.ts';
 import { ForgejoSourceHost } from './infrastructure/forgejo-source-host.ts';
+import { postgresSourceStore } from './infrastructure/postgres-source-store.ts';
 import { webhookSecret } from '@dreamdevops/contracts/webhooks/signature';
 import { SourceGovernanceSubscriptions } from './messaging/source-governance-subscriptions.ts';
 
@@ -41,38 +42,38 @@ export class SourceGovernanceModule {
                   password: config.forgejoPassword,
                 }),
             },
+            { provide: SOURCE_STORE, useFactory: postgresSourceStore, inject: [TenantDatabase] },
             {
               provide: Repositories,
               useFactory: (
-                database: TenantDatabase,
+                store: SourceStore,
                 companies: CompanyDirectory,
                 host: SourceHost,
                 catalog: ApplicationDirectory,
                 blueprints: BlueprintCatalog,
               ) =>
-                new Repositories(database, companies, host, catalog, blueprints, {
+                new Repositories(store, companies, host, catalog, blueprints, {
                   maxAttempts: config.provisioningMaxAttempts,
                   publicUrl: config.forgejoPublicUrl,
                   // Each repository tells the webhook gateway about pushes and pull requests.
                   webhookUrl: `${config.toolsApiUrl}/api/v1/webhooks/forgejo`,
                   webhookSecret: (applicationId) => webhookSecret(config.webhookSecretKey, applicationId),
                 }),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, SOURCE_HOST, APPLICATION_DIRECTORY, BLUEPRINT_CATALOG],
+              inject: [SOURCE_STORE, COMPANY_DIRECTORY, SOURCE_HOST, APPLICATION_DIRECTORY, BLUEPRINT_CATALOG],
             },
             { provide: REPOSITORY_LOOKUP, useExisting: Repositories },
             // The Git work other contexts do, such as Builds reading code and Releases tagging it.
             { provide: REPOSITORY_GIT, useExisting: SOURCE_HOST },
             {
               provide: SourceAccess,
-              useFactory: (database: TenantDatabase, companies: CompanyDirectory, host: SourceHost) =>
-                new SourceAccess(database, companies, host, config.forgejoPublicUrl),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, SOURCE_HOST],
+              useFactory: (store: SourceStore, companies: CompanyDirectory, host: SourceHost) =>
+                new SourceAccess(store, companies, host, config.forgejoPublicUrl),
+              inject: [SOURCE_STORE, COMPANY_DIRECTORY, SOURCE_HOST],
             },
             {
               provide: SourceGovernanceSubscriptions,
-              useFactory: (repositories: Repositories, access: SourceAccess, database: TenantDatabase) =>
-                new SourceGovernanceSubscriptions(repositories, access, config, database),
-              inject: [Repositories, SourceAccess, TenantDatabase],
+              useFactory: (repositories: Repositories, access: SourceAccess) => new SourceGovernanceSubscriptions(repositories, access, config),
+              inject: [Repositories, SourceAccess],
             },
           ],
           settings.overrides,

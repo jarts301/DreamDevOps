@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { AuditLog } from '../src/audit/application/audit-log.ts';
+import { postgresAuditStore } from '../src/audit/infrastructure/postgres-audit-store.ts';
 import { PostgresCompanyDirectory } from '../src/tenancy/infrastructure/postgres-company-directory.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
 
@@ -16,7 +17,7 @@ beforeAll(async () => {
   database = await startTestDatabase();
   app = new pg.Pool({ connectionString: database.urlFor('app') });
   superuser = new pg.Pool({ connectionString: database.superuserUrl() });
-  audit = new AuditLog(new TenantDatabase(app), app, new PostgresCompanyDirectory(app));
+  audit = new AuditLog(postgresAuditStore(new TenantDatabase(app), app), new PostgresCompanyDirectory(app));
 }, 120_000);
 
 afterAll(async () => {
@@ -109,5 +110,32 @@ describe("checking a company's history", () => {
       brokenAtSequence: 1_003,
       reason: 'This entry was changed after it was recorded.',
     });
+  });
+});
+
+describe("a company's history", () => {
+  it('records an event delivered twice only once, and lists it newest first, in its words, with who did it', async () => {
+    const companyId = await company('Hooli Audit');
+    const event = createDomainEvent({
+      eventType: 'ApplicationRegistered',
+      companyId,
+      payload: { applicationId: randomUUID(), name: 'Billing', slug: 'billing', type: 'web' },
+      occurredAt: new Date('2026-06-01T12:00:00.000Z'),
+    });
+    await record(companyId, 2, { occurredAt: new Date('2026-06-01T10:00:00.000Z') });
+
+    await runWithCompany(companyId, () => audit.record(event));
+    await runWithCompany(companyId, () => audit.record(event));
+    const page = await runWithCompany(companyId, () => audit.listCompany(undefined));
+
+    expect(page.entries.map((entry) => entry.sequence)).toEqual([3, 2, 1]);
+    expect(page.entries[0]).toMatchObject({
+      eventType: 'ApplicationRegistered',
+      description: 'Registered the application "Billing"',
+      actor: null,
+      occurredAt: '2026-06-01T12:00:00.000Z',
+    });
+    expect(page.nextBefore).toBeNull();
+    expect(await runWithCompany(companyId, () => audit.verify())).toMatchObject({ valid: true, checked: 3 });
   });
 });

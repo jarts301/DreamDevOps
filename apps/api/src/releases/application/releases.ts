@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { BuildRequests } from '@dreamdevops/contracts/builds/services';
 import type { ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
-import type { ReleasesOverview, ReleaseStatus, StartRelease } from '@dreamdevops/contracts/releases/http';
+import type { ReleasesOverview, StartRelease } from '@dreamdevops/contracts/releases/http';
 import { ReleaseCandidateCreated, ReleaseMerged, ReleasePublished, ReleaseStarted } from '@dreamdevops/contracts/releases/events';
 import type { Unchecked } from '@dreamdevops/contracts/http';
 import {
@@ -12,37 +12,12 @@ import {
   type RepositorySpec,
 } from '@dreamdevops/contracts/source-governance/services';
 import { currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import { ReleaseError } from '../domain/errors.ts';
-import {
-  branchFor,
-  formatVersion,
-  parseVersion,
-  type ReleaseKind,
-  refusalFor,
-  releaseBranch,
-  suggestVersions,
-} from '../domain/version.ts';
+import { branchFor, formatVersion, parseVersion, refusalFor, releaseBranch, suggestVersions } from '../domain/version.ts';
+import type { ReleasesStore, StoredRelease } from './ports.ts';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-interface ReleaseRow {
-  id: string;
-  application_id: string;
-  kind: ReleaseKind;
-  version: string;
-  branch: string;
-  status: ReleaseStatus;
-  candidates: number;
-  last_candidate_commit: string | null;
-  merge_commit: string | null;
-  merge_back_pull_request: number | null;
-  final_build_id: string | null;
-  created_at: Date;
-  merged_at: Date | null;
-  published_at: Date | null;
-}
 
 /** What a finished build tells this module. */
 export interface FinishedBuild {
@@ -60,20 +35,20 @@ export interface FinishedBuild {
  * opens the pull request back into develop.
  */
 export class Releases {
-  readonly #database: TenantDatabase;
+  readonly #store: ReleasesStore;
   readonly #catalog: ApplicationDirectory;
   readonly #repositories: RepositoryLookup;
   readonly #source: RepositoryGit;
   readonly #builds: BuildRequests;
 
   constructor(
-    database: TenantDatabase,
+    store: ReleasesStore,
     catalog: ApplicationDirectory,
     repositories: RepositoryLookup,
     source: RepositoryGit,
     builds: BuildRequests,
   ) {
-    this.#database = database;
+    this.#store = store;
     this.#catalog = catalog;
     this.#repositories = repositories;
     this.#source = source;
@@ -82,29 +57,13 @@ export class Releases {
 
   async list(applicationIdValue: unknown): Promise<ReleasesOverview> {
     const application = await this.#catalog.get(applicationIdValue);
-    const { rows, candidates } = await this.#database.transaction(async (tx) => {
-      const { rows: releases } = await tx.query<ReleaseRow>(
-        'SELECT * FROM releases.releases WHERE application_id = $1 ORDER BY created_at DESC',
-        [application.id],
-      );
-      const { rows: found } = await tx.query<{
-        release_id: string;
-        number: number;
-        commit_sha: string;
-        tag: string;
-        build_id: string | null;
-      }>(
-        `SELECT c.* FROM releases.candidates c
-         JOIN releases.releases r ON r.id = c.release_id
-         WHERE r.application_id = $1
-         ORDER BY c.number DESC`,
-        [application.id],
-      );
-      return { rows: releases, candidates: found };
-    });
+    const { rows, candidates } = await this.#store.transaction(async (session) => ({
+      rows: await session.list(application.id),
+      candidates: await session.candidatesOf(application.id),
+    }));
     // Build statuses come from BuildRequests, which owns them.
     const statuses = await this.#builds.statuses(
-      [...rows.map((row) => row.final_build_id), ...candidates.map((candidate) => candidate.build_id)].filter(
+      [...rows.map((row) => row.finalBuildId), ...candidates.map((candidate) => candidate.buildId)].filter(
         (id): id is string => id !== null,
       ),
     );
@@ -117,20 +76,20 @@ export class Releases {
         branch: row.branch,
         status: row.status,
         candidates: candidates
-          .filter((candidate) => candidate.release_id === row.id)
+          .filter((candidate) => candidate.releaseId === row.id)
           .map((candidate) => ({
             number: candidate.number,
-            commit: candidate.commit_sha,
+            commit: candidate.commit,
             tag: candidate.tag,
-            buildId: candidate.build_id,
-            buildStatus: statusOf(candidate.build_id),
+            buildId: candidate.buildId,
+            buildStatus: statusOf(candidate.buildId),
           })),
-        mergeBackPullRequest: row.merge_back_pull_request,
-        finalBuildId: row.final_build_id,
-        finalBuildStatus: statusOf(row.final_build_id),
-        createdAt: row.created_at.toISOString(),
-        mergedAt: row.merged_at?.toISOString() ?? null,
-        publishedAt: row.published_at?.toISOString() ?? null,
+        mergeBackPullRequest: row.mergeBackPullRequest,
+        finalBuildId: row.finalBuildId,
+        finalBuildStatus: statusOf(row.finalBuildId),
+        createdAt: row.createdAt.toISOString(),
+        mergedAt: row.mergedAt?.toISOString() ?? null,
+        publishedAt: row.publishedAt?.toISOString() ?? null,
       })),
       suggestions: suggestVersions(rows),
     };
@@ -151,12 +110,9 @@ export class Releases {
       throw new ReleaseError('conflict', "The application's repository isn't ready yet.");
     }
     const id = randomUUID();
-    await this.#database.transaction(async (tx) => {
-      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('releases:' || $1, 0))", [application.id]);
-      const { rows } = await tx.query<{ version: string; kind: ReleaseKind; status: ReleaseStatus }>(
-        'SELECT version, kind, status FROM releases.releases WHERE application_id = $1',
-        [application.id],
-      );
+    await this.#store.transaction(async (session) => {
+      await session.lockApplication(application.id);
+      const rows = await session.list(application.id);
       if (rows.some((row) => row.kind === kind && row.status === 'open')) {
         throw new ReleaseError('conflict', `Another ${kind} is still open. Finish it first.`);
       }
@@ -165,12 +121,8 @@ export class Releases {
         throw new ReleaseError('conflict', refusal);
       }
       const text = formatVersion(version);
-      await tx.query(
-        `INSERT INTO releases.releases (id, company_id, application_id, kind, version, branch, status, started_by)
-         VALUES ($1, $2, $3, $4, $5, $6, 'open', $7)`,
-        [id, currentCompanyId(), application.id, kind, text, branchFor(kind, text), actor.userId],
-      );
-      await appendToOutbox(tx, [
+      await session.add({ id, applicationId: application.id, kind, version: text, branch: branchFor(kind, text), startedBy: actor.userId });
+      await session.record([
         ReleaseStarted.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -183,11 +135,11 @@ export class Releases {
 
   /** Cuts the release branch and builds its first candidate. Safe to repeat. */
   async prepare(releaseId: string): Promise<void> {
-    const release = await this.#database.transaction((tx) => findRelease(tx, releaseId));
+    const release = await this.#store.transaction((session) => session.find(releaseId));
     if (release === null || release.status !== 'open') {
       return;
     }
-    const spec = await this.#spec(release.application_id);
+    const spec = await this.#spec(release.applicationId);
     const head = await this.#source.createBranch(spec, release.branch, release.kind === 'release' ? 'develop' : 'main');
     await this.#candidate(release.id, head, null);
     // The platform opens the pull request into main, so any Tech Lead can approve it: Forgejo
@@ -205,13 +157,7 @@ export class Releases {
     if (releaseBranch(payload.branch) === null) {
       return;
     }
-    const release = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<ReleaseRow>(
-        "SELECT * FROM releases.releases WHERE application_id = $1 AND branch = $2 AND status = 'open'",
-        [payload.applicationId, payload.branch],
-      );
-      return rows[0] ?? null;
-    });
+    const release = await this.#store.transaction((session) => session.openOnBranch(payload.applicationId, payload.branch));
     if (release !== null) {
       await this.#candidate(release.id, payload.after, null);
     }
@@ -228,27 +174,19 @@ export class Releases {
       return;
     }
     const spec = await this.#spec(payload.applicationId);
-    const release = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<ReleaseRow>(
-        "SELECT * FROM releases.releases WHERE application_id = $1 AND branch = $2 AND status IN ('open', 'merged') FOR UPDATE",
-        [payload.applicationId, payload.head],
-      );
-      const found = rows[0];
-      if (found === undefined) {
+    const release = await this.#store.transaction(async (session) => {
+      const found = await session.lockUnpublishedOnBranch(payload.applicationId, payload.head);
+      if (found === null) {
         return null;
       }
       if (found.status === 'open') {
-        await tx.query(
-          `UPDATE releases.releases SET status = 'merged', merge_commit = $2, merged_at = now(), updated_at = now()
-           WHERE id = $1`,
-          [found.id, payload.mergeCommit],
-        );
-        await appendToOutbox(tx, [
+        await session.markMerged(found.id, payload.mergeCommit);
+        await session.record([
           ReleaseMerged.create({
             companyId: currentCompanyId(),
             payload: {
               releaseId: found.id,
-              applicationId: found.application_id,
+              applicationId: found.applicationId,
               kind: found.kind,
               version: found.version,
               mergeCommit: payload.mergeCommit,
@@ -256,12 +194,12 @@ export class Releases {
           }),
         ]);
       }
-      return { ...found, merge_commit: found.merge_commit ?? payload.mergeCommit };
+      return { ...found, mergeCommit: found.mergeCommit ?? payload.mergeCommit };
     });
     if (release === null) {
       return;
     }
-    await this.#source.createTag(spec, `v${release.version}`, release.merge_commit!);
+    await this.#source.createTag(spec, `v${release.version}`, release.mergeCommit!);
     await this.#buildFinal(release);
     const pullRequest = await this.#source.openPullRequest(spec, {
       head: 'main',
@@ -269,12 +207,7 @@ export class Releases {
       title: `Merge ${release.version} back into develop`,
       body: `Brings the changes made during the ${release.kind} ${release.version} back into develop, so the next version keeps them.`,
     });
-    await this.#database.transaction((tx) =>
-      tx.query('UPDATE releases.releases SET merge_back_pull_request = $2, updated_at = now() WHERE id = $1', [
-        release.id,
-        pullRequest,
-      ]),
-    );
+    await this.#store.transaction((session) => session.setMergeBackPullRequest(release.id, pullRequest));
   }
 
   /** Reports a candidate's image to the pull request, and publishes the release with its final image. */
@@ -282,12 +215,12 @@ export class Releases {
     if (build.releaseId === null) {
       return;
     }
-    const release = await this.#database.transaction((tx) => findRelease(tx, build.releaseId!));
+    const release = await this.#store.transaction((session) => session.find(build.releaseId!));
     if (release === null) {
       return;
     }
     if (build.kind === 'rc') {
-      const spec = await this.#spec(release.application_id);
+      const spec = await this.#spec(release.applicationId);
       await this.#source.setCommitStatus(spec, build.commit, {
         context: RC_IMAGE_CHECK,
         state: succeeded ? 'success' : 'failure',
@@ -296,19 +229,14 @@ export class Releases {
       return;
     }
     if (build.kind === 'final' && succeeded) {
-      await this.#database.transaction(async (tx) => {
-        const { rowCount } = await tx.query(
-          `UPDATE releases.releases SET status = 'published', published_at = now(), updated_at = now()
-           WHERE id = $1 AND status = 'merged'`,
-          [release.id],
-        );
-        if (rowCount === 1) {
-          await appendToOutbox(tx, [
+      await this.#store.transaction(async (session) => {
+        if (await session.markPublished(release.id)) {
+          await session.record([
             ReleasePublished.create({
               companyId: currentCompanyId(),
               payload: {
                 releaseId: release.id,
-                applicationId: release.application_id,
+                applicationId: release.applicationId,
                 kind: release.kind,
                 version: release.version,
                 buildId: build.buildId,
@@ -328,13 +256,7 @@ export class Releases {
    */
   async sync(applicationIdValue: unknown): Promise<number> {
     const application = await this.#catalog.get(applicationIdValue);
-    const releases = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<ReleaseRow>(
-        "SELECT * FROM releases.releases WHERE application_id = $1 AND status = 'open'",
-        [application.id],
-      );
-      return rows;
-    });
+    const releases = await this.#store.transaction((session) => session.open(application.id));
     let moved = 0;
     for (const release of releases) {
       if (await this.#syncRelease(release)) {
@@ -349,18 +271,10 @@ export class Releases {
    * Git tool can't answer for is passed to onError and doesn't hold up the others.
    */
   async syncAll(onError: (error: unknown) => void): Promise<void> {
-    const companies = await runWithCompany(NO_COMPANY, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ company_id: string }>('SELECT * FROM releases.companies_with_open_releases()');
-        return rows;
-      }),
-    );
-    for (const { company_id: companyId } of companies) {
+    const companies = await runWithCompany(NO_COMPANY, () => this.#store.transaction((session) => session.companiesWithOpenReleases()));
+    for (const companyId of companies) {
       await runWithCompany(parseCompanyId(companyId), async () => {
-        const releases = await this.#database.transaction(async (tx) => {
-          const { rows } = await tx.query<ReleaseRow>("SELECT * FROM releases.releases WHERE status = 'open'");
-          return rows;
-        });
+        const releases = await this.#store.transaction((session) => session.open());
         for (const release of releases) {
           await this.#syncRelease(release).catch(onError);
         }
@@ -368,15 +282,15 @@ export class Releases {
     }
   }
 
-  async #syncRelease(release: ReleaseRow): Promise<boolean> {
-    const spec = await this.#repositories.locate(release.application_id);
+  async #syncRelease(release: StoredRelease): Promise<boolean> {
+    const spec = await this.#repositories.locate(release.applicationId);
     if (spec === null) {
       return false;
     }
     const merge = await this.#source.findPullRequest(spec, release.branch, 'main');
     if (merge?.merged === true && merge.mergeCommit !== null) {
       await this.onPullRequestMerged({
-        applicationId: release.application_id,
+        applicationId: release.applicationId,
         head: release.branch,
         base: 'main',
         mergeCommit: merge.mergeCommit,
@@ -384,7 +298,7 @@ export class Releases {
       return true;
     }
     const head = await this.#source.branchHead(spec, release.branch);
-    if (head !== null && head !== release.last_candidate_commit) {
+    if (head !== null && head !== release.lastCandidateCommit) {
       await this.#candidate(release.id, head, null);
       return true;
     }
@@ -396,69 +310,51 @@ export class Releases {
     if (typeof releaseIdValue !== 'string' || !UUID_PATTERN.test(releaseIdValue)) {
       throw new ReleaseError('invalid', 'The release ID is not valid.');
     }
-    const release = await this.#database.transaction((tx) => findRelease(tx, releaseIdValue));
+    const release = await this.#store.transaction((session) => session.find(releaseIdValue));
     if (release === null) {
       throw new ReleaseError('not-found', 'This release does not exist.');
     }
-    if (release.status !== 'merged' || release.merge_commit === null) {
+    if (release.status !== 'merged' || release.mergeCommit === null) {
       throw new ReleaseError('conflict', 'Only a merged release that has no final image can be rebuilt.');
     }
     await this.#buildFinal(release);
   }
 
-  async #buildFinal(release: ReleaseRow): Promise<void> {
+  async #buildFinal(release: StoredRelease): Promise<void> {
     const buildId = await this.#builds.request({
-      applicationId: release.application_id,
+      applicationId: release.applicationId,
       kind: 'final',
       branch: 'main',
-      commit: release.merge_commit!,
+      commit: release.mergeCommit!,
       tag: release.version,
       version: release.version,
       releaseId: release.id,
       actorId: null,
     });
-    await this.#database.transaction((tx) =>
-      tx.query('UPDATE releases.releases SET final_build_id = $2, updated_at = now() WHERE id = $1', [
-        release.id,
-        buildId,
-      ]),
-    );
+    await this.#store.transaction((session) => session.setFinalBuild(release.id, buildId));
   }
 
   /** Tags a new commit on the release branch as the next candidate, and builds it. */
   async #candidate(releaseId: string, commit: string, actorId: string | null): Promise<void> {
-    const spec = await this.#spec(
-      (await this.#database.transaction((tx) => findRelease(tx, releaseId)))!.application_id,
-    );
-    const created = await this.#database.transaction(async (tx) => {
-      const release = await findRelease(tx, releaseId, { lock: true });
-      if (release === null || release.status !== 'open' || release.last_candidate_commit === commit) {
+    const spec = await this.#spec((await this.#store.transaction((session) => session.find(releaseId)))!.applicationId);
+    const created = await this.#store.transaction(async (session) => {
+      const release = await session.find(releaseId, { lock: true });
+      if (release === null || release.status !== 'open' || release.lastCandidateCommit === commit) {
         return null;
       }
-      const { rows: existing } = await tx.query('SELECT 1 FROM releases.candidates WHERE release_id = $1 AND commit_sha = $2', [
-        releaseId,
-        commit,
-      ]);
-      if (existing.length > 0) {
+      if (await session.hasCandidate(releaseId, commit)) {
         return null;
       }
       const number = release.candidates + 1;
       const tag = `v${release.version}-rc.${number}`;
       // Tagging first means a failure here leaves nothing recorded, and the retry tags again.
       await this.#source.createTag(spec, tag, commit);
-      await tx.query(
-        'INSERT INTO releases.candidates (release_id, company_id, number, commit_sha, tag) VALUES ($1, $2, $3, $4, $5)',
-        [releaseId, currentCompanyId(), number, commit, tag],
-      );
-      await tx.query(
-        'UPDATE releases.releases SET candidates = $2, last_candidate_commit = $3, updated_at = now() WHERE id = $1',
-        [releaseId, number, commit],
-      );
-      await appendToOutbox(tx, [
+      await session.addCandidate({ releaseId, number, commit, tag });
+      await session.record([
         ReleaseCandidateCreated.create({
           companyId: currentCompanyId(),
           actorId,
-          payload: { releaseId, applicationId: release.application_id, version: release.version, number, tag, commit },
+          payload: { releaseId, applicationId: release.applicationId, version: release.version, number, tag, commit },
         }),
       ]);
       return { release, number, tag };
@@ -473,7 +369,7 @@ export class Releases {
     });
     const imageTag = `${created.release.version}-rc.${created.number}`;
     const buildId = await this.#builds.request({
-      applicationId: created.release.application_id,
+      applicationId: created.release.applicationId,
       kind: 'rc',
       branch: created.release.branch,
       commit,
@@ -482,13 +378,7 @@ export class Releases {
       releaseId,
       actorId,
     });
-    await this.#database.transaction((tx) =>
-      tx.query('UPDATE releases.candidates SET build_id = $3 WHERE release_id = $1 AND number = $2', [
-        releaseId,
-        created.number,
-        buildId,
-      ]),
-    );
+    await this.#store.transaction((session) => session.setCandidateBuild(releaseId, created.number, buildId));
   }
 
   async #spec(applicationId: string): Promise<RepositorySpec> {
@@ -498,12 +388,4 @@ export class Releases {
     }
     return spec;
   }
-}
-
-async function findRelease(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<ReleaseRow | null> {
-  const { rows } = await tx.query<ReleaseRow>(
-    `SELECT * FROM releases.releases WHERE id = $1${options.lock ? ' FOR UPDATE' : ''}`,
-    [id],
-  );
-  return rows[0] ?? null;
 }

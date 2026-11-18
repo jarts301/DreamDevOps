@@ -1,4 +1,4 @@
-import type { AgentCommand } from '@dreamdevops/contracts/agent/protocol';
+import type { AgentCommand, HeartbeatResponse } from '@dreamdevops/contracts/agent/protocol';
 import { randomUUID } from 'node:crypto';
 import { parse } from 'yaml';
 import {
@@ -14,7 +14,6 @@ import {
   DeploymentSucceeded,
 } from '@dreamdevops/contracts/deployments/events';
 import { type CompanyId, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
 import type { DeployableImage, DeployableImages } from '@dreamdevops/contracts/builds/services';
 import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
@@ -28,6 +27,7 @@ import type {
   EnvironmentValues,
   FileChange,
   ResolvedConfig,
+  TargetAuthentication,
 } from '@dreamdevops/contracts/environments/services';
 import { authorizeChange, type ProtectedChange } from '@dreamdevops/contracts/environments/protection';
 import { withTelemetry } from '@dreamdevops/contracts/environments/telemetry';
@@ -45,7 +45,16 @@ import type { RunningVersions } from '@dreamdevops/contracts/deployments/service
 import type { Unchecked } from '@dreamdevops/contracts/http';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { RepositoryLookup } from '@dreamdevops/contracts/source-governance/services';
-import { type HostRuntime, type HostTarget, type LogEntry, PermanentDeploymentError } from './ports.ts';
+import {
+  type DeploymentFilter,
+  type DeploymentsSession,
+  type DeploymentsStore,
+  type HostRuntime,
+  type HostTarget,
+  type LogEntry,
+  PermanentDeploymentError,
+  type StoredDeployment,
+} from './ports.ts';
 import {
   advance,
   assertAccepts,
@@ -84,43 +93,18 @@ export interface DeploymentsOptions {
   readonly localOtlpEndpoint: string | null;
 }
 
-/** A deployment as its own table has it. */
-interface DeploymentRow {
-  id: string;
-  environment_id: string;
-  application_id: string;
-  build_id: string;
-  strategy: Strategy;
-  status: DeploymentStatus;
-  rollback_of: string | null;
-  commit_sha: string | null;
-  progress: Progress;
-  message: string | null;
-  requested_by: string | null;
-  requester_name: string | null;
-  approved_by: string | null;
-  approver_name: string | null;
-  created_at: Date;
-  updated_at: Date;
-  finished_at: Date | null;
-  reason: string | null;
-  action: DeploymentAction;
-  limits: ResourceLimits | null;
-  config_hash: string | null;
-}
-
 /** A deployment with what other modules know of its application, environment and version. */
-interface Row extends DeploymentRow {
-  application_name: string;
-  application_slug: string;
-  environment_name: string;
-  environment_kind: 'test' | 'production';
-  environment_provider: string | null;
-  build_kind: string;
-  image_tag: string;
-  build_version: string | null;
-  image_ref: string | null;
-  digest: string | null;
+interface KnownDeployment extends StoredDeployment {
+  readonly applicationName: string;
+  readonly applicationSlug: string;
+  readonly environmentName: string;
+  readonly environmentKind: 'test' | 'production';
+  readonly environmentProvider: string | null;
+  readonly buildKind: string;
+  readonly imageTag: string;
+  readonly buildVersion: string | null;
+  readonly imageRef: string | null;
+  readonly digest: string | null;
 }
 
 /** An application's container on This machine: unique there, as other companies' environments may share a short name. */
@@ -142,16 +126,13 @@ function rootApplications(root: string | undefined): string[] {
     : [];
 }
 
-/** Deployments with the names of who asked and who approved. */
-const SELECT = 'SELECT d.* FROM deployments.deployments_view() d';
-
 /**
  * Runs versions of applications in environments. A deployment is a commit to the
  * environment's repository; the target's Flux applies it, and its agent reports how the
  * rollout goes. Promote and abort reach the agent as commands with its next heartbeat.
  */
 export class Deployments implements RunningVersions {
-  readonly #database: TenantDatabase;
+  readonly #store: DeploymentsStore;
   readonly #gitOps: EnvironmentGitOps;
   readonly #config: EnvironmentValues;
   readonly #environments: EnvironmentDirectory;
@@ -162,9 +143,10 @@ export class Deployments implements RunningVersions {
   readonly #entitlements: FeatureAccess;
   readonly #options: DeploymentsOptions;
   readonly #runtime: HostRuntime;
+  readonly #targets: TargetAuthentication;
 
   constructor(
-    database: TenantDatabase,
+    store: DeploymentsStore,
     gitOps: EnvironmentGitOps,
     config: EnvironmentValues,
     environments: EnvironmentDirectory,
@@ -174,9 +156,10 @@ export class Deployments implements RunningVersions {
     blueprints: BlueprintCatalog,
     entitlements: FeatureAccess,
     runtime: HostRuntime,
+    targets: TargetAuthentication,
     options: DeploymentsOptions,
   ) {
-    this.#database = database;
+    this.#store = store;
     this.#runtime = runtime;
     this.#environments = environments;
     this.#applications = applications;
@@ -187,25 +170,31 @@ export class Deployments implements RunningVersions {
     this.#blueprints = blueprints;
     this.#entitlements = entitlements;
     this.#options = options;
+    this.#targets = targets;
+  }
+
+  /**
+   * An agent reports in. Its access token says whose target it is, which Environments
+   * checks; then its environment's rollouts move along, and it gets the commands waiting for it.
+   */
+  async agentHeartbeat(
+    accessToken: string | undefined,
+    report: { agentVersion?: unknown; kubernetesVersion?: unknown; sync?: unknown; workloads?: unknown },
+  ): Promise<HeartbeatResponse> {
+    const { heartbeatSeconds, companyId, environmentId } = await this.#targets.heartbeat(accessToken, report);
+    return { heartbeatSeconds, commands: await this.#onReport(companyId, environmentId, report) };
+  }
+
+  /** An agent says how a promote or abort command went. */
+  async agentCommandDone(accessToken: string | undefined, commandValue: unknown, result: { succeeded?: unknown; message?: unknown }): Promise<void> {
+    const { companyId, environmentId } = await this.#targets.authenticate(accessToken);
+    await this.#commandDone(companyId, environmentId, commandValue, result);
   }
 
   async list(filter: { application?: unknown; environment?: unknown }): Promise<DeploymentView[]> {
-    const conditions: string[] = [];
-    const values: string[] = [];
-    if (filter.application !== undefined && filter.application !== '') {
-      values.push(parseId(filter.application, 'application'));
-      conditions.push(`d.application_id = $${values.length}`);
-    }
-    if (filter.environment !== undefined && filter.environment !== '') {
-      values.push(parseId(filter.environment, 'environment'));
-      conditions.push(`d.environment_id = $${values.length}`);
-    }
-    const rows = await this.#database.transaction(async (tx) => {
-      const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
-      const { rows } = await tx.query<DeploymentRow>(`${SELECT} ${where} ORDER BY d.created_at DESC LIMIT 50`, values);
-      return rows;
-    });
-    return (await this.#enrich(rows)).map(toView);
+    const criteria = parseFilter(filter);
+    const deployments = await this.#store.transaction((session) => session.list(criteria, 50));
+    return (await this.#enrich(deployments)).map(toView);
   }
 
   async get(idValue: unknown): Promise<DeploymentView> {
@@ -269,24 +258,26 @@ export class Deployments implements RunningVersions {
           : `${environment.name} has no connected target yet.`,
       );
     }
-    await this.#database.transaction(async (tx) => {
+    await this.#store.transaction(async (session) => {
       // Rollbacks, stops and applying values run or remove a version that already ran, so they don't wait for approval.
       const needsApproval = environment.requiresApproval && change === 'deploy';
       const status: DeploymentStatus = needsApproval ? 'awaiting-approval' : 'queued';
-      try {
-        await tx.query(
-          `INSERT INTO deployments.deployments
-             (id, company_id, environment_id, application_id, build_id, strategy, status, rollback_of, requested_by, reason, action)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-          [id, currentCompanyId(), input.environmentId, input.applicationId, input.buildId, input.strategy, status, input.rollbackOf, actor.userId, reason, action],
-        );
-      } catch (error) {
-        if ((error as { code?: string }).code === '23505') {
-          throw new DeploymentError('conflict', `A deployment of this application to ${environment.name} is still going.`);
-        }
-        throw error;
+      const added = await session.add({
+        id,
+        environmentId: input.environmentId,
+        applicationId: input.applicationId,
+        buildId: input.buildId,
+        strategy: input.strategy,
+        status,
+        rollbackOf: input.rollbackOf,
+        requestedBy: actor.userId,
+        reason,
+        action,
+      });
+      if (!added) {
+        throw new DeploymentError('conflict', `A deployment of this application to ${environment.name} is still going.`);
       }
-      await appendToOutbox(tx, [
+      await session.record([
         DeploymentRequested.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -317,7 +308,7 @@ export class Deployments implements RunningVersions {
     const running = await this.#running(applicationValue, input.environment, 'stop');
     return this.#create(
       actor,
-      { applicationId: running.application_id, environmentId: running.environment_id, buildId: running.build_id, strategy: running.strategy, rollbackOf: null },
+      { applicationId: running.applicationId, environmentId: running.environmentId, buildId: running.buildId, strategy: running.strategy, rollbackOf: null },
       'stop',
       input,
     );
@@ -331,7 +322,7 @@ export class Deployments implements RunningVersions {
     const running = await this.#running(applicationValue, input.environment, 'apply');
     return this.#create(
       actor,
-      { applicationId: running.application_id, environmentId: running.environment_id, buildId: running.build_id, strategy: running.strategy, rollbackOf: null },
+      { applicationId: running.applicationId, environmentId: running.environmentId, buildId: running.buildId, strategy: running.strategy, rollbackOf: null },
       'apply',
       input,
     );
@@ -339,49 +330,31 @@ export class Deployments implements RunningVersions {
 
   /** What runs now, by environment or application, with whether the environment's values changed since. */
   async running(filter: { application?: unknown; environment?: unknown }): Promise<RunningVersion[]> {
-    const conditions = ["d.status = 'succeeded'", "d.action <> 'stop'"];
-    const values: string[] = [];
-    if (filter.application !== undefined && filter.application !== '') {
-      values.push(parseId(filter.application, 'application'));
-      conditions.push(`d.application_id = $${values.length}`);
-    }
-    if (filter.environment !== undefined && filter.environment !== '') {
-      values.push(parseId(filter.environment, 'environment'));
-      conditions.push(`d.environment_id = $${values.length}`);
-    }
-    const rows = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<DeploymentRow>(`${SELECT} WHERE ${conditions.join(' AND ')} ORDER BY d.finished_at DESC`, values);
-      return rows;
-    });
+    const criteria = parseFilter(filter);
+    const rows = await this.#store.transaction((session) => session.running(criteria));
     // The environments' values as they are now, which Environments keeps.
     const hashes = await this.#config.fingerprints(
-      rows.map((row) => ({ environmentId: row.environment_id, applicationId: row.application_id })),
+      rows.map((row) => ({ environmentId: row.environmentId, applicationId: row.applicationId })),
     );
     return (await this.#enrich(rows)).map((row, index) => ({
       deploymentId: row.id,
-      application: { id: row.application_id, name: row.application_name, slug: row.application_slug },
-      environment: { id: row.environment_id, name: row.environment_name, kind: row.environment_kind },
-      version: { buildId: row.build_id, kind: row.build_kind, tag: row.image_tag, version: row.build_version },
+      application: { id: row.applicationId, name: row.applicationName, slug: row.applicationSlug },
+      environment: { id: row.environmentId, name: row.environmentName, kind: row.environmentKind },
+      version: { buildId: row.buildId, kind: row.buildKind, tag: row.imageTag, version: row.buildVersion },
       strategy: row.strategy,
       limits: row.limits,
-      since: row.finished_at?.toISOString() ?? null,
-      provider: row.environment_provider,
+      since: row.finishedAt?.toISOString() ?? null,
+      provider: row.environmentProvider,
       address: row.progress.address ?? null,
-      settingsChanged: row.config_hash !== null && row.config_hash !== hashes[index],
+      settingsChanged: row.configHash !== null && row.configHash !== hashes[index],
     }));
   }
 
   /** The deployment that runs an application in an environment now. */
-  async #running(applicationValue: unknown, environmentValue: unknown, change: 'stop' | 'apply'): Promise<Row> {
+  async #running(applicationValue: unknown, environmentValue: unknown, change: 'stop' | 'apply'): Promise<KnownDeployment> {
     const applicationId = parseId(applicationValue, 'application');
     const environmentId = parseId(environmentValue, 'environment');
-    const rows = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<DeploymentRow>(
-        `${SELECT} WHERE d.environment_id = $1 AND d.application_id = $2 AND d.status = 'succeeded' AND d.action <> 'stop'`,
-        [environmentId, applicationId],
-      );
-      return rows;
-    });
+    const rows = await this.#store.transaction((session) => session.running({ applicationId, environmentId }));
     const running = (await this.#enrich(rows))[0];
     if (running === undefined) {
       throw new DeploymentError('conflict', change === 'stop' ? 'Nothing of this application runs there.' : 'Nothing of this application runs there to apply the values to.');
@@ -402,10 +375,10 @@ export class Deployments implements RunningVersions {
   async #decide(actor: Principal, idValue: unknown, approved: boolean, request: Confirmed): Promise<void> {
     const id = parseId(idValue, 'deployment');
     const known = await this.#find(id);
-    await this.#database.transaction(async (tx) => {
-      const deployment = await this.#locked(tx, known);
+    await this.#store.transaction(async (session) => {
+      const deployment = await this.#locked(session, known);
       if (approved) {
-        authorize({ name: deployment.environment_name, kind: deployment.environment_kind }, 'approve', request);
+        authorize({ name: deployment.environmentName, kind: deployment.environmentKind }, 'approve', request);
       }
       if (!actor.permissions.includes('deployments-production:run')) {
         throw new DeploymentError('forbidden', 'Only Tech Leads and Operators approve production deployments.');
@@ -413,21 +386,15 @@ export class Deployments implements RunningVersions {
       if (deployment.status !== 'awaiting-approval') {
         throw new DeploymentError('conflict', 'This deployment is not waiting for approval.');
       }
-      if (deployment.requested_by === actor.userId) {
+      if (deployment.requestedBy === actor.userId) {
         throw new DeploymentError('forbidden', 'Someone else must approve your deployment.');
       }
-      await tx.query(
-        `UPDATE deployments.deployments
-         SET status = $2, approved_by = $3, approved_at = now(), updated_at = now(),
-             finished_at = CASE WHEN $2 = 'rejected' THEN now() END
-         WHERE id = $1`,
-        [id, approved ? 'queued' : 'rejected', actor.userId],
-      );
-      await appendToOutbox(tx, [
+      await session.decide(id, approved, actor.userId);
+      await session.record([
         (approved ? DeploymentApproved : DeploymentRejected).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
-          payload: { deploymentId: id, applicationId: deployment.application_id, environmentName: deployment.environment_name },
+          payload: { deploymentId: id, applicationId: deployment.applicationId, environmentName: deployment.environmentName },
         }),
         ...(approved ? [queued(id, actor.userId)] : []),
       ]);
@@ -437,7 +404,7 @@ export class Deployments implements RunningVersions {
   /** Writes the version to the environment's repository. Runs in the background. */
   async commit(idValue: string): Promise<void> {
     const deployment = await this.#find(parseId(idValue, 'deployment'));
-    const environment = await this.#environments.get(deployment.environment_id);
+    const environment = await this.#environments.get(deployment.environmentId);
     if (environment.target?.provider === LOCAL_PROVIDER) {
       // A run that stopped half-way, such as when the API restarted, starts again from the beginning.
       if (deployment.status === 'queued' || deployment.status === 'progressing') {
@@ -448,39 +415,34 @@ export class Deployments implements RunningVersions {
     if (deployment.status !== 'queued') {
       return;
     }
-    const repository = await this.#gitOps.repositoryOf(deployment.environment_id);
-    const version = deployment.build_version ?? deployment.image_tag;
-    const runtime = deployment.action === 'stop' ? null : await this.#runtimeOf(deployment.application_id);
+    const repository = await this.#gitOps.repositoryOf(deployment.environmentId);
+    const version = deployment.buildVersion ?? deployment.imageTag;
+    const runtime = deployment.action === 'stop' ? null : await this.#runtimeOf(deployment.applicationId);
     const rendered =
       runtime === null
         ? { files: new Map<string, string>(), limits: null, configHash: null }
         : {
             ...this.#render(deployment, environment, runtime, await this.#valuesOf(deployment)),
-            configHash: await this.#config.fingerprint(deployment.environment_id, deployment.application_id),
+            configHash: await this.#config.fingerprint(deployment.environmentId, deployment.applicationId),
           };
     const message =
       deployment.action === 'stop'
-        ? `Stop ${deployment.application_slug}`
+        ? `Stop ${deployment.applicationSlug}`
         : deployment.action === 'apply'
-          ? `Apply ${deployment.application_slug}'s values to ${version}`
-          : `Deploy ${deployment.application_slug} ${version} with ${deployment.strategy}`;
+          ? `Apply ${deployment.applicationSlug}'s values to ${version}`
+          : `Deploy ${deployment.applicationSlug} ${version} with ${deployment.strategy}`;
     const sha = await this.#write(repository, deployment, rendered.files, message);
-    await this.#database.transaction(async (tx) => {
+    await this.#store.transaction(async (session) => {
       // The limits and values are recorded as committed, so what it runs with is known later, such as by Monitoring.
-      const { rowCount } = await tx.query(
-        `UPDATE deployments.deployments
-         SET status = 'committed', commit_sha = $2, limits = $3, config_hash = $4, message = NULL, updated_at = now()
-         WHERE id = $1 AND status = 'queued'`,
-        [deployment.id, sha, rendered.limits === null ? null : JSON.stringify(rendered.limits), rendered.configHash],
-      );
-      if (rowCount === 0) {
+      const committed = await session.markCommitted(deployment.id, { commitSha: sha, limits: rendered.limits, configHash: rendered.configHash });
+      if (!committed) {
         return;
       }
-      await appendToOutbox(tx, [
+      await session.record([
         DeploymentStarted.create({
           companyId: currentCompanyId(),
           actorId: null,
-          payload: { deploymentId: deployment.id, applicationId: deployment.application_id, environmentName: deployment.environment_name, commit: sha },
+          payload: { deploymentId: deployment.id, applicationId: deployment.applicationId, environmentName: deployment.environmentName, commit: sha },
         }),
       ]);
     });
@@ -489,22 +451,22 @@ export class Deployments implements RunningVersions {
   /** After a failed or aborted rollout, Git goes back to the last version that ran well, so Flux keeps it. */
   async restorePrevious(idValue: string): Promise<void> {
     const deployment = await this.#find(parseId(idValue, 'deployment'));
-    const environment = await this.#environments.get(deployment.environment_id);
+    const environment = await this.#environments.get(deployment.environmentId);
     if (environment.target?.provider === LOCAL_PROVIDER) {
       // This machine's runtime has put the version before back already.
       return;
     }
-    const previousRow = await this.#database.transaction((tx) => this.#previousSuccess(tx, deployment, { otherVersion: false }));
-    const repository = await this.#gitOps.repositoryOf(deployment.environment_id);
+    const previousRow = await this.#store.transaction((session) => session.previousSuccess(deployment, { otherVersion: false }));
+    const repository = await this.#gitOps.repositoryOf(deployment.environmentId);
     if (previousRow === null) {
       // Nothing ran here before: the application's folder goes, and with it what was applied.
-      await this.#write(repository, deployment, new Map(), `Remove ${deployment.application_slug}: its first deployment did not succeed`);
+      await this.#write(repository, deployment, new Map(), `Remove ${deployment.applicationSlug}: its first deployment did not succeed`);
       return;
     }
     const previous = (await this.#enrich([previousRow]))[0]!;
-    const runtime = await this.#runtimeOf(previous.application_id);
+    const runtime = await this.#runtimeOf(previous.applicationId);
     const { files } = this.#render(previous, environment, runtime, await this.#valuesOf(previous));
-    await this.#write(repository, previous, files, `Restore ${previous.application_slug} ${previous.build_version ?? previous.image_tag}`);
+    await this.#write(repository, previous, files, `Restore ${previous.applicationSlug} ${previous.buildVersion ?? previous.imageTag}`);
   }
 
   /** Switches traffic to a blue/green deployment's new version. */
@@ -532,7 +494,7 @@ export class Deployments implements RunningVersions {
   async rollback(actor: Principal, idValue: unknown, request: Confirmed = {}): Promise<DeploymentView> {
     const id = parseId(idValue, 'deployment');
     const deployment = await this.#find(id);
-    const previous = await this.#database.transaction((tx) => this.#previousSuccess(tx, deployment, { otherVersion: true }));
+    const previous = await this.#store.transaction((session) => session.previousSuccess(deployment, { otherVersion: true }));
     if (deployment.action === 'stop') {
       throw new DeploymentError('conflict', 'A stop has nothing to roll back. Deploy a version to run one again.');
     }
@@ -543,9 +505,9 @@ export class Deployments implements RunningVersions {
       throw new DeploymentError('conflict', 'There is no earlier version that ran well here.');
     }
     return this.#create(actor, {
-      applicationId: deployment.application_id,
-      environmentId: deployment.environment_id,
-      buildId: previous.build_id,
+      applicationId: deployment.applicationId,
+      environmentId: deployment.environmentId,
+      buildId: previous.buildId,
       strategy: deployment.strategy,
       rollbackOf: deployment.id,
     }, 'rollback', request);
@@ -556,29 +518,24 @@ export class Deployments implements RunningVersions {
     idValue: unknown,
     action: 'promote' | 'abort',
     request: Confirmed,
-    check: (deployment: Row) => void,
+    check: (deployment: KnownDeployment) => void,
   ): Promise<void> {
     const id = parseId(idValue, 'deployment');
     const known = await this.#find(id);
-    await this.#database.transaction(async (tx) => {
-      const deployment = await this.#locked(tx, known);
-      assertMayDeploy(actor, deployment.environment_kind);
+    await this.#store.transaction(async (session) => {
+      const deployment = await this.#locked(session, known);
+      assertMayDeploy(actor, deployment.environmentKind);
       check(deployment);
-      authorize({ name: deployment.environment_name, kind: deployment.environment_kind }, action, request);
-      const { rows } = await tx.query("SELECT 1 FROM deployments.commands WHERE deployment_id = $1 AND action = $2 AND status IN ('pending', 'sent')", [id, action]);
-      if (rows.length > 0) {
+      authorize({ name: deployment.environmentName, kind: deployment.environmentKind }, action, request);
+      if (await session.hasOpenCommand(id, action)) {
         return;
       }
-      await tx.query(
-        `INSERT INTO deployments.commands (id, company_id, deployment_id, environment_id, action, status)
-         VALUES ($1, $2, $3, $4, $5, 'pending')`,
-        [randomUUID(), currentCompanyId(), id, deployment.environment_id, action],
-      );
-      await appendToOutbox(tx, [
+      await session.addCommand(id, deployment.environmentId, action);
+      await session.record([
         (action === 'promote' ? DeploymentPromoted : DeploymentAbortRequested).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
-          payload: { deploymentId: id, applicationId: deployment.application_id, environmentName: deployment.environment_name },
+          payload: { deploymentId: id, applicationId: deployment.applicationId, environmentName: deployment.environmentName },
         }),
       ]);
     });
@@ -592,7 +549,7 @@ export class Deployments implements RunningVersions {
    * transaction locks the rollouts, reads them again, and moves them along, so no
    * connection is held while other modules are asked.
    */
-  onReport(
+  #onReport(
     companyId: CompanyId,
     environmentId: string,
     report: { sync?: unknown; workloads?: unknown },
@@ -600,45 +557,32 @@ export class Deployments implements RunningVersions {
     const sync = parseSync(report.sync);
     const workloads = parseWorkloads(report.workloads);
     return runWithCompany(companyId, async () => {
-      const { rows, pending } = await this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<DeploymentRow>(
-          `${SELECT} WHERE d.environment_id = $1 AND d.status = ANY($2) ORDER BY d.id`,
-          [environmentId, ROLLING_OUT],
-        );
-        const { rows: pending } = await tx.query<{ application_id: string }>(
-          `SELECT DISTINCT d.application_id FROM deployments.commands c
-           JOIN deployments.deployments d ON d.id = c.deployment_id
-           WHERE c.environment_id = $1 AND c.status = 'pending'`,
-          [environmentId],
-        );
-        return { rows, pending };
-      });
+      const { rows, pending } = await this.#store.transaction(async (session) => ({
+        rows: await session.inEnvironment(environmentId, ROLLING_OUT),
+        pending: await session.applicationsWithPendingCommands(environmentId),
+      }));
       const known = await this.#enrich(rows);
       // Each application runs in a namespace named after it, as its rollout is.
-      const slugs = new Map(known.map((deployment) => [deployment.application_id, deployment.application_slug]));
-      for (const [id, application] of await this.#applicationsById(pending.map((row) => row.application_id).filter((id) => !slugs.has(id)))) {
+      const slugs = new Map(known.map((deployment) => [deployment.applicationId, deployment.applicationSlug]));
+      for (const [id, application] of await this.#applicationsById(pending.filter((id) => !slugs.has(id)))) {
         slugs.set(id, application.slug);
       }
 
-      return this.#database.transaction(async (tx) => {
+      return this.#store.transaction(async (session) => {
         // Which application each reported workload belongs to, for stops, which have none of their own.
-        const { rows: reported } = await tx.query<{ application_id: string }>(
-          'SELECT DISTINCT application_id FROM deployments.deployments WHERE id = ANY($1)',
-          [workloads.map((workload) => workload.deploymentId)],
-        );
-        const running = new Set(reported.map((row) => row.application_id));
+        const running = new Set(await session.applicationsOf(workloads.map((workload) => workload.deploymentId)));
         // Locked one by one in the same order every time, so two reports can't deadlock.
         for (const before of known) {
-          const deployment = await this.#locked(tx, before);
+          const deployment = await this.#locked(session, before);
           if (!ROLLING_OUT.includes(deployment.status)) {
             // It changed since it was read, such as by an abort or the stall sweep.
             continue;
           }
           const next =
             deployment.action === 'stop'
-              ? advanceStop(deployment, running.has(deployment.application_id), sync)
+              ? advanceStop(deployment, running.has(deployment.applicationId), sync)
               : advance(
-                  { status: deployment.status, commitSha: deployment.commit_sha },
+                  { status: deployment.status, commitSha: deployment.commitSha },
                   workloads.find((workload) => workload.deploymentId === deployment.id),
                   sync,
                 );
@@ -647,44 +591,23 @@ export class Deployments implements RunningVersions {
             continue;
           }
           const finished = ['succeeded', 'failed', 'aborted'].includes(next.status);
-          await tx.query(
-            `UPDATE deployments.deployments
-             SET status = $2, progress = $3, message = $4, updated_at = now(),
-                 finished_at = CASE WHEN $5 THEN now() END
-             WHERE id = $1`,
-            [deployment.id, next.status, JSON.stringify(next.progress), next.message, finished],
-          );
+          await session.updateRollout(deployment.id, { status: next.status, progress: next.progress, message: next.message, finished });
           if (finished) {
-            await appendToOutbox(tx, [finishedEvent(deployment, next.status, next.message)]);
+            await session.record([finishedEvent(deployment, next.status, next.message)]);
           }
           // Only the newest version that ran well is running; the earlier ones are replaced.
           if (next.status === 'succeeded') {
-            await tx.query(
-              `UPDATE deployments.deployments SET status = 'superseded', updated_at = now()
-               WHERE environment_id = $1 AND application_id = $2 AND status = 'succeeded' AND id <> $3`,
-              [deployment.environment_id, deployment.application_id, deployment.id],
-            );
+            await session.supersedeOthers(deployment);
           }
           // A rollback goes back to a version that ran well, so traffic switches as soon as it's up.
-          if (next.status === 'paused' && deployment.rollback_of !== null) {
-            await tx.query(
-              `INSERT INTO deployments.commands (id, company_id, deployment_id, environment_id, action, status)
-               SELECT $1, $2, $3, $4, 'promote', 'pending'
-               WHERE NOT EXISTS (SELECT 1 FROM deployments.commands WHERE deployment_id = $3 AND action = 'promote')`,
-              [randomUUID(), currentCompanyId(), deployment.id, environmentId],
-            );
+          if (next.status === 'paused' && deployment.rollbackOf !== null) {
+            await session.addPromoteOnce(deployment.id, environmentId);
           }
         }
         // Only commands whose application was read above are sent. One made meanwhile waits for the next heartbeat.
-        const { rows: commands } = await tx.query<{ id: string; action: 'promote' | 'abort'; application_id: string }>(
-          `UPDATE deployments.commands c SET status = 'sent', updated_at = now()
-           FROM deployments.deployments d
-           WHERE c.deployment_id = d.id AND c.environment_id = $1 AND c.status = 'pending' AND d.application_id = ANY($2)
-           RETURNING c.id, c.action, d.application_id`,
-          [environmentId, [...slugs.keys()]],
-        );
+        const commands = await session.sendPendingCommands(environmentId, [...slugs.keys()]);
         return commands.map((command) => {
-          const slug = slugs.get(command.application_id)!;
+          const slug = slugs.get(command.applicationId)!;
           return { id: command.id, action: command.action, namespace: slug, name: slug };
         });
       });
@@ -692,48 +615,33 @@ export class Deployments implements RunningVersions {
   }
 
   /** The agent says how a command went. */
-  async commandDone(companyId: CompanyId, environmentId: string, commandValue: unknown, result: { succeeded?: unknown; message?: unknown }): Promise<void> {
+  async #commandDone(companyId: CompanyId, environmentId: string, commandValue: unknown, result: { succeeded?: unknown; message?: unknown }): Promise<void> {
     const id = parseId(commandValue, 'command');
-    await runWithCompany(companyId, () =>
-      this.#database.transaction((tx) =>
-        tx.query(
-          `UPDATE deployments.commands SET status = $3, message = $4, updated_at = now()
-           WHERE id = $1 AND environment_id = $2 AND status = 'sent'`,
-          [id, environmentId, result.succeeded === true ? 'done' : 'failed', typeof result.message === 'string' ? result.message.slice(0, 1000) : null],
-        ),
-      ),
-    );
+    const outcome = {
+      succeeded: result.succeeded === true,
+      message: typeof result.message === 'string' ? result.message.slice(0, 1000) : null,
+    };
+    await runWithCompany(companyId, () => this.#store.transaction((session) => session.completeCommand(id, environmentId, outcome)));
   }
 
   /** Fails deployments that stopped moving, in every company. */
   async failStalled(now = new Date()): Promise<void> {
     const cutoff = new Date(now.getTime() - STALL_MINUTES * 60_000);
-    const stalled = await runWithCompany(NO_COMPANY, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ deployment_id: string; company_id: string }>(
-          'SELECT * FROM deployments.stalled_deployments($1)',
-          [cutoff],
-        );
-        return rows;
-      }),
-    );
-    for (const { deployment_id: id, company_id: company } of stalled) {
+    const stalled = await runWithCompany(NO_COMPANY, () => this.#store.transaction((session) => session.stalled(cutoff)));
+    for (const { deploymentId: id, companyId: company } of stalled) {
       await runWithCompany(parseCompanyId(company), async () => {
         const known = await this.#find(id);
-        await this.#database.transaction(async (tx) => {
-          const deployment = await this.#locked(tx, known);
-          if (!['queued', 'committed', 'progressing'].includes(deployment.status) || deployment.updated_at >= cutoff) {
+        await this.#store.transaction(async (session) => {
+          const deployment = await this.#locked(session, known);
+          if (!['queued', 'committed', 'progressing'].includes(deployment.status) || deployment.updatedAt >= cutoff) {
             return;
           }
           const message =
             deployment.status === 'queued'
               ? "The change couldn't be written to the environment's repository."
               : `The target didn't finish the rollout in ${STALL_MINUTES} minutes.`;
-          await tx.query(
-            "UPDATE deployments.deployments SET status = 'failed', message = $2, updated_at = now(), finished_at = now() WHERE id = $1",
-            [id, message],
-          );
-          await appendToOutbox(tx, [finishedEvent(deployment, 'failed', message)]);
+          await session.fail(id, message);
+          await session.record([finishedEvent(deployment, 'failed', message)]);
         });
       });
     }
@@ -744,19 +652,13 @@ export class Deployments implements RunningVersions {
    * starts it with the environment's values, and waits until it's healthy. If it isn't,
    * the version before it runs again.
    */
-  async #runLocal(deployment: Row, environment: EnvironmentView): Promise<void> {
+  async #runLocal(deployment: KnownDeployment, environment: EnvironmentView): Promise<void> {
     const target: HostTarget = { id: environment.target!.id, settings: environment.target!.settings };
     // Unique on the machine: environments of other companies may share a short name.
-    const name = containerName(deployment.application_slug, environment);
+    const name = containerName(deployment.applicationSlug, environment);
     const network = `${name}-net`;
     const step = (message: string, progress: Progress = { applied: false }) =>
-      this.#database.transaction((tx) =>
-        tx.query(
-          `UPDATE deployments.deployments SET status = 'progressing', progress = $2, message = $3, updated_at = now()
-           WHERE id = $1 AND status IN ('queued', 'progressing')`,
-          [deployment.id, JSON.stringify(progress), message],
-        ),
-      );
+      this.#store.transaction((session) => session.markProgressing(deployment.id, progress, message));
     const unavailable = this.#runtime.unavailableReason();
     if (unavailable !== null) {
       await this.#finishLocal(deployment, 'failed', unavailable, null);
@@ -770,24 +672,24 @@ export class Deployments implements RunningVersions {
         return;
       }
       await step('Checking the image’s signature.');
-      const signature = await this.#builds.checkSignature(deployment.build_id);
+      const signature = await this.#builds.checkSignature(deployment.buildId);
       const unsigned = signature.checks.find((check) => check.outcome === 'failed');
       if (unsigned !== undefined) {
         await this.#finishLocal(deployment, 'failed', `${unsigned.name}: ${unsigned.detail ?? 'no'}. Nothing was pulled.`, null);
         return;
       }
       // By digest, so what runs is exactly what was built, scanned and signed.
-      const image = `${deployment.image_ref!.replace(/:[^/:]+$/, '')}@${deployment.digest}`;
+      const image = `${deployment.imageRef!.replace(/:[^/:]+$/, '')}@${deployment.digest}`;
       await step('Pulling the image.');
       await this.#runtime.pull(target, image);
-      const runtime = await this.#runtimeOf(deployment.application_id);
+      const runtime = await this.#runtimeOf(deployment.applicationId);
       const settings = {
         runtime,
         config: await this.#valuesOf(deployment),
-        configHash: await this.#config.fingerprint(deployment.environment_id, deployment.application_id),
-        preferredPort: await this.#database.transaction((tx) => this.#lastPort(tx, deployment)),
+        configHash: await this.#config.fingerprint(deployment.environmentId, deployment.applicationId),
+        preferredPort: await this.#store.transaction((session) => session.lastPort(deployment.environmentId, deployment.applicationId)),
       };
-      const secrets = await this.#config.openSecrets(deployment.environment_id, deployment.application_slug);
+      const secrets = await this.#config.openSecrets(deployment.environmentId, deployment.applicationSlug);
       await step('Starting the new version.');
       const started = await this.#runtime.start(target, {
         name,
@@ -795,23 +697,23 @@ export class Deployments implements RunningVersions {
         image,
         labels: {
           'dreamdevops.company': currentCompanyId(),
-          'dreamdevops.application': deployment.application_slug,
+          'dreamdevops.application': deployment.applicationSlug,
           'dreamdevops.environment': environment.slug,
           'dreamdevops.deployment': deployment.id,
-          'dreamdevops.version': deployment.build_version ?? deployment.image_tag,
+          'dreamdevops.version': deployment.buildVersion ?? deployment.imageTag,
         },
         environment: {
           // On This machine, applications send straight to the platform's collector.
           ...withTelemetry(settings.config.variables, {
-            environmentId: deployment.environment_id,
-            applicationId: deployment.application_id,
-            serviceName: deployment.application_slug,
+            environmentId: deployment.environmentId,
+            applicationId: deployment.applicationId,
+            serviceName: deployment.applicationSlug,
             metricsEndpoint: this.#options.localOtlpEndpoint === null ? null : `${this.#options.localOtlpEndpoint}/v1/metrics`,
             tracesEndpoint: this.#options.localOtlpEndpoint === null ? null : `${this.#options.localOtlpEndpoint}/v1/traces`,
           }),
           ...secrets,
           PORT: String(settings.runtime.port),
-          ...platformVariables({ slug: environment.slug, production: environment.kind === 'production' }, deployment.build_version ?? deployment.image_tag),
+          ...platformVariables({ slug: environment.slug, production: environment.kind === 'production' }, deployment.buildVersion ?? deployment.imageTag),
         },
         preferredPort: settings.preferredPort,
       });
@@ -871,50 +773,28 @@ export class Deployments implements RunningVersions {
 
   /** Records how a run on This machine ended, as the agent's reports do for clusters. */
   async #finishLocal(
-    deployment: Row,
+    deployment: KnownDeployment,
     status: 'succeeded' | 'failed',
     message: string,
     recorded: { limits: ResourceLimits; configHash: string } | null,
     progress: Progress = { applied: status === 'succeeded' },
   ): Promise<void> {
-    await this.#database.transaction(async (tx) => {
-      const { rowCount } = await tx.query(
-        `UPDATE deployments.deployments
-         SET status = $2, message = $3, progress = $4, limits = coalesce($5, limits), config_hash = coalesce($6, config_hash),
-             finished_at = now(), updated_at = now()
-         WHERE id = $1 AND status IN ('queued', 'progressing')`,
-        [
-          deployment.id,
-          status,
-          message.slice(0, 1000),
-          JSON.stringify(progress),
-          recorded === null ? null : JSON.stringify(recorded.limits),
-          recorded?.configHash ?? null,
-        ],
-      );
-      if (rowCount === 0) {
+    await this.#store.transaction(async (session) => {
+      const finished = await session.finishRun(deployment.id, {
+        status,
+        message: message.slice(0, 1000),
+        progress,
+        limits: recorded?.limits ?? null,
+        configHash: recorded?.configHash ?? null,
+      });
+      if (!finished) {
         return;
       }
-      await appendToOutbox(tx, [finishedEvent(deployment, status, status === 'succeeded' ? null : message)]);
+      await session.record([finishedEvent(deployment, status, status === 'succeeded' ? null : message)]);
       if (status === 'succeeded') {
-        await tx.query(
-          `UPDATE deployments.deployments SET status = 'superseded', updated_at = now()
-           WHERE environment_id = $1 AND application_id = $2 AND status = 'succeeded' AND id <> $3`,
-          [deployment.environment_id, deployment.application_id, deployment.id],
-        );
+        await session.supersedeOthers(deployment);
       }
     });
-  }
-
-  /** The port the application had on This machine, so its address stays the same. */
-  async #lastPort(tx: TenantTransaction, deployment: Row): Promise<number | null> {
-    const { rows } = await tx.query<{ port: number | null }>(
-      `SELECT (progress->>'port')::int AS port FROM deployments.deployments
-       WHERE environment_id = $1 AND application_id = $2 AND status IN ('succeeded', 'superseded') AND progress ? 'port'
-       ORDER BY finished_at DESC LIMIT 1`,
-      [deployment.environment_id, deployment.application_id],
-    );
-    return rows[0]?.port ?? null;
   }
 
   /** The settings of the blueprint version an application started from, such as its port. */
@@ -925,8 +805,8 @@ export class Deployments implements RunningVersions {
   }
 
   /** The values a deployment's application gets in its environment, as Environments keeps them now. */
-  #valuesOf(deployment: Row): Promise<ResolvedConfig> {
-    return this.#config.resolve(deployment.environment_id, { id: deployment.application_id, slug: deployment.application_slug });
+  #valuesOf(deployment: KnownDeployment): Promise<ResolvedConfig> {
+    return this.#config.resolve(deployment.environmentId, { id: deployment.applicationId, slug: deployment.applicationSlug });
   }
 
   /**
@@ -934,26 +814,26 @@ export class Deployments implements RunningVersions {
    * other contexts know, the environment, the runtime and the values, is asked for first.
    */
   #render(
-    deployment: Row,
+    deployment: KnownDeployment,
     environment: Pick<EnvironmentView, 'slug' | 'kind'>,
     runtime: Runtime,
     config: ResolvedConfig,
   ): { files: Map<string, string>; limits: ResourceLimits } {
     // Images are named as targets pull them, and by digest.
-    const path = deployment.image_ref!.replace(/^[^/]+\//, '').replace(/:[^/:]+$/, '');
+    const path = deployment.imageRef!.replace(/^[^/]+\//, '').replace(/:[^/:]+$/, '');
     const files = renderApplication({
       deploymentId: deployment.id,
-      application: { slug: deployment.application_slug, name: deployment.application_name },
+      application: { slug: deployment.applicationSlug, name: deployment.applicationName },
       environment: { slug: environment.slug, kind: environment.kind },
       image: `${this.#options.targetRegistryHost}/${path}@${deployment.digest}`,
-      version: deployment.build_version ?? deployment.image_tag,
+      version: deployment.buildVersion ?? deployment.imageTag,
       strategy: deployment.strategy,
       runtime,
       // The standard OpenTelemetry settings, so the application's metrics and traces reach the platform.
       variables: withTelemetry(config.variables, {
-        environmentId: deployment.environment_id,
-        applicationId: deployment.application_id,
-        serviceName: deployment.application_slug,
+        environmentId: deployment.environmentId,
+        applicationId: deployment.applicationId,
+        serviceName: deployment.applicationSlug,
         metricsEndpoint: this.#options.targetOtlpEndpoint === null ? null : `${this.#options.targetOtlpEndpoint}/v1/metrics`,
         tracesEndpoint: this.#options.targetOtlpEndpoint === null ? null : `${this.#options.targetOtlpEndpoint}/v1/traces`,
       }),
@@ -968,48 +848,21 @@ export class Deployments implements RunningVersions {
   /** Replaces an application's folder with these files, and updates the root list. */
   async #write(
     repository: EnvironmentRepository,
-    deployment: Row,
+    deployment: KnownDeployment,
     files: Map<string, string>,
     message: string,
   ): Promise<string> {
-    const folder = applicationFolder(deployment.application_slug);
+    const folder = applicationFolder(deployment.applicationSlug);
     const existing = await this.#gitOps.readFolder(repository, folder);
     // The applications the environment runs are the root's list, as it is in the repository.
     const root = (await this.#gitOps.readFolder(repository, ROOT_FILE)).get(ROOT_FILE);
-    const others = rootApplications(root).filter((slug) => slug !== deployment.application_slug);
+    const others = rootApplications(root).filter((slug) => slug !== deployment.applicationSlug);
     const changes: FileChange[] = [
       ...[...existing.keys()].filter((path) => !files.has(path)).map((path) => ({ path, content: null })),
       ...[...files].map(([path, content]) => ({ path, content })),
-      { path: ROOT_FILE, content: renderRoot(files.size > 0 ? [...others, deployment.application_slug] : others) },
+      { path: ROOT_FILE, content: renderRoot(files.size > 0 ? [...others, deployment.applicationSlug] : others) },
     ];
     return this.#gitOps.commit(repository, message, changes);
-  }
-
-  /** The newest deployment of the same application and environment that ran well, before this one. */
-  /**
-   * What ran well before a deployment: for a rollback, the version before it; to restore
-   * after a failure, whatever ran last, which may be the same version with older values.
-   */
-  async #previousSuccess(tx: TenantTransaction, deployment: Row, options: { otherVersion: boolean }): Promise<DeploymentRow | null> {
-    const { rows } = await tx.query<DeploymentRow>(
-      `${SELECT} WHERE d.environment_id = $1 AND d.application_id = $2 AND d.status IN ('succeeded', 'superseded')
-         AND d.action <> 'stop' AND d.created_at < $3 AND ($5 = false OR d.build_id <> $4)
-       ORDER BY d.created_at DESC LIMIT 1`,
-      [deployment.environment_id, deployment.application_id, deployment.created_at, deployment.build_id, options.otherVersion],
-    );
-    return rows[0] ?? null;
-  }
-
-  /** A deployment's own row. It asks no other module, so it's what transactions read. */
-  async #row(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<DeploymentRow> {
-    if (options.lock) {
-      await tx.query('SELECT 1 FROM deployments.deployments WHERE id = $1 FOR UPDATE', [id]);
-    }
-    const { rows } = await tx.query<DeploymentRow>(`${SELECT} WHERE d.id = $1`, [id]);
-    if (rows[0] === undefined) {
-      throw new DeploymentError('not-found', 'This deployment does not exist.');
-    }
-    return rows[0];
   }
 
   /**
@@ -1018,50 +871,57 @@ export class Deployments implements RunningVersions {
    * on them: each of them takes a database connection too, and with many requests at once,
    * connections held while waiting for more could use up the pool and stall everything.
    */
-  async #find(id: string): Promise<Row> {
-    const row = await this.#database.transaction((tx) => this.#row(tx, id));
-    return (await this.#enrich([row]))[0]!;
+  async #find(id: string): Promise<KnownDeployment> {
+    const deployment = await this.#store.transaction((session) => session.find(id));
+    if (deployment === null) {
+      throw new DeploymentError('not-found', 'This deployment does not exist.');
+    }
+    return (await this.#enrich([deployment]))[0]!;
   }
 
   /**
    * Locks a deployment's row and reads it again, keeping what other modules said of it
    * before. Their part, such as names, doesn't change what this module decides.
    */
-  async #locked(tx: TenantTransaction, known: Row): Promise<Row> {
-    return { ...known, ...(await this.#row(tx, known.id, { lock: true })) };
+  async #locked(session: DeploymentsSession, known: KnownDeployment): Promise<KnownDeployment> {
+    const deployment = await session.find(known.id, { lock: true });
+    if (deployment === null) {
+      throw new DeploymentError('not-found', 'This deployment does not exist.');
+    }
+    return { ...known, ...deployment };
   }
 
   /**
    * Adds what the catalog, environments and builds know of each deployment. They keep
    * their own tables, so this asks them, once per application, environment and version.
    */
-  async #enrich(rows: readonly DeploymentRow[]): Promise<Row[]> {
+  async #enrich(rows: readonly StoredDeployment[]): Promise<KnownDeployment[]> {
     if (rows.length === 0) {
       return [];
     }
-    const unique = (pick: (row: DeploymentRow) => string) => [...new Set(rows.map(pick))];
+    const unique = (pick: (row: StoredDeployment) => string) => [...new Set(rows.map(pick))];
     const [applications, environments, builds] = await Promise.all([
-      this.#applicationsById(unique((row) => row.application_id)),
-      Promise.all(unique((row) => row.environment_id).map((id) => this.#environments.get(id))).then(
+      this.#applicationsById(unique((row) => row.applicationId)),
+      Promise.all(unique((row) => row.environmentId).map((id) => this.#environments.get(id))).then(
         (views) => new Map<string, EnvironmentView>(views.map((view) => [view.id, view])),
       ),
-      this.#builds.many(unique((row) => row.build_id)),
+      this.#builds.many(unique((row) => row.buildId)),
     ]);
     return rows.map((row) => {
-      const application = applications.get(row.application_id)!;
-      const environment = environments.get(row.environment_id)!;
-      const build: DeployableImage = builds.get(row.build_id)!;
+      const application = applications.get(row.applicationId)!;
+      const environment = environments.get(row.environmentId)!;
+      const build: DeployableImage = builds.get(row.buildId)!;
       return {
         ...row,
-        application_name: application.name,
-        application_slug: application.slug,
-        environment_name: environment.name,
-        environment_kind: environment.kind,
-        environment_provider: environment.target?.provider ?? null,
-        build_kind: build.kind,
-        image_tag: build.tag,
-        build_version: build.version,
-        image_ref: build.imageRef,
+        applicationName: application.name,
+        applicationSlug: application.slug,
+        environmentName: environment.name,
+        environmentKind: environment.kind,
+        environmentProvider: environment.target?.provider ?? null,
+        buildKind: build.kind,
+        imageTag: build.tag,
+        buildVersion: build.version,
+        imageRef: build.imageRef,
         digest: build.digest,
       };
     });
@@ -1103,22 +963,30 @@ function queued(deploymentId: string, actorId: string) {
   return DeploymentQueued.create({ companyId: currentCompanyId(), actorId, payload: { deploymentId } });
 }
 
-function finishedEvent(deployment: Row, status: DeploymentStatus, message: string | null) {
+function finishedEvent(deployment: KnownDeployment, status: DeploymentStatus, message: string | null) {
   const contract = status === 'succeeded' ? DeploymentSucceeded : status === 'aborted' ? DeploymentAborted : DeploymentFailed;
   return contract.create({
     companyId: currentCompanyId(),
     actorId: null,
     payload: {
       deploymentId: deployment.id,
-      applicationId: deployment.application_id,
-      applicationName: deployment.application_name,
-      environmentId: deployment.environment_id,
-      environmentName: deployment.environment_name,
-      version: deployment.build_version ?? deployment.image_tag,
+      applicationId: deployment.applicationId,
+      applicationName: deployment.applicationName,
+      environmentId: deployment.environmentId,
+      environmentName: deployment.environmentName,
+      version: deployment.buildVersion ?? deployment.imageTag,
       action: deployment.action,
       ...(message !== null && status !== 'succeeded' && { reason: message }),
     },
   });
+}
+
+/** A list's filter, from the query's application and environment IDs. */
+function parseFilter(filter: { application?: unknown; environment?: unknown }): DeploymentFilter {
+  return {
+    ...(filter.application !== undefined && filter.application !== '' && { applicationId: parseId(filter.application, 'application') }),
+    ...(filter.environment !== undefined && filter.environment !== '' && { environmentId: parseId(filter.environment, 'environment') }),
+  };
 }
 
 function parseId(value: unknown, what: string): string {
@@ -1167,23 +1035,23 @@ function parseSync(value: unknown): SyncReport | null {
   };
 }
 
-function toView(row: Row): DeploymentView {
+function toView(row: KnownDeployment): DeploymentView {
   return {
     id: row.id,
-    application: { id: row.application_id, name: row.application_name, slug: row.application_slug },
-    environment: { id: row.environment_id, name: row.environment_name, kind: row.environment_kind },
-    version: { buildId: row.build_id, kind: row.build_kind, tag: row.image_tag, version: row.build_version },
+    application: { id: row.applicationId, name: row.applicationName, slug: row.applicationSlug },
+    environment: { id: row.environmentId, name: row.environmentName, kind: row.environmentKind },
+    version: { buildId: row.buildId, kind: row.buildKind, tag: row.imageTag, version: row.buildVersion },
     strategy: row.strategy,
     status: row.status,
     message: row.message,
     progress: row.progress,
-    rollbackOf: row.rollback_of,
-    commit: row.commit_sha,
-    requestedBy: row.requested_by === null ? null : { userId: row.requested_by, displayName: row.requester_name },
-    approvedBy: row.approved_by === null ? null : { userId: row.approved_by, displayName: row.approver_name },
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    finishedAt: row.finished_at?.toISOString() ?? null,
+    rollbackOf: row.rollbackOf,
+    commit: row.commitSha,
+    requestedBy: row.requestedBy === null ? null : { userId: row.requestedBy, displayName: row.requesterName },
+    approvedBy: row.approvedBy === null ? null : { userId: row.approvedBy, displayName: row.approverName },
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    finishedAt: row.finishedAt?.toISOString() ?? null,
     action: row.action,
     reason: row.reason,
     limits: row.limits,

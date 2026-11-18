@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AlertCreated, AlertDeleted, type AlertPayload, AlertUpdated } from '@dreamdevops/contracts/alerts/events';
 import { currentCompanyId, describeError, type DomainEvent } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { CompanyMember, CompanyMembers } from '@dreamdevops/contracts/identity-access/services';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type {
@@ -15,11 +14,10 @@ import type {
 } from '@dreamdevops/contracts/alerts/http';
 import type { Unchecked } from '@dreamdevops/contracts/http';
 import type { LatestMetrics } from '@dreamdevops/contracts/monitoring/services';
-import { type MetricKey, METRICS } from '@dreamdevops/contracts/monitoring/metrics';
+import { METRICS } from '@dreamdevops/contracts/monitoring/metrics';
 import type { AlertMailer } from '@dreamdevops/contracts/notifications/services';
 import {
   type AlertCondition,
-  type Comparator,
   describeCondition,
   describeValue,
   parseAlertId,
@@ -33,56 +31,9 @@ import {
   parseThreshold,
 } from '../domain/alert.ts';
 import { AlertError } from '../domain/errors.ts';
-import type { AlertState } from '../domain/evaluation.ts';
 import { placeId } from '@dreamdevops/contracts/environments/telemetry';
 import type { Place, Places } from './places.ts';
-
-interface AlertRow {
-  id: string;
-  name: string;
-  place_id: string;
-  environment_id: string;
-  application_id: string;
-  metric: MetricKey;
-  comparator: Comparator;
-  threshold: number;
-  for_minutes: number;
-  recipient_ids: string[];
-  enabled: boolean;
-  state: AlertState;
-  pending_since: Date | null;
-  last_value: number | null;
-  last_checked_at: Date | null;
-  check_problem: string | null;
-  last_notified_at: Date | null;
-  last_notification_error: string | null;
-  created_at: Date;
-  firing_since: Date | null;
-}
-
-interface IncidentRow {
-  id: string;
-  alert_id: string;
-  alert_name: string;
-  place_id: string;
-  environment_id: string;
-  application_id: string;
-  metric: MetricKey;
-  comparator: Comparator;
-  threshold: number;
-  for_minutes: number;
-  started_at: Date;
-  start_value: number | null;
-  resolved_at: Date | null;
-  end_value: number | null;
-  ended_by: IncidentView['endedBy'];
-}
-
-/** Each alert with when its open incident, if any, started. */
-const SELECT_ALERTS = `
-  SELECT a.*, i.started_at AS firing_since
-  FROM alerts.alerts a
-  LEFT JOIN alerts.incidents i ON i.alert_id = a.id AND i.resolved_at IS NULL`;
+import type { AlertsSession, AlertsStore, StoredAlert } from './ports.ts';
 
 /** How many past incidents the history shows. */
 export const HISTORY_LIMIT = 50;
@@ -92,7 +43,7 @@ export const HISTORY_LIMIT = 50;
  * them is AlertChecks' work, and emailing AlertDeliveries'.
  */
 export class AlertRules {
-  readonly #database: TenantDatabase;
+  readonly #store: AlertsStore;
   readonly #places: Places;
   readonly #metrics: LatestMetrics;
   readonly #emails: AlertMailer;
@@ -100,14 +51,14 @@ export class AlertRules {
   readonly #now: () => Date;
 
   constructor(
-    database: TenantDatabase,
+    store: AlertsStore,
     places: Places,
     metrics: LatestMetrics,
     emails: AlertMailer,
     members: CompanyMembers,
     now: () => Date = () => new Date(),
   ) {
-    this.#database = database;
+    this.#store = store;
     this.#places = places;
     this.#metrics = metrics;
     this.#emails = emails;
@@ -117,10 +68,7 @@ export class AlertRules {
 
   /** Every alert, by name. Only those who manage alerts see whom they email. */
   async list(options: { readonly showRecipients: boolean }): Promise<AlertsOverview> {
-    const rows = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<AlertRow>(`${SELECT_ALERTS} ORDER BY lower(a.name), a.id`);
-      return rows;
-    });
+    const rows = await this.#store.transaction((session) => session.list());
     const [places, members] = await Promise.all([
       this.#places.of(rows),
       rows.length === 0 ? Promise.resolve([]) : this.#members.list(),
@@ -129,7 +77,7 @@ export class AlertRules {
     return {
       metricsEnabled: this.#metrics.enabled,
       metrics: METRICS,
-      alerts: rows.map((row) => toView(row, places.get(row.place_id) ?? null, byId, options.showRecipients)),
+      alerts: rows.map((row) => toView(row, places.get(row.placeId) ?? null, byId, options.showRecipients)),
     };
   }
 
@@ -144,46 +92,28 @@ export class AlertRules {
    * tidies up what alerts show.
    */
   async forgetMember(userId: string): Promise<void> {
-    await this.#database.transaction((tx) =>
-      tx.query(
-        `UPDATE alerts.alerts SET recipient_ids = array_remove(recipient_ids, $1::uuid), updated_at = now()
-         WHERE $1::uuid = ANY (recipient_ids)`,
-        [userId],
-      ),
-    );
+    await this.#store.transaction((session) => session.forgetMember(userId));
   }
 
   /** The latest incidents, newest first, including those that still fire. */
   async history(): Promise<IncidentView[]> {
-    const rows = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<IncidentRow>(
-        `SELECT i.id, i.alert_id, a.name AS alert_name, a.place_id, a.environment_id, a.application_id, a.metric, a.comparator,
-                a.threshold, a.for_minutes,
-                i.started_at, i.start_value, i.resolved_at, i.end_value, i.ended_by
-         FROM alerts.incidents i
-         JOIN alerts.alerts a ON a.id = i.alert_id
-         ORDER BY i.started_at DESC, i.id
-         LIMIT $1`,
-        [HISTORY_LIMIT],
-      );
-      return rows;
-    });
+    const rows = await this.#store.transaction((session) => session.history(HISTORY_LIMIT));
     const places = await this.#places.of(rows);
     return rows.map((row) => {
-      const place = places.get(row.place_id) ?? null;
+      const place = places.get(row.placeId) ?? null;
       return {
         id: row.id,
-        alertId: row.alert_id,
-        alertName: row.alert_name,
+        alertId: row.alertId,
+        alertName: row.alertName,
         environmentName: place?.environmentName ?? null,
         applicationName: place?.applicationName ?? null,
         production: place?.production ?? false,
         condition: describeCondition(conditionOf(row), { withDuration: true }),
-        startedAt: row.started_at.toISOString(),
-        startValue: describeValue(row.start_value, row.metric),
-        resolvedAt: row.resolved_at?.toISOString() ?? null,
-        endValue: row.resolved_at === null ? null : describeValue(row.end_value, row.metric),
-        endedBy: row.ended_by,
+        startedAt: row.startedAt.toISOString(),
+        startValue: describeValue(row.startValue, row.metric),
+        resolvedAt: row.resolvedAt?.toISOString() ?? null,
+        endValue: row.resolvedAt === null ? null : describeValue(row.endValue, row.metric),
+        endedBy: row.endedBy,
       };
     });
   }
@@ -209,36 +139,29 @@ export class AlertRules {
       throw new AlertError('not-found', 'There’s no such environment or application.');
     }
     const id = randomUUID();
-    const row = await this.#database.transaction(async (tx) => {
-      await assertNameFree(tx, name, null);
-      await tx.query(
-        `INSERT INTO alerts.alerts
-           (id, company_id, name, place_id, environment_id, application_id, metric, comparator, threshold, for_minutes,
-            recipient_ids, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [
-          id,
-          currentCompanyId(),
-          name,
-          placeId(environmentId, applicationId),
-          environmentId,
-          applicationId,
-          metric,
-          condition.comparator,
-          condition.threshold,
-          condition.forMinutes,
-          recipients,
-          actor.userId,
-        ],
-      );
-      await appendToOutbox(tx, [
+    const row = await this.#store.transaction(async (session) => {
+      await assertNameFree(session, name, null);
+      await session.add({
+        id,
+        name,
+        placeId: placeId(environmentId, applicationId),
+        environmentId,
+        applicationId,
+        metric,
+        comparator: condition.comparator,
+        threshold: condition.threshold,
+        forMinutes: condition.forMinutes,
+        recipientIds: recipients,
+        createdBy: actor.userId,
+      });
+      await session.record([
         AlertCreated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { ...payloadOf(id, name, condition, place), recipients: recipients.length },
         }),
       ]);
-      return (await findAlert(tx, id))!;
+      return (await session.find(id))!;
     });
     return this.#view(row, place);
   }
@@ -272,60 +195,55 @@ export class AlertRules {
     const enabled = input.enabled ?? null;
     // What an alert watches never changes, so its place is named before the row is locked.
     const place = await this.#placeOf(id);
-    const row = await this.#database.transaction(async (tx) => {
-      const current = await lockAlert(tx, id);
+    const row = await this.#store.transaction(async (session) => {
+      const current = await lockAlert(session, id);
       const threshold = input.threshold === undefined ? null : parseThreshold(input.threshold, current.metric);
       const next = {
         name: name ?? current.name,
         threshold: threshold ?? current.threshold,
-        forMinutes: forMinutes ?? current.for_minutes,
-        recipients: recipients ?? current.recipient_ids,
+        forMinutes: forMinutes ?? current.forMinutes,
+        recipients: recipients ?? current.recipientIds,
         enabled: enabled ?? current.enabled,
       };
       const changes = [
         next.name !== current.name && 'name',
         next.threshold !== current.threshold && 'threshold',
-        next.forMinutes !== current.for_minutes && 'forMinutes',
-        next.recipients.join(',') !== current.recipient_ids.join(',') && 'recipients',
+        next.forMinutes !== current.forMinutes && 'forMinutes',
+        next.recipients.join(',') !== current.recipientIds.join(',') && 'recipients',
         next.enabled !== current.enabled && 'enabled',
       ].filter((change) => change !== false);
       if (changes.length === 0) {
-        return (await findAlert(tx, id))!;
+        return (await session.find(id))!;
       }
       if (next.name !== current.name) {
-        await assertNameFree(tx, next.name, id);
+        await assertNameFree(session, next.name, id);
       }
       const turnedOff = current.enabled && !next.enabled;
-      await tx.query(
-        `UPDATE alerts.alerts SET
-           name = $2, threshold = $3, for_minutes = $4, recipient_ids = $5, enabled = $6, updated_at = now(),
-           state = CASE WHEN $7 THEN 'ok' ELSE state END,
-           pending_since = CASE WHEN $7 THEN NULL ELSE pending_since END,
-           check_problem = CASE WHEN $7 THEN NULL ELSE check_problem END
-         WHERE id = $1`,
-        [id, next.name, next.threshold, next.forMinutes, next.recipients, next.enabled, turnedOff],
-      );
+      await session.update(id, {
+        name: next.name,
+        threshold: next.threshold,
+        forMinutes: next.forMinutes,
+        recipientIds: next.recipients,
+        enabled: next.enabled,
+        turnedOff,
+      });
       if (turnedOff) {
-        await tx.query(
-          `UPDATE alerts.incidents SET resolved_at = $2, end_value = NULL, ended_by = 'turned-off'
-           WHERE alert_id = $1 AND resolved_at IS NULL`,
-          [id, this.#now()],
-        );
+        await session.endIncident(id, { at: this.#now(), value: null, endedBy: 'turned-off' });
       }
       const condition = { ...conditionOf(current), threshold: next.threshold, forMinutes: next.forMinutes };
-      await appendToOutbox(tx, [
+      await session.record([
         AlertUpdated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: {
-            ...payloadOf(id, next.name, condition, place ?? unknownPlace(current.environment_id, current.application_id)),
+            ...payloadOf(id, next.name, condition, place ?? unknownPlace(current.environmentId, current.applicationId)),
             enabled: next.enabled,
             recipients: next.recipients.length,
             changes,
           },
         }),
       ]);
-      return (await findAlert(tx, id))!;
+      return (await session.find(id))!;
     });
     return this.#view(row, place);
   }
@@ -334,17 +252,17 @@ export class AlertRules {
   async delete(actor: Principal, idValue: unknown): Promise<void> {
     const id = parseAlertId(idValue);
     const place = await this.#placeOf(id);
-    await this.#database.transaction(async (tx) => {
-      const current = await lockAlert(tx, id);
-      await tx.query('DELETE FROM alerts.alerts WHERE id = $1', [id]);
+    await this.#store.transaction(async (session) => {
+      const current = await lockAlert(session, id);
+      await session.delete(id);
       const events: DomainEvent[] = [
         AlertDeleted.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
-          payload: payloadOf(id, current.name, conditionOf(current), place ?? unknownPlace(current.environment_id, current.application_id)),
+          payload: payloadOf(id, current.name, conditionOf(current), place ?? unknownPlace(current.environmentId, current.applicationId)),
         }),
       ];
-      await appendToOutbox(tx, events);
+      await session.record(events);
     });
   }
 
@@ -354,13 +272,13 @@ export class AlertRules {
    */
   async test(actor: Principal, idValue: unknown): Promise<AlertTestResult> {
     const id = parseAlertId(idValue);
-    const alert = await this.#database.transaction((tx) => findAlert(tx, id));
+    const alert = await this.#store.transaction((session) => session.find(id));
     if (alert === null) {
       throw new AlertError('not-found', 'This alert does not exist.');
     }
-    const place = (await this.#places.find(alert.environment_id, alert.application_id)) ?? unknownPlace(alert.environment_id, alert.application_id);
+    const place = (await this.#places.find(alert.environmentId, alert.applicationId)) ?? unknownPlace(alert.environmentId, alert.applicationId);
     // Only those who are members now, at their address now.
-    const recipients = await this.#members.find(alert.recipient_ids);
+    const recipients = await this.#members.find(alert.recipientIds);
     if (recipients.length === 0) {
       return { delivered: false, sent: 0, error: 'The alert names nobody who is still a member of the company. Choose someone to email.' };
     }
@@ -377,7 +295,7 @@ export class AlertRules {
           environmentName: place.environmentName,
           production: place.production,
           condition: describeCondition(conditionOf(alert), { withDuration: true }),
-          value: alert.last_checked_at === null ? 'Not checked yet' : describeValue(alert.last_value, alert.metric),
+          value: alert.lastCheckedAt === null ? 'Not checked yet' : describeValue(alert.lastValue, alert.metric),
           firingSince: null,
           at: this.#now().toISOString(),
         });
@@ -386,14 +304,7 @@ export class AlertRules {
         error ??= describeError(failure);
       }
     }
-    await this.#database.transaction((tx) =>
-      tx.query(
-        `UPDATE alerts.alerts SET last_notified_at = CASE WHEN $2 THEN now() ELSE last_notified_at END,
-           last_notification_error = $3
-         WHERE id = $1`,
-        [id, sent > 0, error],
-      ),
-    );
+    await this.#store.transaction((session) => session.recordNotification(id, { notified: sent > 0, error }));
     return { delivered: error === null, sent, error };
   }
 
@@ -406,29 +317,23 @@ export class AlertRules {
   }
 
   /** An alert as the dashboard shows it to those who manage it. */
-  async #view(row: AlertRow, place: Place | null): Promise<AlertView> {
-    const members = await this.#members.find(row.recipient_ids);
+  async #view(row: StoredAlert, place: Place | null): Promise<AlertView> {
+    const members = await this.#members.find(row.recipientIds);
     return toView(row, place, new Map(members.map((member) => [member.userId, member])), true);
   }
 
   /** The place an alert watches, or not-found if the company has no such alert. */
   async #placeOf(id: string): Promise<Place | null> {
-    const watched = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ environment_id: string; application_id: string }>(
-        'SELECT environment_id, application_id FROM alerts.alerts WHERE id = $1',
-        [id],
-      );
-      return rows[0] ?? null;
-    });
+    const watched = await this.#store.transaction((session) => session.placeOf(id));
     if (watched === null) {
       throw new AlertError('not-found', 'This alert does not exist.');
     }
-    return this.#places.find(watched.environment_id, watched.application_id);
+    return this.#places.find(watched.environmentId, watched.applicationId);
   }
 }
 
-export function conditionOf(row: Pick<AlertRow, 'metric' | 'comparator' | 'threshold' | 'for_minutes'>): AlertCondition {
-  return { metric: row.metric, comparator: row.comparator, threshold: row.threshold, forMinutes: row.for_minutes };
+export function conditionOf(alert: Pick<StoredAlert, 'metric' | 'comparator' | 'threshold' | 'forMinutes'>): AlertCondition {
+  return { metric: alert.metric, comparator: alert.comparator, threshold: alert.threshold, forMinutes: alert.forMinutes };
 }
 
 /** What every alert event says about the alert. */
@@ -461,24 +366,18 @@ export function unknownPlace(environmentId: string, applicationId: string): Plac
   };
 }
 
-async function findAlert(tx: TenantTransaction, id: string): Promise<AlertRow | null> {
-  const { rows } = await tx.query<AlertRow>(`${SELECT_ALERTS} WHERE a.id = $1`, [id]);
-  return rows[0] ?? null;
-}
-
-async function lockAlert(tx: TenantTransaction, id: string): Promise<AlertRow> {
-  const { rows } = await tx.query<AlertRow>('SELECT *, NULL AS firing_since FROM alerts.alerts WHERE id = $1 FOR UPDATE', [id]);
-  if (rows[0] === undefined) {
+async function lockAlert(session: AlertsSession, id: string): Promise<StoredAlert> {
+  const alert = await session.lock(id);
+  if (alert === null) {
     throw new AlertError('not-found', 'This alert does not exist.');
   }
-  return rows[0];
+  return alert;
 }
 
-async function assertNameFree(tx: TenantTransaction, name: string, exceptId: string | null): Promise<void> {
+async function assertNameFree(session: AlertsSession, name: string, exceptId: string | null): Promise<void> {
   // Serializes naming within the company, so two alerts can't take one name at once.
-  await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('alerts:names:' || kernel.current_company_id()::text, 0))");
-  const { rows } = await tx.query('SELECT 1 FROM alerts.alerts WHERE lower(name) = lower($1) AND id IS DISTINCT FROM $2', [name, exceptId]);
-  if (rows.length > 0) {
+  await session.lockNames();
+  if (await session.isNameTaken(name, exceptId)) {
     throw new AlertError('conflict', 'Another alert already has this name.');
   }
 }
@@ -487,37 +386,37 @@ function recipientOf(member: CompanyMember): Recipient {
   return { userId: member.userId, displayName: member.displayName, email: member.email };
 }
 
-function toView(row: AlertRow, place: Place | null, members: ReadonlyMap<string, CompanyMember>, showRecipients: boolean): AlertView {
+function toView(row: StoredAlert, place: Place | null, members: ReadonlyMap<string, CompanyMember>, showRecipients: boolean): AlertView {
   // Anyone who left the company is left out, until they're taken off the alert.
-  const recipients = row.recipient_ids.flatMap((id) => {
+  const recipients = row.recipientIds.flatMap((id) => {
     const member = members.get(id);
     return member === undefined ? [] : [recipientOf(member)];
   });
   return {
     id: row.id,
     name: row.name,
-    placeId: row.place_id,
-    environmentId: row.environment_id,
+    placeId: row.placeId,
+    environmentId: row.environmentId,
     environmentName: place?.environmentName ?? null,
-    applicationId: row.application_id,
+    applicationId: row.applicationId,
     applicationName: place?.applicationName ?? null,
     production: place?.production ?? false,
     metric: row.metric,
     comparator: row.comparator,
     threshold: row.threshold,
-    forMinutes: row.for_minutes,
+    forMinutes: row.forMinutes,
     condition: describeCondition(conditionOf(row), { withDuration: true }),
     recipients: showRecipients ? recipients : null,
     recipientCount: recipients.length,
     enabled: row.enabled,
     state: row.state,
-    pendingSince: row.pending_since?.toISOString() ?? null,
-    firingSince: row.firing_since?.toISOString() ?? null,
-    lastValue: row.last_value,
-    lastCheckedAt: row.last_checked_at?.toISOString() ?? null,
-    checkProblem: row.check_problem,
-    lastNotifiedAt: row.last_notified_at?.toISOString() ?? null,
-    lastNotificationError: row.last_notification_error,
-    createdAt: row.created_at.toISOString(),
+    pendingSince: row.pendingSince?.toISOString() ?? null,
+    firingSince: row.firingSince?.toISOString() ?? null,
+    lastValue: row.lastValue,
+    lastCheckedAt: row.lastCheckedAt?.toISOString() ?? null,
+    checkProblem: row.checkProblem,
+    lastNotifiedAt: row.lastNotifiedAt?.toISOString() ?? null,
+    lastNotificationError: row.lastNotificationError,
+    createdAt: row.createdAt.toISOString(),
   };
 }

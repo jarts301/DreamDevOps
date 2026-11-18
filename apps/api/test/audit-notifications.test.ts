@@ -17,7 +17,7 @@ import { RefusedWebhookError } from '../src/notifications/application/ports.ts';
 import { NOTIFIABLE_EVENTS, summarize } from '../src/notifications/domain/event-catalog.ts';
 import { NotificationError } from '../src/notifications/domain/errors.ts';
 import { isBlockedAddress, SafeWebhookSender } from '../src/notifications/infrastructure/safe-webhook-sender.ts';
-import { FakeMailer } from './fakes.ts';
+import { FakeMailer, RecordingLogger } from './fakes.ts';
 
 const COMPANY = '00000000-0000-4000-8000-00000000000a';
 
@@ -117,7 +117,7 @@ describe('invitation emails', () => {
 
   it('links to the dashboard with the token in the fragment', async () => {
     const mailer = new FakeMailer();
-    const emails = new InvitationEmails(mailer, 'http://localhost:4200/');
+    const emails = new InvitationEmails(mailer, 'http://localhost:4200/', new RecordingLogger());
 
     await expect(
       emails.send({ to: 'new@example.com', companyName: 'Acme', role: 'tech-lead', invitedBy: 'Ana', ...invitation }),
@@ -130,12 +130,13 @@ describe('invitation emails', () => {
     expect(sent?.text).toContain('http://localhost:4200/invitations/accept#token=secret%20token');
   });
 
-  it('reports a failure instead of throwing', async () => {
+  it('reports a failure instead of throwing, and keeps the token out of the log', async () => {
     const mailer = new FakeMailer();
     mailer.failing = true;
+    const logger = new RecordingLogger();
 
     await expect(
-      new InvitationEmails(mailer, 'http://localhost:4200').send({
+      new InvitationEmails(mailer, 'http://localhost:4200', logger).send({
         to: 'x@example.com',
         companyName: 'Acme',
         role: 'viewer',
@@ -143,6 +144,8 @@ describe('invitation emails', () => {
         ...invitation,
       }),
     ).resolves.toBe(false);
+    expect(logger.lines).toEqual([expect.stringContaining('An invitation email could not be sent')]);
+    expect(logger.lines.join()).not.toContain('secret token');
   });
 });
 

@@ -1,14 +1,19 @@
 import { RepositoryCreated, RepositoryCreationFailed, RepositoryRequested } from '@dreamdevops/contracts/source-governance/events';
-import { currentCompanyId, describeError, withRenewal } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
+import { currentCompanyId, describeError, parseCompanyId, runWithCompany, withRenewal } from '@dreamdevops/shared-kernel';
 import type { BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
 import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { CompanyDirectory, CompanyRecord } from '@dreamdevops/contracts/tenancy/services';
 import { SourceError } from '../domain/errors.ts';
 import { GIT_FLOW, WEBHOOK_EVENTS } from '../domain/git-flow.ts';
-import { PermanentSourceError, type RepositorySpec, type SourceHost } from './ports.ts';
-import type { RepositoryStatus, RepositoryView } from '@dreamdevops/contracts/source-governance/http';
+import {
+  PermanentSourceError,
+  type RepositorySpec,
+  type SourceHost,
+  type SourceStore,
+  type StoredRepository,
+} from './ports.ts';
+import type { RepositoryView } from '@dreamdevops/contracts/source-governance/http';
 import type { RepositoryLocation, RepositoryLookup } from '@dreamdevops/contracts/source-governance/services';
 
 /**
@@ -21,6 +26,7 @@ export const POLICY_VERSION = 3;
 const CLAIM_SECONDS = 120;
 /** How often a working job renews its claim, well within the claim's length. */
 const RENEW_MS = 30_000;
+const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 
 /** Another job is creating the same repository. Thrown so this job is tried again later. */
 export class RepositoryBusyError extends Error {
@@ -28,17 +34,6 @@ export class RepositoryBusyError extends Error {
     super('Another job is creating this repository. It will be tried again.');
     this.name = 'RepositoryBusyError';
   }
-}
-
-interface RepositoryRow {
-  application_id: string;
-  organization: string;
-  name: string;
-  status: RepositoryStatus;
-  blueprint_key: string | null;
-  blueprint_version: string | null;
-  attempts: number;
-  last_error: string | null;
 }
 
 export interface RepositoriesOptions {
@@ -57,7 +52,7 @@ export interface RepositoriesOptions {
  * rules. Every step is safe to repeat, so a retry carries on where the last one stopped.
  */
 export class Repositories implements RepositoryLookup {
-  readonly #database: TenantDatabase;
+  readonly #store: SourceStore;
   readonly #companies: CompanyDirectory;
   readonly #host: SourceHost;
   readonly #catalog: ApplicationDirectory;
@@ -65,14 +60,14 @@ export class Repositories implements RepositoryLookup {
   readonly #options: RepositoriesOptions;
 
   constructor(
-    database: TenantDatabase,
+    store: SourceStore,
     companies: CompanyDirectory,
     host: SourceHost,
     catalog: ApplicationDirectory,
     blueprints: BlueprintCatalog,
     options: RepositoriesOptions,
   ) {
-    this.#database = database;
+    this.#store = store;
     this.#companies = companies;
     this.#host = host;
     this.#catalog = catalog;
@@ -81,19 +76,17 @@ export class Repositories implements RepositoryLookup {
   }
 
   /** The current company's repositories. */
-  list(): Promise<RepositoryView[]> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RepositoryRow>('SELECT * FROM source.repositories ORDER BY name');
-      return rows.map((row) => this.#toView(row));
-    });
+  async list(): Promise<RepositoryView[]> {
+    const repositories = await this.#store.transaction((session) => session.list());
+    return repositories.map((repository) => this.#toView(repository));
   }
 
   async find(applicationId: string): Promise<RepositoryLocation | null> {
-    return this.#locate('application_id = $1', [applicationId]);
+    return locationOf(await this.#store.transaction((session) => session.find(applicationId)));
   }
 
   async findByName(organization: string, name: string): Promise<RepositoryLocation | null> {
-    return this.#locate('organization = $1 AND name = $2', [organization, name]);
+    return locationOf(await this.#store.transaction((session) => session.findByName(organization, name)));
   }
 
   /**
@@ -107,16 +100,16 @@ export class Repositories implements RepositoryLookup {
     }
     // Asked before the transaction, so it never waits on another module.
     const company = await this.#currentCompany();
-    await this.#database.transaction(async (tx) => {
-      const row = await lockRow(tx, application.id);
-      if (row?.status === 'ready') {
+    await this.#store.transaction(async (session) => {
+      const repository = await session.lock(application.id);
+      if (repository?.status === 'ready') {
         throw new SourceError('conflict', 'This application already has a repository.');
       }
-      if (row?.status === 'creating') {
+      if (repository?.status === 'creating') {
         return;
       }
-      await upsertCreating(tx, application.id, company.slug, application.slug);
-      await appendToOutbox(tx, [
+      await session.markCreating(application.id, company.slug, application.slug);
+      await session.record([
         RepositoryRequested.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -138,19 +131,19 @@ export class Repositories implements RepositoryLookup {
     const application = await this.#catalog.get(applicationId);
     const company = await this.#currentCompany();
 
-    const claimed = await this.#database.transaction(async (tx) => {
-      let row = await lockRow(tx, applicationId);
-      if (row?.status === 'ready') {
+    const claimed = await this.#store.transaction(async (session) => {
+      let repository = await session.lock(applicationId);
+      if (repository?.status === 'ready') {
         return null;
       }
-      if (row === null) {
-        await upsertCreating(tx, applicationId, company.slug, application.slug);
-        row = (await lockRow(tx, applicationId))!;
+      if (repository === null) {
+        await session.markCreating(applicationId, company.slug, application.slug);
+        repository = (await session.lock(applicationId))!;
       }
-      if (!(await claimRepository(tx, applicationId))) {
+      if (!(await session.claim(applicationId, CLAIM_SECONDS))) {
         throw new RepositoryBusyError();
       }
-      let blueprint = row.blueprint_key !== null && row.blueprint_version !== null ? { key: row.blueprint_key, version: row.blueprint_version } : null;
+      let blueprint = repository.blueprint;
       if (blueprint === null) {
         // The newest version of the blueprint chosen when the application was registered.
         const newest =
@@ -159,14 +152,10 @@ export class Repositories implements RepositoryLookup {
             : this.#blueprints.latestOf(application.blueprint.key);
         if (newest !== null) {
           blueprint = { key: newest.key, version: newest.version };
-          await tx.query('UPDATE source.repositories SET blueprint_key = $2, blueprint_version = $3 WHERE application_id = $1', [
-            applicationId,
-            blueprint.key,
-            blueprint.version,
-          ]);
+          await session.chooseBlueprint(applicationId, blueprint);
         }
       }
-      return { spec: { organization: row.organization, name: row.name, applicationId } satisfies RepositorySpec, blueprint };
+      return { spec: { organization: repository.organization, name: repository.name, applicationId } satisfies RepositorySpec, blueprint };
     });
     if (claimed === null) {
       return;
@@ -175,7 +164,7 @@ export class Repositories implements RepositoryLookup {
 
     let outcome: { repositoryId: string; blueprint: { key: string; version: string } } | { error: unknown };
     try {
-      const renew = () => this.#database.transaction((tx) => renewClaim(tx, applicationId));
+      const renew = () => this.#store.transaction((session) => session.renewClaim(applicationId, CLAIM_SECONDS));
       outcome = await withRenewal(renew, { everyMs: RENEW_MS }, async () => {
         if (company.status !== 'active') {
           throw new Error("The company's Git organization isn't ready yet.");
@@ -202,16 +191,10 @@ export class Repositories implements RepositoryLookup {
       outcome = { error };
     }
 
-    const failure = await this.#database.transaction(async (tx) => {
+    const failure = await this.#store.transaction(async (session) => {
       if ('repositoryId' in outcome) {
-        await tx.query(
-          `UPDATE source.repositories
-           SET status = 'ready', external_id = $2, attempts = 0, last_error = NULL,
-               policy_version = $3, claimed_until = NULL, updated_at = now()
-           WHERE application_id = $1`,
-          [applicationId, outcome.repositoryId, POLICY_VERSION],
-        );
-        await appendToOutbox(tx, [
+        await session.markReady(applicationId, outcome.repositoryId, POLICY_VERSION);
+        await session.record([
           RepositoryCreated.create({
             companyId: currentCompanyId(),
             payload: {
@@ -226,17 +209,13 @@ export class Repositories implements RepositoryLookup {
         return null;
       }
       const { error } = outcome;
-      const row = (await lockRow(tx, applicationId))!;
+      const repository = (await session.lock(applicationId))!;
       const reason = describeError(error);
-      const attempts = row.attempts + 1;
+      const attempts = repository.attempts + 1;
       const failed = error instanceof PermanentSourceError || attempts >= this.#options.maxAttempts;
-      await tx.query(
-        `UPDATE source.repositories SET status = $2, attempts = $3, last_error = $4, claimed_until = NULL, updated_at = now()
-         WHERE application_id = $1`,
-        [applicationId, failed ? 'failed' : 'creating', attempts, reason],
-      );
+      await session.recordFailure(applicationId, { failed, attempts, error: reason });
       if (failed) {
-        await appendToOutbox(tx, [
+        await session.record([
           RepositoryCreationFailed.create({
             companyId: currentCompanyId(),
             payload: { applicationId, name: application.name, reason },
@@ -258,34 +237,36 @@ export class Repositories implements RepositoryLookup {
    * step is safe to repeat, so a failure leaves the repository to try again later.
    */
   async upgradePolicies(): Promise<void> {
-    const rows = await this.#database.transaction(async (tx) => {
-      const { rows: outdated } = await tx.query<RepositoryRow>(
-        "SELECT * FROM source.repositories WHERE status = 'ready' AND policy_version < $1",
-        [POLICY_VERSION],
-      );
-      return outdated;
-    });
-    for (const row of rows) {
-      const spec = { organization: row.organization, name: row.name, applicationId: row.application_id };
+    const outdated = await this.#store.transaction((session) => session.outdated(POLICY_VERSION));
+    for (const repository of outdated) {
+      const spec = { organization: repository.organization, name: repository.name, applicationId: repository.applicationId };
       await this.#host.ensureTeams(spec.organization);
       await this.#applyPolicy(spec);
-      await this.#database.transaction((tx) =>
-        tx.query('UPDATE source.repositories SET policy_version = $2, updated_at = now() WHERE application_id = $1', [
-          row.application_id,
-          POLICY_VERSION,
-        ]),
-      );
+      await this.#store.transaction((session) => session.setPolicyVersion(repository.applicationId, POLICY_VERSION));
+    }
+  }
+
+  /**
+   * Brings every company's repositories made under older rules up to date, company by
+   * company. A company that fails is reported, and doesn't stop the others.
+   */
+  async upgradeEveryCompany(onError: (companyId: string, error: unknown) => void): Promise<void> {
+    const companies = await runWithCompany(NO_COMPANY, () =>
+      this.#store.transaction((session) => session.companiesWithOutdatedRepositories(POLICY_VERSION)),
+    );
+    for (const companyId of companies) {
+      await runWithCompany(parseCompanyId(companyId), () => this.upgradePolicies()).catch((error: unknown) => onError(companyId, error));
     }
   }
 
   /** The repository's branches, for choosing which to build. */
   async branches(applicationId: unknown): Promise<string[]> {
     const application = await this.#catalog.get(applicationId);
-    const row = await this.#database.transaction((tx) => lockRow(tx, application.id));
-    if (row?.status !== 'ready') {
+    const repository = await this.#store.transaction((session) => session.lock(application.id));
+    if (repository?.status !== 'ready') {
       return [];
     }
-    return this.#host.listBranches({ organization: row.organization, name: row.name, applicationId: application.id });
+    return this.#host.listBranches({ organization: repository.organization, name: repository.name, applicationId: application.id });
   }
 
   /** Where an application's repository is, for other modules. Null until it's ready. */
@@ -307,30 +288,11 @@ export class Repositories implements RepositoryLookup {
 
   /** Makes the repository read-only while its application is archived. */
   async syncArchived(applicationId: string, archived: boolean): Promise<void> {
-    const row = await this.#database.transaction((tx) => lockRow(tx, applicationId));
-    if (row?.status !== 'ready') {
+    const repository = await this.#store.transaction((session) => session.lock(applicationId));
+    if (repository?.status !== 'ready') {
       return;
     }
-    await this.#host.setArchived({ organization: row.organization, name: row.name, applicationId }, archived);
-  }
-
-  async #locate(where: string, values: readonly string[]): Promise<RepositoryLocation | null> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RepositoryRow>(`SELECT * FROM source.repositories WHERE ${where}`, [...values]);
-      const row = rows[0];
-      return row === undefined
-        ? null
-        : {
-            applicationId: row.application_id,
-            organization: row.organization,
-            name: row.name,
-            status: row.status,
-            blueprint:
-              row.blueprint_key !== null && row.blueprint_version !== null
-                ? { key: row.blueprint_key, version: row.blueprint_version }
-                : null,
-          };
-    });
+    await this.#host.setArchived({ organization: repository.organization, name: repository.name, applicationId }, archived);
   }
 
   /** The company the work runs for. Its context is only ever set for a company that exists. */
@@ -338,53 +300,28 @@ export class Repositories implements RepositoryLookup {
     return (await this.#companies.find(currentCompanyId()))!;
   }
 
-  #toView(row: RepositoryRow): RepositoryView {
-    const fullName = `${row.organization}/${row.name}`;
+  #toView(repository: StoredRepository): RepositoryView {
+    const fullName = `${repository.organization}/${repository.name}`;
     return {
-      applicationId: row.application_id,
-      status: row.status,
+      applicationId: repository.applicationId,
+      status: repository.status,
       fullName,
       url: `${this.#options.publicUrl.replace(/\/$/, '')}/${fullName}`,
-      blueprint:
-        row.blueprint_key === null || row.blueprint_version === null
-          ? null
-          : { key: row.blueprint_key, version: row.blueprint_version },
-      lastError: row.last_error,
+      blueprint: repository.blueprint,
+      lastError: repository.lastError,
     };
   }
 }
 
-async function lockRow(tx: TenantTransaction, applicationId: string): Promise<RepositoryRow | null> {
-  const { rows } = await tx.query<RepositoryRow>(
-    'SELECT * FROM source.repositories WHERE application_id = $1 FOR UPDATE',
-    [applicationId],
-  );
-  return rows[0] ?? null;
+/** Where a repository is, for other contexts. */
+function locationOf(repository: StoredRepository | null): RepositoryLocation | null {
+  return repository === null
+    ? null
+    : {
+        applicationId: repository.applicationId,
+        organization: repository.organization,
+        name: repository.name,
+        status: repository.status,
+        blueprint: repository.blueprint,
+      };
 }
-
-/** Claims the repository for this job, unless another job's claim still holds. */
-async function claimRepository(tx: TenantTransaction, applicationId: string): Promise<boolean> {
-  const { rowCount } = await tx.query(
-    `UPDATE source.repositories SET claimed_until = now() + make_interval(secs => $2)
-     WHERE application_id = $1 AND (claimed_until IS NULL OR claimed_until < now())`,
-    [applicationId, CLAIM_SECONDS],
-  );
-  return rowCount === 1;
-}
-
-async function renewClaim(tx: TenantTransaction, applicationId: string): Promise<void> {
-  await tx.query('UPDATE source.repositories SET claimed_until = now() + make_interval(secs => $2) WHERE application_id = $1', [
-    applicationId,
-    CLAIM_SECONDS,
-  ]);
-}
-
-async function upsertCreating(tx: TenantTransaction, applicationId: string, organization: string, name: string) {
-  await tx.query(
-    `INSERT INTO source.repositories (application_id, company_id, organization, name, status)
-     VALUES ($1, $2, $3, $4, 'creating')
-     ON CONFLICT (application_id) DO UPDATE SET status = 'creating', attempts = 0, last_error = NULL, updated_at = now()`,
-    [applicationId, currentCompanyId(), organization, name],
-  );
-}
-

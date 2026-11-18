@@ -37,7 +37,26 @@ export interface WorkOptions {
   readonly concurrency?: number;
 }
 
-export type JobHandler = (job: Job) => Promise<void>;
+/**
+ * Which try of a job this is. A job that fails is tried again until its retries run out,
+ * so only the last try can't count on another: it settles what must not be left waiting,
+ * such as marking the work it was doing as failed.
+ */
+export interface Attempt {
+  /** No other try follows this one, whether it succeeds or fails. */
+  readonly last: boolean;
+}
+
+export type JobHandler = (job: Job, attempt: Attempt) => Promise<void>;
+
+/** A try of a job that failed, for the logs, so a failing background job is never silent. */
+export interface FailedAttempt {
+  readonly queue: string;
+  readonly jobId: string;
+  readonly error: unknown;
+  /** Whether it was the last try, so the job won't run again. */
+  readonly last: boolean;
+}
 
 /** Background work. Jobs can run more than once, so handlers must be idempotent. */
 export interface JobQueue {

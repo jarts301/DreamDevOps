@@ -1,6 +1,6 @@
-import { Logger } from '@nestjs/common';
 import { roleName } from '@dreamdevops/contracts/identity-access/roles';
 import type { InvitationEmail, InvitationMailer } from '@dreamdevops/contracts/notifications/services';
+import type { Logger } from '@dreamdevops/shared-kernel';
 import type { Mailer } from './ports.ts';
 
 /**
@@ -8,13 +8,14 @@ import type { Mailer } from './ports.ts';
  * sent straight after the invitation is saved rather than through a stored job.
  */
 export class InvitationEmails implements InvitationMailer {
-  readonly #logger = new Logger(InvitationEmails.name);
   readonly #mailer: Mailer;
   readonly #dashboardUrl: string;
+  readonly #logger: Logger;
 
-  constructor(mailer: Mailer, dashboardUrl: string) {
+  constructor(mailer: Mailer, dashboardUrl: string, logger: Logger) {
     this.#mailer = mailer;
     this.#dashboardUrl = dashboardUrl;
+    this.#logger = logger;
   }
 
   /** Returns whether the email was sent. A failure never undoes the invitation. */

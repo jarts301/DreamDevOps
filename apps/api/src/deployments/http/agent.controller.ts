@@ -1,6 +1,5 @@
 import { Body, Controller, HttpCode, Inject, Param, Post, Req } from '@nestjs/common';
-import type { AgentCommand, HeartbeatResponse } from '@dreamdevops/contracts/agent/protocol';
-import { TARGET_AUTHENTICATION, type TargetAuthentication } from '@dreamdevops/contracts/environments/services';
+import type { HeartbeatResponse } from '@dreamdevops/contracts/agent/protocol';
 import { Public } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { Deployments } from '../application/deployments.ts';
@@ -18,36 +17,26 @@ const bearer = (request: ApiRequest): string | undefined =>
 @Controller('agent')
 @Public()
 export class AgentController {
-  readonly #targets: TargetAuthentication;
   readonly #deployments: Deployments;
 
-  constructor(@Inject(TARGET_AUTHENTICATION) targets: TargetAuthentication, @Inject(Deployments) deployments: Deployments) {
-    this.#targets = targets;
+  constructor(@Inject(Deployments) deployments: Deployments) {
     this.#deployments = deployments;
   }
 
   /** The agent says how a promote or abort command went. */
   @Post('commands/:id')
   @HttpCode(204)
-  async commandDone(
-    @Req() request: ApiRequest,
-    @Param('id') id: string,
-    @Body() body: { succeeded?: unknown; message?: unknown },
-  ): Promise<void> {
-    const { companyId, environmentId } = await this.#targets.authenticate(bearer(request));
-    await this.#deployments.commandDone(companyId, environmentId, id, body ?? {});
+  commandDone(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: { succeeded?: unknown; message?: unknown } | undefined): Promise<void> {
+    return this.#deployments.agentCommandDone(bearer(request), id, body ?? {});
   }
 
   /** Reports in, with how the environment's rollouts are doing; gets back commands to run. */
   @Post('heartbeat')
   @HttpCode(200)
-  async heartbeat(
+  heartbeat(
     @Req() request: ApiRequest,
-    @Body() body: { agentVersion?: unknown; kubernetesVersion?: unknown; sync?: unknown; workloads?: unknown },
+    @Body() body: { agentVersion?: unknown; kubernetesVersion?: unknown; sync?: unknown; workloads?: unknown } | undefined,
   ): Promise<HeartbeatResponse> {
-    // The heartbeat checks the access token, and says whose target it is.
-    const { heartbeatSeconds, companyId, environmentId } = await this.#targets.heartbeat(bearer(request), body ?? {});
-    const commands: AgentCommand[] = await this.#deployments.onReport(companyId, environmentId, body ?? {});
-    return { heartbeatSeconds, commands };
+    return this.#deployments.agentHeartbeat(bearer(request), body ?? {});
   }
 }

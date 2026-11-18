@@ -3,6 +3,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { PermanentSourceError, SOURCE_HOST } from '../src/source-governance/application/ports.ts';
+import { POLICY_VERSION, Repositories } from '../src/source-governance/application/repositories.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider, FakeSourceHost } from './fakes.ts';
 import { buildApp } from './test-app.ts';
@@ -396,6 +397,29 @@ describe('archiving an application', () => {
     await admin.post(`/api/v1/company/applications/${application.id}/archive`).expect(204);
 
     await admin.post(`/api/v1/company/applications/${application.id}/repository`).expect(409);
+  });
+});
+
+describe('newer Git Flow rules', () => {
+  it("reach every company's ready repositories made under older ones", async () => {
+    const { admin, organization } = await createCompany();
+    const application = await register(admin, 'Legacy Service');
+    await eventually(async () => expect((await repositoryOf(admin, application.id))?.status).toBe('ready'));
+    // As if it was made under the first rules. Row-level security binds even the owner, so the superuser reaches it.
+    const superuser = new pg.Pool({ connectionString: database.superuserUrl() });
+    const policyVersion = async () =>
+      (await superuser.query('SELECT policy_version FROM source.repositories WHERE application_id = $1', [application.id])).rows;
+    await superuser.query('UPDATE source.repositories SET policy_version = 1 WHERE application_id = $1', [application.id]);
+    host.repositories.get(`${organization}/legacy-service`)!.gitFlow = false;
+    const failures: string[] = [];
+
+    await app.get(Repositories).upgradeEveryCompany((companyId) => failures.push(companyId));
+
+    expect(failures).toEqual([]);
+    expect(host.repositories.get(`${organization}/legacy-service`)!.gitFlow).toBe(true);
+    const rows = await policyVersion();
+    await superuser.end();
+    expect(rows[0]?.policy_version).toBe(POLICY_VERSION);
   });
 });
 

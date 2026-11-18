@@ -1,5 +1,6 @@
 export { TenantDatabase } from './tenant-database.ts';
 export type { TenantTransaction } from './tenant-database.ts';
+export { PostgresSession, transactional } from './postgres-session.ts';
 export { appendToOutbox, CrossTenantEventError } from './outbox.ts';
 export { OutboxRelay } from './outbox-relay.ts';
 export type { OutboxRelayOptions } from './outbox-relay.ts';

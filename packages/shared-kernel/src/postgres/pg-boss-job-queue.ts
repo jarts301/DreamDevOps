@@ -1,6 +1,7 @@
 import { PgBoss } from 'pg-boss';
 import {
   deadLetterQueueName,
+  type FailedAttempt,
   type JobHandler,
   type JobQueue,
   type QueueOptions,
@@ -12,7 +13,10 @@ export interface PgBossJobQueueOptions {
   /** Connection string for the dreamdevops_jobs role. */
   readonly connectionString: string;
   readonly pollingIntervalSeconds?: number;
+  /** Errors of the queue itself, such as a lost connection. */
   readonly onError?: (error: unknown) => void;
+  /** Each failed try of a job, so it reaches the logs. Without it, failures are kept only in the job's row. */
+  readonly onJobFailed?: (failure: FailedAttempt) => void;
 }
 
 const BATCH_SIZE = 10;
@@ -23,17 +27,19 @@ const DEFAULT_EXPIRE_SECONDS = 15 * 60;
 export class PgBossJobQueue implements JobQueue {
   readonly #boss: PgBoss;
   readonly #pollingIntervalSeconds: number;
+  readonly #onJobFailed: (failure: FailedAttempt) => void;
 
-  private constructor(boss: PgBoss, pollingIntervalSeconds: number) {
+  private constructor(boss: PgBoss, pollingIntervalSeconds: number, onJobFailed: (failure: FailedAttempt) => void) {
     this.#boss = boss;
     this.#pollingIntervalSeconds = pollingIntervalSeconds;
+    this.#onJobFailed = onJobFailed;
   }
 
   static async start(options: PgBossJobQueueOptions): Promise<PgBossJobQueue> {
     const boss = new PgBoss({ connectionString: options.connectionString, schema: 'pgboss' });
     boss.on('error', options.onError ?? ((error) => console.error('Job queue failed.', error)));
     await boss.start();
-    return new PgBossJobQueue(boss, options.pollingIntervalSeconds ?? 2);
+    return new PgBossJobQueue(boss, options.pollingIntervalSeconds ?? 2, options.onJobFailed ?? (() => {}));
   }
 
   /**
@@ -69,26 +75,38 @@ export class PgBossJobQueue implements JobQueue {
    *
    * With a concurrency, each of that many workers takes one job at a time instead, so a
    * long job never holds others that were fetched with it until they expire.
+   *
+   * Each handler learns whether it runs the job's last try, and every failed try is
+   * reported, so no background failure goes unseen.
    */
   async work(queue: string, handler: JobHandler, options: WorkOptions = {}): Promise<void> {
-    await this.#boss.work<object>(
+    const batching: { readonly batchSize: number; readonly burstWhenBatchFull?: boolean; readonly localConcurrency?: number } =
+      options.concurrency === undefined
+        ? { batchSize: BATCH_SIZE, burstWhenBatchFull: true }
+        : { batchSize: 1, localConcurrency: options.concurrency };
+    await this.#boss.work(
       queue,
       {
         pollingIntervalSeconds: this.#pollingIntervalSeconds,
-        ...(options.concurrency === undefined
-          ? { batchSize: BATCH_SIZE, burstWhenBatchFull: true }
-          : { batchSize: 1, localConcurrency: options.concurrency }),
+        ...batching,
         perJobResults: true,
+        // For each job's retry limit, to tell the last try.
+        includeMetadata: true,
       },
       async (jobs) => {
         const results: { id: string; status: 'completed' | 'failed'; output?: object }[] = [];
         for (const job of jobs) {
+          // Every job this queue sends or publishes carries an object.
+          const data = job.data as object;
+          const last = job.retryCount >= job.retryLimit;
           try {
-            await handler({ id: job.id, data: job.data });
+            await handler({ id: job.id, data }, { last });
             results.push({ id: job.id, status: 'completed' });
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Job failed';
-            if (error instanceof UnrecoverableJobError && (await this.#deadLetter(queue, job.id, job.data))) {
+            const unrecoverable = error instanceof UnrecoverableJobError;
+            this.#report({ queue, jobId: job.id, error, last: last || unrecoverable });
+            if (unrecoverable && (await this.#deadLetter(queue, job.id, data))) {
               results.push({ id: job.id, status: 'completed', output: { deadLettered: message } });
             } else {
               results.push({ id: job.id, status: 'failed', output: { message } });
@@ -98,6 +116,15 @@ export class PgBossJobQueue implements JobQueue {
         return results;
       },
     );
+  }
+
+  /** Reports a failed try. A report that fails itself never changes the job's outcome. */
+  #report(failure: FailedAttempt): void {
+    try {
+      this.#onJobFailed(failure);
+    } catch {
+      // Nothing more can be done: the failure is still kept in the job's row.
+    }
   }
 
   /**

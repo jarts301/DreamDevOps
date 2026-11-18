@@ -2,7 +2,6 @@ import type { Registration } from '@dreamdevops/contracts/agent/protocol';
 import type { TargetAuthentication } from '@dreamdevops/contracts/environments/services';
 import { TargetConnected, TargetLost } from '@dreamdevops/contracts/environments/events';
 import { type CompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import {
   ACCESS_TOKEN_MINUTES,
   assertionTarget,
@@ -17,9 +16,9 @@ import {
   verifyAssertion,
   verifyTelemetryToken,
 } from '../domain/agent-identity.ts';
-import { acceptedImageKinds, type EnvironmentKind } from '../domain/environment.ts';
+import { acceptedImageKinds } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
-import type { TargetStatus } from '@dreamdevops/contracts/environments/http';
+import type { EnvironmentsSession, EnvironmentsStore, StoredEnvironment, StoredTarget } from './ports.ts';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 
@@ -35,37 +34,17 @@ export interface TargetAgentsOptions {
 // What the agent registers with is the agent protocol, kept in the contracts.
 export type { Registration } from '@dreamdevops/contracts/agent/protocol';
 
-interface TargetRow {
-  id: string;
-  environment_id: string;
-  status: TargetStatus;
-  registration_token_hash: string | null;
-  registration_expires_at: Date | null;
-  public_key: string | null;
-  access_token_hash: string | null;
-  access_token_expires_at: Date | null;
-}
-
-interface EnvironmentRow {
-  id: string;
-  name: string;
-  slug: string;
-  kind: EnvironmentKind;
-  accepts_feature_images: boolean;
-  status: string;
-}
-
 /**
  * What agents in targets call. Agents have no session: a registration token proves the
  * first call, a signed assertion with the agent's own key proves each token request, and
  * a short-lived access token proves the rest.
  */
 export class TargetAgents implements TargetAuthentication {
-  readonly #database: TenantDatabase;
+  readonly #store: EnvironmentsStore;
   readonly #options: TargetAgentsOptions;
 
-  constructor(database: TenantDatabase, options: TargetAgentsOptions) {
-    this.#database = database;
+  constructor(store: EnvironmentsStore, options: TargetAgentsOptions) {
+    this.#store = store;
     this.#options = options;
   }
 
@@ -91,30 +70,23 @@ export class TargetAgents implements TargetAuthentication {
     const companyId = await this.#companyOf(token.targetId, refused);
 
     return runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
-        const target = await lockTarget(tx, token.targetId);
+      this.#store.transaction(async (session) => {
+        const target = await session.findTarget(token.targetId, { lock: true });
         if (
           target === null ||
           target.status !== 'pending' ||
-          target.registration_expires_at === null ||
-          target.registration_expires_at.getTime() < Date.now() ||
-          !secretMatches(token.secret, target.registration_token_hash)
+          target.registrationExpiresAt === null ||
+          target.registrationExpiresAt.getTime() < Date.now() ||
+          !secretMatches(token.secret, target.registrationTokenHash)
         ) {
           throw refused();
         }
-        const environment = await findEnvironment(tx, target.environment_id);
+        const environment = await environmentOf(session, target);
         if (environment.status !== 'active') {
           throw refused();
         }
-        await tx.query(
-          `UPDATE environments.targets
-           SET status = 'connected', registration_token_hash = NULL, registration_expires_at = NULL,
-               public_key = $2, agent_version = $3, kubernetes_version = $4,
-               registered_at = now(), last_seen_at = now(), updated_at = now()
-           WHERE id = $1`,
-          [target.id, publicKey, agentVersion, kubernetesVersion],
-        );
-        await appendToOutbox(tx, [
+        await session.completeRegistration(target.id, { publicKey, agentVersion, kubernetesVersion });
+        await session.record([
           TargetConnected.create({
             companyId,
             actorId: null,
@@ -138,7 +110,7 @@ export class TargetAgents implements TargetAuthentication {
             kind: environment.kind,
             acceptedImages: acceptedImageKinds({
               kind: environment.kind,
-              acceptsFeatureImages: environment.accepts_feature_images,
+              acceptsFeatureImages: environment.acceptsFeatureImages,
             }),
           },
         };
@@ -156,29 +128,18 @@ export class TargetAgents implements TargetAuthentication {
     const companyId = await this.#companyOf(targetId, refused);
 
     return runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
-        const target = await lockTarget(tx, targetId);
-        if (target === null || target.public_key === null || (target.status !== 'connected' && target.status !== 'lost')) {
+      this.#store.transaction(async (session) => {
+        const target = await session.findTarget(targetId, { lock: true });
+        if (target === null || target.publicKey === null || (target.status !== 'connected' && target.status !== 'lost')) {
           throw refused();
         }
-        const assertion = verifyAssertion(assertionValue, target.public_key, this.tokenUrl);
-        await tx.query('DELETE FROM environments.used_assertions WHERE target_id = $1 AND expires_at < now()', [target.id]);
-        const { rowCount } = await tx.query(
-          `INSERT INTO environments.used_assertions (target_id, company_id, assertion_id, expires_at)
-           VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-          [target.id, companyId, assertion.assertionId, assertion.expiresAt],
-        );
-        if (rowCount === 0) {
+        const assertion = verifyAssertion(assertionValue, target.publicKey, this.tokenUrl);
+        if (!(await session.useAssertion(target.id, assertion))) {
           throw refused();
         }
         const { token, hash } = newToken(target.id);
-        await tx.query(
-          `UPDATE environments.targets
-           SET access_token_hash = $2, access_token_expires_at = now() + make_interval(mins => $3), updated_at = now()
-           WHERE id = $1`,
-          [target.id, hash, ACCESS_TOKEN_MINUTES],
-        );
-        await this.#seen(tx, companyId, target);
+        await session.setAccessToken(target.id, hash, ACCESS_TOKEN_MINUTES);
+        await this.#seen(session, companyId, target);
         return { accessToken: token, expiresIn: ACCESS_TOKEN_MINUTES * 60 };
       }),
     );
@@ -194,26 +155,11 @@ export class TargetAgents implements TargetAuthentication {
       throw refused();
     }
     const companyId = await this.#companyOf(token.targetId, refused);
-    const target = await runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<TargetRow>(
-          `SELECT id, environment_id, status, access_token_hash, access_token_expires_at
-           FROM environments.targets WHERE id = $1`,
-          [token.targetId],
-        );
-        return rows[0] ?? null;
-      }),
-    );
-    if (
-      target === null ||
-      (target.status !== 'connected' && target.status !== 'lost') ||
-      target.access_token_expires_at === null ||
-      target.access_token_expires_at.getTime() < Date.now() ||
-      !secretMatches(token.secret, target.access_token_hash)
-    ) {
+    const target = await runWithCompany(companyId, () => this.#store.transaction((session) => session.findTarget(token.targetId)));
+    if (target === null || !hasValidAccessToken(target, token.secret)) {
       throw refused();
     }
-    return { companyId, targetId: target.id, environmentId: target.environment_id };
+    return { companyId, targetId: target.id, environmentId: target.environmentId };
   }
 
   /** A token the target's collector sends its telemetry with. */
@@ -232,19 +178,11 @@ export class TargetAgents implements TargetAuthentication {
       throw refused();
     }
     const companyId = await this.#companyOf(targetId, refused);
-    const target = await runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ environment_id: string; status: TargetStatus }>(
-          'SELECT environment_id, status FROM environments.targets WHERE id = $1',
-          [targetId],
-        );
-        return rows[0] ?? null;
-      }),
-    );
+    const target = await runWithCompany(companyId, () => this.#store.transaction((session) => session.findTarget(targetId)));
     if (target === null || (target.status !== 'connected' && target.status !== 'lost')) {
       throw refused();
     }
-    return { companyId, targetId, environmentId: target.environment_id };
+    return { companyId, targetId, environmentId: target.environmentId };
   }
 
   /** The agent reports in. A lost target that reports in is connected again. */
@@ -262,25 +200,14 @@ export class TargetAgents implements TargetAuthentication {
     const companyId = await this.#companyOf(token.targetId, refused);
 
     return runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
-        const target = await lockTarget(tx, token.targetId);
-        if (
-          target === null ||
-          (target.status !== 'connected' && target.status !== 'lost') ||
-          target.access_token_expires_at === null ||
-          target.access_token_expires_at.getTime() < Date.now() ||
-          !secretMatches(token.secret, target.access_token_hash)
-        ) {
+      this.#store.transaction(async (session) => {
+        const target = await session.findTarget(token.targetId, { lock: true });
+        if (target === null || !hasValidAccessToken(target, token.secret)) {
           throw refused();
         }
-        await tx.query(
-          `UPDATE environments.targets
-           SET agent_version = coalesce($2, agent_version), kubernetes_version = coalesce($3, kubernetes_version)
-           WHERE id = $1`,
-          [target.id, agentVersion, kubernetesVersion],
-        );
-        await this.#seen(tx, companyId, target);
-        return { heartbeatSeconds: HEARTBEAT_SECONDS, companyId, targetId: target.id, environmentId: target.environment_id };
+        await session.updateVersions(target.id, { agentVersion, kubernetesVersion });
+        await this.#seen(session, companyId, target);
+        return { heartbeatSeconds: HEARTBEAT_SECONDS, companyId, targetId: target.id, environmentId: target.environmentId };
       }),
     );
   }
@@ -288,30 +215,17 @@ export class TargetAgents implements TargetAuthentication {
   /** Marks connected targets that stopped reporting as lost, in every company. */
   async markSilentTargetsLost(now = new Date()): Promise<void> {
     const cutoff = new Date(now.getTime() - this.#options.lostAfterSeconds * 1000);
-    const silent = await runWithCompany(NO_COMPANY, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ target_id: string; company_id: string }>(
-          'SELECT * FROM environments.silent_targets($1)',
-          [cutoff],
-        );
-        return rows;
-      }),
-    );
-    for (const { target_id: targetId, company_id: company } of silent) {
+    const silent = await runWithCompany(NO_COMPANY, () => this.#store.transaction((session) => session.silentTargets(cutoff)));
+    for (const { targetId, companyId: company } of silent) {
       const companyId = parseCompanyId(company);
       await runWithCompany(companyId, () =>
-        this.#database.transaction(async (tx) => {
-          const { rows } = await tx.query<{ environment_id: string; last_seen_at: Date }>(
-            `UPDATE environments.targets SET status = 'lost', updated_at = now()
-             WHERE id = $1 AND status = 'connected' AND last_seen_at < $2
-             RETURNING environment_id, last_seen_at`,
-            [targetId, cutoff],
-          );
-          if (rows[0] === undefined) {
+        this.#store.transaction(async (session) => {
+          const lost = await session.markLostIfSilent(targetId, cutoff);
+          if (lost === null) {
             return;
           }
-          const environment = await findEnvironment(tx, rows[0].environment_id);
-          await appendToOutbox(tx, [
+          const environment = (await session.findEnvironment(lost.environmentId))!;
+          await session.record([
             TargetLost.create({
               companyId,
               actorId: null,
@@ -319,7 +233,7 @@ export class TargetAgents implements TargetAuthentication {
                 environmentId: environment.id,
                 environmentName: environment.name,
                 targetId,
-                lastSeenAt: rows[0].last_seen_at.toISOString(),
+                lastSeenAt: lost.lastSeenAt.toISOString(),
               },
             }),
           ]);
@@ -328,14 +242,11 @@ export class TargetAgents implements TargetAuthentication {
     }
   }
 
-  async #seen(tx: TenantTransaction, companyId: CompanyId, target: TargetRow): Promise<void> {
-    await tx.query(
-      `UPDATE environments.targets SET status = 'connected', last_seen_at = now(), updated_at = now() WHERE id = $1`,
-      [target.id],
-    );
+  async #seen(session: EnvironmentsSession, companyId: CompanyId, target: StoredTarget): Promise<void> {
+    await session.markSeen(target.id);
     if (target.status === 'lost') {
-      const environment = await findEnvironment(tx, target.environment_id);
-      await appendToOutbox(tx, [
+      const environment = await environmentOf(session, target);
+      await session.record([
         TargetConnected.create({
           companyId,
           actorId: null,
@@ -343,7 +254,7 @@ export class TargetAgents implements TargetAuthentication {
             environmentId: environment.id,
             environmentName: environment.name,
             targetId: target.id,
-            keyFingerprint: keyFingerprint(target.public_key!),
+            keyFingerprint: keyFingerprint(target.publicKey!),
             reconnected: true,
           },
         }),
@@ -353,14 +264,7 @@ export class TargetAgents implements TargetAuthentication {
 
   /** Finds a target's company without a company context. Unknown targets get the same refusal as bad tokens. */
   async #companyOf(targetId: string, refused: () => Error): Promise<CompanyId> {
-    const company = await runWithCompany(NO_COMPANY, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ target_company: string | null }>('SELECT environments.target_company($1)', [
-          targetId,
-        ]);
-        return rows[0]?.target_company ?? null;
-      }),
-    );
+    const company = await runWithCompany(NO_COMPANY, () => this.#store.transaction((session) => session.companyOfTarget(targetId)));
     if (company === null) {
       throw refused();
     }
@@ -368,20 +272,17 @@ export class TargetAgents implements TargetAuthentication {
   }
 }
 
-async function lockTarget(tx: TenantTransaction, id: string): Promise<TargetRow | null> {
-  const { rows } = await tx.query<TargetRow>(
-    `SELECT id, environment_id, status, registration_token_hash, registration_expires_at, public_key,
-            access_token_hash, access_token_expires_at
-     FROM environments.targets WHERE id = $1 FOR UPDATE`,
-    [id],
+/** Whether a connected, or lost, target's agent holds this access token, still valid. */
+function hasValidAccessToken(target: StoredTarget, secret: string): boolean {
+  return (
+    (target.status === 'connected' || target.status === 'lost') &&
+    target.accessTokenExpiresAt !== null &&
+    target.accessTokenExpiresAt.getTime() >= Date.now() &&
+    secretMatches(secret, target.accessTokenHash)
   );
-  return rows[0] ?? null;
 }
 
-async function findEnvironment(tx: TenantTransaction, id: string): Promise<EnvironmentRow> {
-  const { rows } = await tx.query<EnvironmentRow>(
-    'SELECT id, name, slug, kind, accepts_feature_images, status FROM environments.environments WHERE id = $1',
-    [id],
-  );
-  return rows[0]!;
+/** A target's environment, which always exists while the target does. */
+async function environmentOf(session: EnvironmentsSession, target: StoredTarget): Promise<StoredEnvironment> {
+  return (await session.findEnvironment(target.environmentId))!;
 }

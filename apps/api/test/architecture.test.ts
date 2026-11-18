@@ -107,24 +107,17 @@ const MIGRATION_OWNERS: Readonly<Record<string, string>> = {
   '0026': 'tenancy',
   '0027': 'audit',
   '0028': 'alerts',
+  '0029': 'builds',
 };
 
 /**
  * Known exceptions, each with its reason. The list should only ever shrink.
  */
 const EXCEPTIONS = {
-  /** Application code that uses NestJS's Logger, which is harmless but ties it to the framework. */
-  frameworkInApplication: [
-    'builds/application/builds.ts',
-    'editions/application/entitlements.ts',
-    'notifications/application/invitation-emails.ts',
-  ],
   /** Pure libraries the domain may use. They do no I/O and tie it to no framework. */
   librariesInDomain: [] as string[],
   /** Pure libraries application code may use, besides the shared kernel and Node. */
   librariesInApplication: ['yaml'],
-  /** Application code that names the database driver's types, rather than going through a port. */
-  databaseInApplication: ['audit/application/audit-log.ts', 'identity-access/application/company-access.service.ts'],
   /**
    * Contexts that call each other, in a circle, through the services they publish, so none
    * of them can run without the others. Each group is one cycle's members. Identity and
@@ -257,29 +250,6 @@ describe('the architecture', () => {
     expect(violations).toEqual([]);
   });
 
-  it('keeps application code from depending on adapters, controllers or the web framework', () => {
-    const violations = imports.flatMap(({ from, target, relative: isRelative }) => {
-      const source = locate(from);
-      if (source?.layer !== 'application') {
-        return [];
-      }
-      if (!isRelative) {
-        const allowed =
-          target.startsWith('node:') ||
-          target.startsWith('@dreamdevops/shared-kernel') ||
-          target.startsWith('@dreamdevops/contracts/') ||
-          EXCEPTIONS.librariesInApplication.includes(target) ||
-          (target === '@nestjs/common' && EXCEPTIONS.frameworkInApplication.includes(from)) ||
-          (target === 'pg' && EXCEPTIONS.databaseInApplication.includes(from));
-        return allowed ? [] : [`${from} -> ${target}`];
-      }
-      const destination = locate(target);
-      const adapter = destination !== null && ['infrastructure', 'http', 'messaging', 'module'].includes(destination.layer);
-      return adapter ? [`${from} -> ${target}`] : [];
-    });
-    expect(violations).toEqual([]);
-  });
-
   it('lets each context read and write only its own tables', () => {
     const violations = files.flatMap(({ path, text }) => {
       const location = locate(path);
@@ -387,6 +357,101 @@ describe('the architecture', () => {
       return others.length === 0 ? [] : [`${name.slice(0, 4)} (${owner}) uses ${others.join(', ')}`];
     });
     expect(couplings).toEqual(EXCEPTIONS.crossSchemaMigrations);
+  });
+});
+
+/**
+ * Inside each context, each layer has one job. The domain holds the rules; application
+ * code runs the use cases, through ports; infrastructure adapts ports to outside tools,
+ * such as PostgreSQL; controllers carry HTTP and subscribers carry events and jobs, each
+ * to the context's own use cases; the Nest module puts them together.
+ */
+describe('the layers inside each context', () => {
+  const inLayer = (path: string, ...layers: string[]) => layers.includes(locate(path)?.layer ?? '');
+  /** What talks to the database: the shared kernel's PostgreSQL building blocks and the driver. */
+  const isDatabase = (target: string) => target === '@dreamdevops/shared-kernel/postgres' || target === 'pg';
+  /** SQL, as code that talks to PostgreSQL writes it. */
+  const SQL = /['"`]\s*(?:SELECT\s[\s\S]*?\sFROM\s|INSERT\s+INTO\s|UPDATE\s+[a-z_]+\.[a-z_]+\s+SET\s|DELETE\s+FROM\s)/i;
+
+  it('keeps the database in adapters and modules, so only they know how data is kept', () => {
+    const violations = imports
+      .filter(({ from, target }) => isDatabase(target) && locate(from) !== null && !inLayer(from, 'infrastructure', 'module'))
+      .map(({ from, target }) => `${from} -> ${target}`);
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps SQL out of the domain, the use cases, the controllers and the subscribers', () => {
+    const violations = files
+      .filter(({ path }) => inLayer(path, 'domain', 'application', 'http', 'messaging'))
+      .filter(({ text }) => SQL.test(text))
+      .map(({ path }) => path);
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps use cases free of adapters, controllers, subscribers and the web framework', () => {
+    const violations = imports.flatMap(({ from, target, relative: isRelative }) => {
+      if (!inLayer(from, 'application')) {
+        return [];
+      }
+      if (!isRelative) {
+        const allowed =
+          target.startsWith('node:') ||
+          target === '@dreamdevops/shared-kernel' ||
+          target.startsWith('@dreamdevops/contracts/') ||
+          EXCEPTIONS.librariesInApplication.includes(target);
+        return allowed ? [] : [`${from} -> ${target}`];
+      }
+      return inLayer(target, 'infrastructure', 'http', 'messaging', 'module') ? [`${from} -> ${target}`] : [];
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps controllers and subscribers to carrying requests and events to their own use cases', () => {
+    const violations = imports.flatMap(({ from, target, relative: isRelative }) => {
+      const source = locate(from);
+      if (source === null || !inLayer(from, 'http', 'messaging')) {
+        return [];
+      }
+      if (!isRelative) {
+        // Another context's services are its use cases' business, never a controller's.
+        const service = /^@dreamdevops\/contracts\/[a-z-]+\/services$/.test(target);
+        return service || isDatabase(target) ? [`${from} -> ${target}`] : [];
+      }
+      const destination = locate(target);
+      if (destination === null) {
+        return [];
+      }
+      const own = destination.context === source.context && ['application', 'domain'].includes(destination.layer);
+      const sameLayer = destination.context === source.context && destination.layer === source.layer;
+      return own || sameLayer ? [] : [`${from} -> ${target}`];
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps adapters from reaching back into controllers, subscribers or the module', () => {
+    const violations = imports
+      .filter(({ from, target, relative: isRelative }) => isRelative && inLayer(from, 'infrastructure') && inLayer(target, 'http', 'messaging', 'module'))
+      .map(({ from, target }) => `${from} -> ${target}`);
+
+    expect(violations).toEqual([]);
+  });
+
+  it('gives each context that keeps data a store, which its use cases reach through a port', () => {
+    const withData = Object.entries(CONTEXTS)
+      .filter(([, context]) => context.schemas.length > 0)
+      .map(([name]) => name);
+    const missing = withData.filter((context) => {
+      const port = files.find(({ path }) => path === `${context}/application/ports.ts`);
+      const adapter = files.some(({ path, text }) => path.startsWith(`${context}/infrastructure/`) && text.includes('@dreamdevops/shared-kernel/postgres'));
+      return port === undefined || !/export const [A-Z_]+_STORE = Symbol/.test(port.text) || !adapter;
+    });
+
+    expect(withData.length).toBeGreaterThan(10);
+    expect(missing).toEqual([]);
   });
 });
 

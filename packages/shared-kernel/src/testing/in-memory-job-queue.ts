@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   deadLetterQueueName,
+  type FailedAttempt,
   type Job,
   type JobHandler,
   type JobQueue,
@@ -23,6 +24,11 @@ export class InMemoryJobQueue implements JobQueue {
   /** Exclusive queues, and how many of their jobs are waiting or running. */
   readonly #active = new Map<string, number>();
   #pending: Promise<void> = Promise.resolve();
+  readonly #onJobFailed: (failure: FailedAttempt) => void;
+
+  constructor(options: { readonly onJobFailed?: (failure: FailedAttempt) => void } = {}) {
+    this.#onJobFailed = options.onJobFailed ?? (() => {});
+  }
 
   async createQueue(queue: string, options: QueueOptions = {}): Promise<void> {
     this.#retryLimits.set(queue, options.retryLimit ?? 3);
@@ -121,12 +127,15 @@ export class InMemoryJobQueue implements JobQueue {
     }
     const attempts = (this.#retryLimits.get(queue) ?? 0) + 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const last = attempt === attempts - 1;
       try {
-        await handler(job);
+        await handler(job, { last });
         return;
       } catch (error) {
         // The job runs again until its attempts are used up, unless trying again can't help.
-        if (error instanceof UnrecoverableJobError) {
+        const unrecoverable = error instanceof UnrecoverableJobError;
+        this.#onJobFailed({ queue, jobId: job.id, error, last: last || unrecoverable });
+        if (unrecoverable) {
           break;
         }
       }

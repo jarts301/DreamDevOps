@@ -60,7 +60,9 @@ Every route must declare who can call it, with one of these decorators. A route 
 @RequirePermissions('releases:start')      // Signed-in users with every listed permission
 ```
 
-Each request runs in the signed-in user's company, which comes only from the server-side session. Use `TenantDatabase` for company data, and row-level security limits it to that company. If a user with no company calls such a route, the answer is 403.
+Each request runs in the signed-in user's company, which comes only from the server-side session. Company data is reached through the context's store, whose PostgreSQL adapter uses `TenantDatabase`, and row-level security limits it to that company. If a user with no company calls such a route, the answer is 403.
+
+A controller only carries the request to its context's own use case, and the answer back: the use case, in `application/`, decides, and the store, in `infrastructure/`, holds the SQL. The [architecture guide](../../ARCHITECTURE.md#inside-a-context) says what each folder may do, and the architecture test checks it.
 
 A route answers with a type from its context's `http.ts` in the [contracts](../../packages/contracts/README.md), never a bare `object`, so the dashboard and the API agree on every answer. Type its body as `Unchecked<Request>`, with the request's type from the same file: every field may be missing or wrong until the route's service checks it, and the names stay the ones the dashboard sends.
 
@@ -100,7 +102,7 @@ The API also runs the outbox relay and the job queue, which deliver saved events
 
 Which module gets which event is kept in the job queue's tables, so every API instance's relay reaches every module, wherever it subscribed. Recurring work, such as failing builds and rollouts that stopped, marking silent targets as lost, catching up on releases and cleaning the outbox, runs on schedules every instance shares, so each run happens once, wherever. An event a module can't read, because it lacks a field, goes straight to its queue's dead letter queue.
 
-Each queue's worker takes up to 10 jobs at a time and keeps going while a backlog remains. Each job succeeds or fails on its own, so one failure never repeats the jobs beside it.
+Each queue's worker takes up to 10 jobs at a time and keeps going while a backlog remains. Each job succeeds or fails on its own, so one failure never repeats the jobs beside it. Every failed try is logged, as a warning while it will be tried again, and as an error on the last try, so a background failure is never silent.
 
 ## Tests
 

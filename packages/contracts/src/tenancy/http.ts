@@ -15,6 +15,21 @@ export interface CompanySummary {
   readonly provisioningError: string | null;
 }
 
+/** Creates a company, and invites its first admin. */
+export interface CreateCompany {
+  readonly name: string;
+  readonly firstAdminEmail: string;
+}
+
+export interface RenameCompany {
+  readonly name: string;
+}
+
+/** Invites a company's first admin again, such as when the first invitation was lost. */
+export interface InviteFirstAdmin {
+  readonly email: string;
+}
+
 /** A company just made, with the invitation for its first admin. */
 export interface CreatedCompany {
   readonly company: CompanySummary;

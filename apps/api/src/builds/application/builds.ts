@@ -3,22 +3,27 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { Logger } from '@nestjs/common';
 import { BuildFailed, BuildRequested, BuildSucceeded, FeatureImageDeleted } from '@dreamdevops/contracts/builds/events';
 import type { BuildView, PublicSigningKey, SbomDocument } from '@dreamdevops/contracts/builds/http';
 import type { BuildRequest, BuildRequests, DeployableImages } from '@dreamdevops/contracts/builds/services';
 import {
+  type Attempt,
   type CompanyId,
   currentCompanyId,
+  describeError,
+  type Logger,
   parseCompanyId,
   runWithCompany,
 } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
-import { type RepositoryGit, type RepositoryLookup, TESTS_CHECK } from '@dreamdevops/contracts/source-governance/services';
 import {
-  type BuildKind,
+  type RepositoryGit,
+  type RepositoryLookup,
+  type RepositorySpec,
+  TESTS_CHECK,
+} from '@dreamdevops/contracts/source-governance/services';
+import {
   buildProgress,
   type BuildStatus,
   checkTag,
@@ -26,6 +31,7 @@ import {
   evaluate,
   featureTag,
   PIPELINE_JOBS,
+  pipelineHasReported,
   type PipelineJob,
   type Reports,
   signingPurposeFor,
@@ -36,7 +42,7 @@ import { signaturePayload, signatureTag, signPayload, verifyPayload } from '../d
 import { BuildError } from '../domain/errors.ts';
 import { checkImage, checkRepositoryFiles, checkStoredSignature, failedChecksReason, type PlatformChecks } from '../domain/image-rules.ts';
 import { failed } from '../domain/checks.ts';
-import type { ImageRegistry, PipelineHost } from './ports.ts';
+import type { BuildsSession, BuildsStore, ImageRegistry, PipelineHost, StoredBuild } from './ports.ts';
 import type { SigningKeys } from './signing-keys.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -77,32 +83,14 @@ export type ReportKind = 'secrets' | 'tests' | 'scan' | 'sbom' | 'failure' | 'bu
 // What a build is asked for is Builds' published language, kept in its contracts.
 export type { BuildRequest } from '@dreamdevops/contracts/builds/services';
 
-interface BuildRow {
-  id: string;
-  application_id: string;
-  kind: BuildKind;
-  branch: string | null;
-  commit_sha: string;
-  image_tag: string;
-  version: string | null;
-  release_id: string | null;
-  status: BuildStatus;
-  failure_reason: string | null;
-  reports: Reports;
-  image_ref: string | null;
-  digest: string | null;
-  signing_key: 'test' | 'release' | null;
-  token_hash: string | null;
-  token_expires_at: Date | null;
-  created_at: Date;
-  finished_at: Date | null;
-}
-
 export interface BuildsOptions {
   /** Where pipeline jobs reach the API. */
   readonly toolsApiUrl: string;
   readonly workDir: string;
+  /** Builds that haven't finished by then, from when they were asked for, fail. */
   readonly timeoutMinutes: number;
+  /** Builds none of whose pipeline's jobs has said anything by then, from when it started, fail. */
+  readonly startTimeoutMinutes: number;
   /** The platform's workflows by file name, kept in each company's pipeline repository. */
   readonly pipelines: Readonly<Record<'build.yaml' | 'check.yaml', string>>;
 }
@@ -113,8 +101,7 @@ export interface BuildsOptions {
  * build passed.
  */
 export class Builds implements BuildRequests, DeployableImages {
-  readonly #logger = new Logger(Builds.name);
-  readonly #database: TenantDatabase;
+  readonly #store: BuildsStore;
   readonly #catalog: ApplicationDirectory;
   readonly #repositories: RepositoryLookup;
   readonly #source: RepositoryGit;
@@ -122,9 +109,10 @@ export class Builds implements BuildRequests, DeployableImages {
   readonly #pipelines: PipelineHost;
   readonly #keys: SigningKeys;
   readonly #options: BuildsOptions;
+  readonly #logger: Logger;
 
   constructor(
-    database: TenantDatabase,
+    store: BuildsStore,
     catalog: ApplicationDirectory,
     repositories: RepositoryLookup,
     source: RepositoryGit,
@@ -132,8 +120,9 @@ export class Builds implements BuildRequests, DeployableImages {
     pipelines: PipelineHost,
     keys: SigningKeys,
     options: BuildsOptions,
+    logger: Logger,
   ) {
-    this.#database = database;
+    this.#store = store;
     this.#catalog = catalog;
     this.#repositories = repositories;
     this.#source = source;
@@ -141,6 +130,12 @@ export class Builds implements BuildRequests, DeployableImages {
     this.#pipelines = pipelines;
     this.#keys = keys;
     this.#options = options;
+    this.#logger = logger;
+  }
+
+  /** The branches of an application's repository, to build feature images from. */
+  branches(applicationIdValue: unknown): Promise<string[]> {
+    return this.#repositories.branches(applicationIdValue);
   }
 
   /** A developer builds a test image from the newest commit of a feature branch. */
@@ -229,37 +224,26 @@ export class Builds implements BuildRequests, DeployableImages {
    * reused, so repeated events don't build twice.
    */
   request(input: BuildRequest): Promise<string> {
-    return this.#database.transaction(async (tx) => {
-      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('builds:' || $1, 0))", [input.applicationId]);
-      const { rows } = await tx.query<{ id: string }>(
-        `SELECT id FROM builds.builds
-         WHERE application_id = $1 AND image_tag = $2 AND status IN ('queued', 'running', 'succeeded')`,
-        [input.applicationId, input.tag],
-      );
-      if (rows[0] !== undefined) {
-        return rows[0].id;
+    return this.#store.transaction(async (session) => {
+      await session.lockApplication(input.applicationId);
+      const reusable = await session.reusableBuild(input.applicationId, input.tag);
+      if (reusable !== null) {
+        return reusable;
       }
       const id = randomUUID();
-      await tx.query(
-        `INSERT INTO builds.builds
-           (id, company_id, application_id, kind, branch, commit_sha, image_tag, version, release_id,
-            status, signing_key, requested_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'queued', $10, $11)`,
-        [
-          id,
-          currentCompanyId(),
-          input.applicationId,
-          input.kind,
-          input.branch,
-          input.commit,
-          input.tag,
-          input.version,
-          input.releaseId,
-          input.kind === 'check' ? null : signingPurposeFor(input.kind),
-          input.actorId,
-        ],
-      );
-      await appendToOutbox(tx, [
+      await session.add({
+        id,
+        applicationId: input.applicationId,
+        kind: input.kind,
+        branch: input.branch,
+        commit: input.commit,
+        tag: input.tag,
+        version: input.version,
+        releaseId: input.releaseId,
+        signingKey: input.kind === 'check' ? null : signingPurposeFor(input.kind),
+        requestedBy: input.actorId,
+      });
+      await session.record([
         BuildRequested.create({
           companyId: currentCompanyId(),
           actorId: input.actorId,
@@ -278,50 +262,39 @@ export class Builds implements BuildRequests, DeployableImages {
     });
   }
 
-  /** Starts the pipeline for a requested build. Runs in the build's company. */
-  async start(buildId: string): Promise<void> {
-    const build = await this.#database.transaction((tx) => findBuild(tx, buildId));
-    if (build === null || build.status !== 'queued') {
+  /**
+   * Starts the pipeline for a requested build. Runs in the build's company.
+   *
+   * Until its pipeline runs, a build waits, and nothing else moves it on. So a failure
+   * before then, such as the Git service being down, is thrown for the event to come again,
+   * and the last try fails the build with the reason instead, so it never waits for a
+   * pipeline that isn't coming.
+   */
+  async start(buildId: string, attempt: Attempt = { last: true }): Promise<void> {
+    let ready: { readonly build: StoredBuild; readonly spec: RepositorySpec } | null;
+    try {
+      ready = await this.#prepareStart(buildId);
+    } catch (error) {
+      if (!attempt.last) {
+        throw error;
+      }
+      await this.#cannotStart(buildId, error);
       return;
     }
-    const spec = await this.#repositories.locate(build.application_id);
-    if (spec === null) {
-      await this.#fail(buildId, "The application's repository isn't ready.");
+    if (ready === null) {
       return;
     }
-    // The platform checks the Dockerfile itself, at the exact commit, before any job runs.
-    const [dockerfile, dockerignore] = await Promise.all([
-      this.#source.readFile(spec, build.commit_sha, 'Dockerfile'),
-      this.#source.readFile(spec, build.commit_sha, '.dockerignore'),
-    ]);
-    const rules = checkRepositoryFiles(dockerfile?.toString('utf8') ?? null, dockerignore !== null);
-    await this.#database.transaction((tx) =>
-      tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
-        buildId,
-        JSON.stringify({ dockerfile: rules }),
-      ]),
-    );
-    const broken = failedChecksReason('The Dockerfile breaks a platform rule', rules.checks);
-    if (broken !== null) {
-      await this.#fail(buildId, broken);
-      return;
-    }
+    const { build, spec } = ready;
     const token = randomBytes(32).toString('base64url');
-    await this.#pipelines.ensurePipeline(spec.organization, this.#options.pipelines);
     // Only the start that moves the build from queued to running starts its pipeline. An
     // event can arrive twice, and then the other one finds it taken and does nothing.
-    const claimed = await this.#database.transaction(async (tx) => {
-      const { rowCount } = await tx.query(
-        `UPDATE builds.builds
-         SET status = 'running', token_hash = $2, token_expires_at = now() + make_interval(mins => $3), updated_at = now()
-         WHERE id = $1 AND status = 'queued'`,
-        [buildId, hashToken(token), this.#options.timeoutMinutes],
-      );
-      return rowCount === 1;
-    });
+    const claimed = await this.#store.transaction((session) =>
+      session.startRunning(buildId, hashToken(token), this.#options.timeoutMinutes),
+    );
     if (!claimed) {
       return;
     }
+    // It runs now, so a later try would find it taken: a run that doesn't start fails it at once.
     try {
       await this.#pipelines.run(spec.organization, build.kind === 'check' ? 'check.yaml' : 'build.yaml', {
         build: buildId,
@@ -329,22 +302,52 @@ export class Builds implements BuildRequests, DeployableImages {
         api: this.#options.toolsApiUrl,
       });
     } catch (error) {
-      await this.#fail(buildId, 'The pipeline could not be started.');
-      throw error;
+      await this.#cannotStart(buildId, error);
     }
+  }
+
+  /**
+   * Checks the Dockerfile, and brings the company's pipeline up to date. Null when there's
+   * nothing to start: the build isn't waiting any more, or it failed a platform rule.
+   */
+  async #prepareStart(buildId: string): Promise<{ readonly build: StoredBuild; readonly spec: RepositorySpec } | null> {
+    const build = await this.#store.transaction((session) => session.find(buildId));
+    if (build === null || build.status !== 'queued') {
+      return null;
+    }
+    const spec = await this.#repositories.locate(build.applicationId);
+    if (spec === null) {
+      await this.#fail(buildId, "The application's repository isn't ready.");
+      return null;
+    }
+    // The platform checks the Dockerfile itself, at the exact commit, before any job runs.
+    const [dockerfile, dockerignore] = await Promise.all([
+      this.#source.readFile(spec, build.commit, 'Dockerfile'),
+      this.#source.readFile(spec, build.commit, '.dockerignore'),
+    ]);
+    const rules = checkRepositoryFiles(dockerfile?.toString('utf8') ?? null, dockerignore !== null);
+    await this.#store.transaction((session) => session.addReports(buildId, { dockerfile: rules }));
+    const broken = failedChecksReason('The Dockerfile breaks a platform rule', rules.checks);
+    if (broken !== null) {
+      await this.#fail(buildId, broken);
+      return null;
+    }
+    await this.#pipelines.ensurePipeline(spec.organization, this.#options.pipelines);
+    return { build, spec };
+  }
+
+  /** Fails a build whose pipeline couldn't be started, with why, so people see it and can try again. */
+  async #cannotStart(buildId: string, error: unknown): Promise<void> {
+    const reason = describeError(error);
+    this.#logger.error(`The pipeline of build ${buildId} could not be started: ${reason}`);
+    await this.#fail(buildId, `The pipeline could not be started: ${reason}`);
   }
 
   // ---- Reads
 
   list(applicationIdValue: unknown): Promise<BuildView[]> {
     const applicationId = parseId(applicationIdValue, 'application');
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<BuildRow>(
-        `SELECT * FROM builds.builds WHERE application_id = $1 ORDER BY created_at DESC LIMIT 100`,
-        [applicationId],
-      );
-      return rows.map(toView);
-    });
+    return this.#store.transaction(async (session) => (await session.list(applicationId, 100)).map(toView));
   }
 
   /** The status of each build, for other modules, such as releases. Unknown IDs are left out. */
@@ -352,13 +355,8 @@ export class Builds implements BuildRequests, DeployableImages {
     if (buildIds.length === 0) {
       return new Map();
     }
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ id: string; status: BuildStatus }>(
-        'SELECT id, status FROM builds.builds WHERE id = ANY($1)',
-        [buildIds],
-      );
-      return new Map(rows.map((row) => [row.id, row.status]));
-    });
+    const builds = await this.#store.transaction((session) => session.many(buildIds));
+    return new Map(builds.map((build) => [build.id, build.status]));
   }
 
   /** Several builds by ID, for other modules, such as deployments. Unknown IDs are left out. */
@@ -366,10 +364,8 @@ export class Builds implements BuildRequests, DeployableImages {
     if (buildIds.length === 0) {
       return new Map();
     }
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<BuildRow>('SELECT * FROM builds.builds WHERE id = ANY($1)', [buildIds]);
-      return new Map(rows.map((row) => [row.id, toView(row)]));
-    });
+    const builds = await this.#store.transaction((session) => session.many(buildIds));
+    return new Map(builds.map((build) => [build.id, toView(build)]));
   }
 
   /**
@@ -378,18 +374,18 @@ export class Builds implements BuildRequests, DeployableImages {
    * as This machine, which check before they pull.
    */
   async checkSignature(buildId: string): Promise<PlatformChecks> {
-    const build = await this.#database.transaction((tx) => findBuild(tx, buildId));
+    const build = await this.#store.transaction((session) => session.find(buildId));
     if (build === null || build.digest === null || build.status !== 'succeeded') {
       return { checks: [failed('The image is signed', 'This version has no signed image.')], facts: [] };
     }
-    const spec = await this.#repositories.locate(build.application_id);
-    const application = await this.#catalog.get(build.application_id);
+    const spec = await this.#repositories.locate(build.applicationId);
+    const application = await this.#catalog.get(build.applicationId);
     if (spec === null) {
       return { checks: [failed('The image is signed', "The application's repository isn't ready.")], facts: [] };
     }
     const repository = `${spec.organization}/${application.slug}`;
     const purpose = signingPurposeFor(build.kind);
-    const publicKey = await this.#database.transaction((tx) => this.#keys.publicKey(tx, purpose));
+    const publicKey = await this.#store.transaction((session) => this.#keys.publicKey(session, purpose));
     return checkStoredSignature(
       signaturePayload(`${this.#registry.imageHost}/${repository}`, build.digest),
       await this.#registry.readSignature(repository, build.digest),
@@ -401,19 +397,12 @@ export class Builds implements BuildRequests, DeployableImages {
   /** The deployable versions: signed images that passed every check. */
   versions(applicationIdValue: unknown): Promise<BuildView[]> {
     const applicationId = parseId(applicationIdValue, 'application');
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<BuildRow>(
-        `SELECT * FROM builds.builds WHERE application_id = $1 AND status = 'succeeded' AND kind <> 'check'
-         ORDER BY created_at DESC LIMIT 200`,
-        [applicationId],
-      );
-      return rows.map(toView);
-    });
+    return this.#store.transaction(async (session) => (await session.versions(applicationId, 200)).map(toView));
   }
 
   async get(buildIdValue: unknown): Promise<BuildView> {
     const buildId = parseId(buildIdValue, 'build');
-    const build = await this.#database.transaction((tx) => findBuild(tx, buildId));
+    const build = await this.#store.transaction((session) => session.find(buildId));
     if (build === null) {
       throw new BuildError('not-found', 'This build does not exist.');
     }
@@ -422,19 +411,15 @@ export class Builds implements BuildRequests, DeployableImages {
 
   async sbom(buildIdValue: unknown): Promise<SbomDocument> {
     const buildId = parseId(buildIdValue, 'build');
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ document: SbomDocument }>('SELECT document FROM builds.sboms WHERE build_id = $1', [
-        buildId,
-      ]);
-      if (rows[0] === undefined) {
-        throw new BuildError('not-found', 'This build has no SBOM.');
-      }
-      return rows[0].document;
-    });
+    const document = await this.#store.transaction((session) => session.sbom(buildId));
+    if (document === null) {
+      throw new BuildError('not-found', 'This build has no SBOM.');
+    }
+    return document;
   }
 
   publicKeys(): Promise<PublicSigningKey[]> {
-    return this.#database.transaction((tx) => this.#keys.publicKeys(tx));
+    return this.#store.transaction((session) => this.#keys.publicKeys(session));
   }
 
   // ---- Pipeline jobs. They have no session; each call proves itself with the build's token.
@@ -442,11 +427,11 @@ export class Builds implements BuildRequests, DeployableImages {
   async source(buildIdValue: unknown, token: string | undefined): Promise<ReadableStream<Uint8Array>> {
     const { companyId, build } = await this.#authorize(buildIdValue, token);
     return runWithCompany(companyId, async () => {
-      const spec = await this.#repositories.locate(build.application_id);
+      const spec = await this.#repositories.locate(build.applicationId);
       if (spec === null) {
         throw new BuildError('not-found', "The application's repository isn't ready.");
       }
-      return this.#source.downloadArchive(spec, build.commit_sha);
+      return this.#source.downloadArchive(spec, build.commit);
     });
   }
 
@@ -466,11 +451,8 @@ export class Builds implements BuildRequests, DeployableImages {
       const first = failedJobs[0];
       const advice = first === undefined ? DEFAULT_JOB_ADVICE : (JOB_ADVICE[first] ?? DEFAULT_JOB_ADVICE);
       await runWithCompany(companyId, async () => {
-        await this.#database.transaction((tx) =>
-          tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
-            build.id,
-            JSON.stringify({ failedJobs: failedJobs.filter((job) => (PIPELINE_JOBS as readonly string[]).includes(job)) }),
-          ]),
+        await this.#store.transaction((session) =>
+          session.addReports(build.id, { failedJobs: failedJobs.filter((job) => (PIPELINE_JOBS as readonly string[]).includes(job)) }),
         );
         await this.#fail(build.id, `The pipeline stopped: the ${failed || 'pipeline'} step failed. ${advice}`);
       });
@@ -502,16 +484,10 @@ export class Builds implements BuildRequests, DeployableImages {
       } catch {
         throw new BuildError('invalid', `The ${kind} report could not be read.`);
       }
-      await this.#database.transaction(async (tx) => {
-        await tx.query(
-          'UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1',
-          [build.id, JSON.stringify(update)],
-        );
+      await this.#store.transaction(async (session) => {
+        await session.addReports(build.id, update);
         if (sbom !== null) {
-          await tx.query(
-            'INSERT INTO builds.sboms (build_id, company_id, document) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-            [build.id, companyId, JSON.stringify(sbom)],
-          );
+          await session.addSbom(build.id, sbom);
         }
       });
       await this.#decide(build.id);
@@ -525,16 +501,7 @@ export class Builds implements BuildRequests, DeployableImages {
     }
     const job = jobValue as PipelineJob;
     const { companyId, build } = await this.#authorize(buildIdValue, token);
-    await runWithCompany(companyId, () =>
-      this.#database.transaction((tx) =>
-        tx.query(
-          `UPDATE builds.builds
-           SET reports = jsonb_set(reports, '{started}', coalesce(reports->'started', '{}'::jsonb) || jsonb_build_object($2::text, now()))
-           WHERE id = $1 AND NOT coalesce(reports->'started' ? $2, false)`,
-          [build.id, job],
-        ),
-      ),
-    );
+    await runWithCompany(companyId, () => this.#store.transaction((session) => session.markJobStarted(build.id, job)));
   }
 
   /**
@@ -609,12 +576,7 @@ export class Builds implements BuildRequests, DeployableImages {
     }
 
     await runWithCompany(companyId, async () => {
-      await this.#database.transaction((tx) =>
-        tx.query('UPDATE builds.builds SET reports = reports || $2::jsonb, updated_at = now() WHERE id = $1', [
-          build.id,
-          JSON.stringify({ inspection }),
-        ]),
-      );
+      await this.#store.transaction((session) => session.addReports(build.id, { inspection }));
       // An image that breaks the rules is never stored, so nothing can deploy it.
       const broken = failedChecksReason('The image breaks a platform rule', inspection.checks);
       if (broken !== null) {
@@ -622,8 +584,8 @@ export class Builds implements BuildRequests, DeployableImages {
         await this.#fail(build.id, broken);
         return;
       }
-      const spec = await this.#repositories.locate(build.application_id);
-      const application = await this.#catalog.get(build.application_id);
+      const spec = await this.#repositories.locate(build.applicationId);
+      const application = await this.#catalog.get(build.applicationId);
       if (spec === null) {
         await this.#fail(build.id, "The application's repository isn't ready.");
         return;
@@ -631,24 +593,14 @@ export class Builds implements BuildRequests, DeployableImages {
       const repository = `${spec.organization}/${application.slug}`;
       let digest: string;
       try {
-        digest = await this.#registry.pushArchive(file, repository, build.image_tag);
+        digest = await this.#registry.pushArchive(file, repository, build.tag);
       } catch (error) {
         this.#logger.error(`Pushing the image of build ${build.id} failed: ${String(error)}`);
         await this.#fail(build.id, 'The image could not be stored in the registry.');
         throw new BuildError('invalid', 'The image could not be stored.');
       }
-      await this.#database.transaction((tx) =>
-        tx.query(
-          `UPDATE builds.builds
-           SET digest = $2, image_ref = $3, reports = reports || $4::jsonb, updated_at = now()
-           WHERE id = $1`,
-          [
-            build.id,
-            digest,
-            `${this.#registry.imageHost}/${repository}:${build.image_tag}`,
-            JSON.stringify({ image: { digest, size } }),
-          ],
-        ),
+      await this.#store.transaction((session) =>
+        session.storeImage(build.id, { digest, ref: `${this.#registry.imageHost}/${repository}:${build.tag}`, size }),
       );
       await this.#decide(build.id);
     });
@@ -669,23 +621,51 @@ export class Builds implements BuildRequests, DeployableImages {
   // ---- Background work
 
   /**
-   * Fails builds that ran past the timeout, such as when a job died without reporting,
-   * and removes uploads nothing will use any more.
+   * Fails builds that ran past the timeout, such as when a job died without reporting, and
+   * builds whose pipeline never got going, and removes uploads nothing will use any more.
    */
   async expireStale(): Promise<void> {
     await this.#removeAbandonedUploads();
-    const stale = await runWithCompany(NO_COMPANY, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ build_id: string; company_id: string }>(
-          "SELECT * FROM builds.stale_builds(now() - make_interval(mins => $1))",
-          [this.#options.timeoutMinutes],
-        );
-        return rows;
-      }),
+    const { stale, unstarted } = await runWithCompany(NO_COMPANY, () =>
+      this.#store.transaction(async (session) => ({
+        stale: await session.stale(this.#options.timeoutMinutes),
+        unstarted: await session.unstarted(this.#options.startTimeoutMinutes),
+      })),
     );
-    for (const { build_id: buildId, company_id: companyId } of stale) {
+    for (const { buildId, companyId } of stale) {
       await runWithCompany(parseCompanyId(companyId), () =>
         this.#fail(buildId, `The build didn't finish within ${this.#options.timeoutMinutes} minutes.`),
+      );
+    }
+    for (const { buildId, companyId } of unstarted) {
+      await runWithCompany(parseCompanyId(companyId), () => this.#failUnstarted(buildId));
+    }
+  }
+
+  /**
+   * Fails a running build none of whose jobs has said anything since its pipeline started,
+   * unless one just did. Its jobs are waiting for a runner that isn't free or isn't there,
+   * or they run but can't reach the platform: either way, waiting longer doesn't help.
+   */
+  async #failUnstarted(buildId: string): Promise<void> {
+    const minutes = this.#options.startTimeoutMinutes;
+    const failed = await this.#store.transaction(async (session) => {
+      const build = await session.find(buildId, { lock: true });
+      if (build === null || build.status !== 'running' || pipelineHasReported(build.reports)) {
+        return false;
+      }
+      await this.#finish(
+        session,
+        build,
+        'failed',
+        `No pipeline job started within ${minutes} minutes: the runners may all be busy or offline, or their jobs can't reach the platform. Try the build again later.`,
+      );
+      return true;
+    });
+    if (failed) {
+      this.#logger.warn(
+        `No job of build ${buildId}'s pipeline reported within ${minutes} minutes, so the build failed. ` +
+          `Check that the CI runners are online and free, and that their jobs can reach the API at ${this.#options.toolsApiUrl}.`,
       );
     }
   }
@@ -693,30 +673,24 @@ export class Builds implements BuildRequests, DeployableImages {
   /** Deletes a deleted branch's feature images, which nothing should deploy any more. */
   async removeFeatureImages(applicationId: string, branch: string): Promise<void> {
     const spec = await this.#repositories.locate(applicationId);
-    const builds = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<BuildRow>(
-        "SELECT * FROM builds.builds WHERE application_id = $1 AND kind = 'feature' AND branch = $2 AND status = 'succeeded'",
-        [applicationId, branch],
-      );
-      return rows;
-    });
+    const builds = await this.#store.transaction((session) => session.featureImages(applicationId, branch));
     if (spec === null || builds.length === 0) {
       return;
     }
     const application = await this.#catalog.get(applicationId);
     for (const build of builds) {
       const repository = `${spec.organization}/${application.slug}`;
-      await this.#registry.deleteTag(repository, build.image_tag);
+      await this.#registry.deleteTag(repository, build.tag);
       // The signature is stored under its own tag, so it goes too.
       if (build.digest !== null) {
         await this.#registry.deleteTag(repository, signatureTag(build.digest));
       }
-      await this.#database.transaction(async (tx) => {
-        await tx.query("UPDATE builds.builds SET status = 'deleted', updated_at = now() WHERE id = $1", [build.id]);
-        await appendToOutbox(tx, [
+      await this.#store.transaction(async (session) => {
+        await session.markDeleted(build.id);
+        await session.record([
           FeatureImageDeleted.create({
             companyId: currentCompanyId(),
-            payload: { buildId: build.id, applicationId, branch, tag: build.image_tag },
+            payload: { buildId: build.id, applicationId, branch, tag: build.tag },
           }),
         ]);
       });
@@ -726,33 +700,24 @@ export class Builds implements BuildRequests, DeployableImages {
   // ---- Internals
 
   /** Checks a pipeline job's token. Unknown builds and wrong tokens get the same answer. */
-  async #authorize(buildIdValue: unknown, token: string | undefined): Promise<{ companyId: CompanyId; build: BuildRow }> {
+  async #authorize(buildIdValue: unknown, token: string | undefined): Promise<{ companyId: CompanyId; build: StoredBuild }> {
     const refused = () => new BuildError('unauthorized', 'This build token is not valid.');
     if (typeof buildIdValue !== 'string' || !UUID_PATTERN.test(buildIdValue) || token === undefined) {
       throw refused();
     }
-    const company = await runWithCompany(NO_COMPANY, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ build_company: string | null }>('SELECT builds.build_company($1)', [
-          buildIdValue,
-        ]);
-        return rows[0]?.build_company ?? null;
-      }),
-    );
+    const company = await runWithCompany(NO_COMPANY, () => this.#store.transaction((session) => session.companyOfBuild(buildIdValue)));
     if (company === null) {
       throw refused();
     }
     const companyId = parseCompanyId(company);
-    const build = await runWithCompany(companyId, () =>
-      this.#database.transaction((tx) => findBuild(tx, buildIdValue)),
-    );
+    const build = await runWithCompany(companyId, () => this.#store.transaction((session) => session.find(buildIdValue)));
     if (
       build === null ||
       build.status !== 'running' ||
-      build.token_hash === null ||
-      build.token_expires_at === null ||
-      build.token_expires_at.getTime() < Date.now() ||
-      !timingSafeEqual(Buffer.from(build.token_hash, 'hex'), Buffer.from(hashToken(token), 'hex'))
+      build.tokenHash === null ||
+      build.tokenExpiresAt === null ||
+      build.tokenExpiresAt.getTime() < Date.now() ||
+      !timingSafeEqual(Buffer.from(build.tokenHash, 'hex'), Buffer.from(hashToken(token), 'hex'))
     ) {
       throw refused();
     }
@@ -767,8 +732,8 @@ export class Builds implements BuildRequests, DeployableImages {
    * if nothing else decided the build meanwhile.
    */
   async #decide(buildId: string): Promise<void> {
-    const signable = await this.#database.transaction(async (tx) => {
-      const build = await findBuild(tx, buildId, { lock: true });
+    const signable = await this.#store.transaction(async (session) => {
+      const build = await session.find(buildId, { lock: true });
       if (build === null || build.status !== 'running') {
         return null;
       }
@@ -777,11 +742,11 @@ export class Builds implements BuildRequests, DeployableImages {
         return null;
       }
       if (outcome.state === 'failed') {
-        await this.#finish(tx, build, 'failed', outcome.reason);
+        await this.#finish(session, build, 'failed', outcome.reason);
         return null;
       }
       if (build.kind === 'check') {
-        await this.#finish(tx, build, 'succeeded', null);
+        await this.#finish(session, build, 'succeeded', null);
         return null;
       }
       return build;
@@ -789,8 +754,8 @@ export class Builds implements BuildRequests, DeployableImages {
     if (signable === null) {
       return;
     }
-    const spec = await this.#repositories.locate(signable.application_id);
-    const application = await this.#catalog.get(signable.application_id);
+    const spec = await this.#repositories.locate(signable.applicationId);
+    const application = await this.#catalog.get(signable.applicationId);
     const digest = signable.digest;
     if (spec === null || digest === null) {
       await this.#fail(buildId, 'The image was not stored.');
@@ -799,10 +764,10 @@ export class Builds implements BuildRequests, DeployableImages {
     const repository = `${spec.organization}/${application.slug}`;
     const payload = signaturePayload(`${this.#registry.imageHost}/${repository}`, digest);
     const purpose = signingPurposeFor(signable.kind);
-    const privateKey = await this.#database.transaction((tx) => this.#keys.privateKey(tx, purpose));
+    const privateKey = await this.#store.transaction((session) => this.#keys.privateKey(session, purpose));
     await this.#registry.pushSignature(repository, digest, payload, signPayload(privateKey, payload));
     // Reads the signature back, as a target would, and checks it with the public key.
-    const publicKey = await this.#database.transaction((tx) => this.#keys.publicKey(tx, purpose));
+    const publicKey = await this.#store.transaction((session) => this.#keys.publicKey(session, purpose));
     const imageName = `${this.#registry.imageHost}/${repository}@${digest}`;
     const verification = checkStoredSignature(
       payload,
@@ -811,53 +776,43 @@ export class Builds implements BuildRequests, DeployableImages {
       `cosign verify --key ${purpose}.pub --insecure-ignore-tlog=true ${imageName}`,
     );
     const broken = failedChecksReason("The signature doesn't check out", verification.checks);
-    await this.#database.transaction(async (tx) => {
-      const build = await findBuild(tx, buildId, { lock: true });
+    await this.#store.transaction(async (session) => {
+      const build = await session.find(buildId, { lock: true });
       // Decided meanwhile, such as by the timeout, or by another report that signed it too.
       if (build === null || build.status !== 'running' || build.digest !== digest) {
         return;
       }
-      await tx.query(
-        `UPDATE builds.builds SET signed_at = now(), reports = reports || $2::jsonb, updated_at = now() WHERE id = $1`,
-        [buildId, JSON.stringify({ verification })],
-      );
-      await this.#finish(tx, build, broken === null ? 'succeeded' : 'failed', broken);
+      await session.markSigned(buildId, verification);
+      await this.#finish(session, build, broken === null ? 'succeeded' : 'failed', broken);
     });
   }
 
   async #fail(buildId: string, reason: string): Promise<void> {
-    await this.#database.transaction(async (tx) => {
-      const build = await findBuild(tx, buildId, { lock: true });
+    await this.#store.transaction(async (session) => {
+      const build = await session.find(buildId, { lock: true });
       if (build !== null && (build.status === 'queued' || build.status === 'running')) {
-        await this.#finish(tx, build, 'failed', reason);
+        await this.#finish(session, build, 'failed', reason);
       }
     });
   }
 
-  async #finish(tx: TenantTransaction, build: BuildRow, status: 'succeeded' | 'failed', reason: string | null) {
-    const { rows } = await tx.query<BuildRow>(
-      `UPDATE builds.builds
-       SET status = $2, failure_reason = $3, token_hash = NULL, token_expires_at = NULL,
-           finished_at = now(), updated_at = now()
-       WHERE id = $1 RETURNING *`,
-      [build.id, status, reason],
-    );
-    const finished = rows[0]!;
+  async #finish(session: BuildsSession, build: StoredBuild, status: 'succeeded' | 'failed', reason: string | null) {
+    const finished = await session.finish(build.id, status, reason);
     const built = {
       buildId: build.id,
-      applicationId: build.application_id,
+      applicationId: build.applicationId,
       kind: build.kind,
       branch: build.branch,
-      commit: build.commit_sha,
-      tag: build.image_tag,
+      commit: build.commit,
+      tag: build.tag,
       version: build.version,
-      releaseId: build.release_id,
+      releaseId: build.releaseId,
     };
-    await appendToOutbox(tx, [
+    await session.record([
       status === 'succeeded'
         ? BuildSucceeded.create({
             companyId: currentCompanyId(),
-            payload: { ...built, imageRef: finished.image_ref, digest: finished.digest, signedWith: finished.signing_key },
+            payload: { ...built, imageRef: finished.imageRef, digest: finished.digest, signedWith: finished.signingKey },
           })
         : BuildFailed.create({ companyId: currentCompanyId(), payload: { ...built, reason } }),
     ]);
@@ -909,33 +864,25 @@ function parseId(value: unknown, what: string): string {
   return value;
 }
 
-async function findBuild(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<BuildRow | null> {
-  const { rows } = await tx.query<BuildRow>(
-    `SELECT * FROM builds.builds WHERE id = $1${options.lock ? ' FOR UPDATE' : ''}`,
-    [id],
-  );
-  return rows[0] ?? null;
-}
-
-function toView(row: BuildRow): BuildView {
+function toView(build: StoredBuild): BuildView {
   return {
-    id: row.id,
-    applicationId: row.application_id,
-    kind: row.kind,
-    branch: row.branch,
-    commit: row.commit_sha,
-    tag: row.image_tag,
-    version: row.version,
-    releaseId: row.release_id,
-    status: row.status,
-    failureReason: row.failure_reason,
-    reports: row.reports,
-    progress: buildProgress(row.kind, row.status, row.reports),
-    imageRef: row.image_ref,
-    digest: row.digest,
-    signedWith: row.status === 'succeeded' ? row.signing_key : null,
-    createdAt: row.created_at.toISOString(),
-    finishedAt: row.finished_at?.toISOString() ?? null,
+    id: build.id,
+    applicationId: build.applicationId,
+    kind: build.kind,
+    branch: build.branch,
+    commit: build.commit,
+    tag: build.tag,
+    version: build.version,
+    releaseId: build.releaseId,
+    status: build.status,
+    failureReason: build.failureReason,
+    reports: build.reports,
+    progress: buildProgress(build.kind, build.status, build.reports),
+    imageRef: build.imageRef,
+    digest: build.digest,
+    signedWith: build.status === 'succeeded' ? build.signingKey : null,
+    createdAt: build.createdAt.toISOString(),
+    finishedAt: build.finishedAt?.toISOString() ?? null,
   };
 }
 

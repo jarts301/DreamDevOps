@@ -49,6 +49,7 @@ describe('loadConfig', () => {
     expect(config.trustedProxies).toBe(0);
     expect(config.toolsApiUrl).toBe('http://localhost:4000');
     expect(config.buildTimeoutMinutes).toBe(60);
+    expect(config.buildStartTimeoutMinutes).toBe(15);
   });
 
   it('lets tools reach the API at another address', () => {
@@ -96,6 +97,7 @@ describe('loadConfig', () => {
     ['JOB_POLLING_SECONDS', '0'],
     ['RELAY_POLL_MS', '5'],
     ['BUILD_TIMEOUT_MINUTES', '0'],
+    ['BUILD_START_TIMEOUT_MINUTES', '0'],
     ['TARGET_LOST_AFTER_SECONDS', '30'],
     ['PROVISIONING_MAX_ATTEMPTS', '0'],
     ['API_DATABASE_POOL_SIZE', '1'],
@@ -108,6 +110,13 @@ describe('loadConfig', () => {
   it('refuses a session that goes idle after it has already ended', () => {
     expect(() => loadConfig({ ...valid, SESSION_IDLE_MINUTES: '600', SESSION_ABSOLUTE_MINUTES: '60' })).toThrow(
       'SESSION_IDLE_MINUTES can be at most SESSION_ABSOLUTE_MINUTES',
+    );
+  });
+
+  it('refuses a build start timeout longer than the whole build timeout, which would never apply', () => {
+    expect(loadConfig({ ...valid, BUILD_START_TIMEOUT_MINUTES: '5' }).buildStartTimeoutMinutes).toBe(5);
+    expect(() => loadConfig({ ...valid, BUILD_START_TIMEOUT_MINUTES: '90', BUILD_TIMEOUT_MINUTES: '60' })).toThrow(
+      'BUILD_START_TIMEOUT_MINUTES can be at most BUILD_TIMEOUT_MINUTES',
     );
   });
 

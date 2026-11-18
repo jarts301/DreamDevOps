@@ -116,12 +116,12 @@ export class DemoCompany implements OnApplicationBootstrap {
     const admin = DEMO_USERS.find((user) => user.role === 'company-admin')!;
     let companyId = (await this.#companies.list()).find((company) => company.name === DEMO_COMPANY_NAME)?.id;
     if (companyId === undefined) {
-      const { company, invitation } = await this.#companies.create(platformAdmin, DEMO_COMPANY_NAME, emailOf(admin));
+      const { company, invitation } = await this.#companies.create(platformAdmin, DEMO_COMPANY_NAME, emailOf(admin), { sendEmail: false });
       companyId = company.id;
       await this.#access.acceptInvitation(await principal(admin.username), invitation.token);
       this.#logger.log(`Created the demo company, with ${admin.username} as its admin.`);
     } else if (!(await isMember(admin.username, companyId))) {
-      const { invitation } = await this.#companies.inviteFirstAdmin(platformAdmin, companyId, emailOf(admin));
+      const invitation = await this.#companies.inviteFirstAdmin(platformAdmin, companyId, emailOf(admin), { sendEmail: false });
       await this.#access.acceptInvitation(await principal(admin.username), invitation.token);
     }
 
@@ -131,7 +131,7 @@ export class DemoCompany implements OnApplicationBootstrap {
         continue;
       }
       const invitation = await runWithCompany(parseCompanyId(companyId), () =>
-        this.#access.invite(companyAdmin, emailOf(user), user.role),
+        this.#access.invite(companyAdmin, emailOf(user), user.role, { sendEmail: false }),
       );
       await this.#access.acceptInvitation(await principal(user.username), invitation.token);
       this.#logger.log(`${user.username} joined the demo company.`);

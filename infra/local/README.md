@@ -83,6 +83,14 @@ Forgejo's webhooks reach the API at the same address. The first pipeline run dow
 
 Re-run the job from its page in Forgejo. If it keeps happening, restart Docker Desktop.
 
+**When a build waits at the secret scan.** The secret scan is the pipeline's first job, so a build whose Dockerfile rules passed but whose secret scan stays *Waiting* has a pipeline none of whose jobs has started. After `BUILD_START_TIMEOUT_MINUTES`, 15 by default, the build fails and the API's log says so. The usual reasons:
+
+- The runner is busy. Jobs run in the order they were queued, two at a time, so the platform's jobs wait behind every job queued before them, such as the demo applications' 36 on the first start. Sign in to Forgejo as the administrator and open **Site Administration > Actions > Runners** to see what they're running.
+- The runner isn't running: `docker compose ps forgejo-runner`.
+- Jobs can't reach the API, which must be running on this machine. `docker compose exec runner-docker wget -qO- http://host.docker.internal:4000/api/v1/health/live` checks the same path jobs take.
+
+If the pipeline couldn't be started at all, the build fails within minutes with the reason, and the API's log has each try.
+
 **The image runner's label.** Only the platform's pipeline uses the image runner. Its label, `IMAGE_RUNNER_LABEL`, is set in `.env`, and the API puts it in the pipeline it copies to each company. Use your own value outside this machine.
 
 ## Second factor

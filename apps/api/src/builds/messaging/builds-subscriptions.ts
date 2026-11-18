@@ -4,6 +4,9 @@ import type { BackgroundSubscriber, BackgroundWork } from '../../background/back
 import type { AppConfig } from '../../config/app-config.ts';
 import type { Builds } from '../application/builds.ts';
 
+/** How many more times a build's start is tried after it fails. */
+const START_RETRIES = 3;
+
 /** Fails builds whose jobs died without reporting, once they pass the timeout. */
 export const EXPIRE_QUEUE = 'builds.expire-stale';
 /**
@@ -30,9 +33,12 @@ export class BuildsSubscriptions implements BackgroundSubscriber {
       retryLimit: this.#config.provisioningMaxAttempts + 2,
       retryDelaySeconds: this.#config.provisioningRetrySeconds,
     };
-    await bus.subscribe(BuildRequested, 'builds', (event) => this.#builds.start(event.payload.buildId), {
-      retryLimit: 3,
-      retryDelaySeconds: 10,
+    // A start that fails, such as while the Git service restarts, is tried a few more times,
+    // as far apart as other Git work. The last try fails the build with the reason, so people
+    // see it within minutes, rather than a build that waits for a pipeline that never comes.
+    await bus.subscribe(BuildRequested, 'builds', (event, attempt) => this.#builds.start(event.payload.buildId, attempt), {
+      retryLimit: START_RETRIES,
+      retryDelaySeconds: this.#config.provisioningRetrySeconds,
     });
     await bus.subscribe(
       BranchDeleted,

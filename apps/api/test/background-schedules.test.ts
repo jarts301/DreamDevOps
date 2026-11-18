@@ -1,6 +1,5 @@
 import { BuildRequested } from '@dreamdevops/contracts/builds/events';
 import { createDomainEvent, EventBus, parseCompanyId } from '@dreamdevops/shared-kernel';
-import type { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { InMemoryJobQueue } from '@dreamdevops/shared-kernel/testing';
 import { describe, expect, it, vi } from 'vitest';
 import type { Builds } from '../src/builds/application/builds.ts';
@@ -69,20 +68,15 @@ describe('background sweeps', () => {
 
   it('bring repositories up to date once per version of the rules, however many processes start', async () => {
     const queue = new InMemoryJobQueue();
-    const transaction = vi.fn(async () => []);
+    const upgradeEveryCompany = vi.fn(async () => {});
     const subscriptions = () =>
-      new SourceGovernanceSubscriptions(
-        { upgradePolicies: vi.fn() } as unknown as Repositories,
-        {} as SourceAccess,
-        config,
-        { transaction } as unknown as TenantDatabase,
-      );
+      new SourceGovernanceSubscriptions({ upgradeEveryCompany } as unknown as Repositories, {} as SourceAccess, config);
 
     await subscriptions().subscribe(processOn(queue));
     await subscriptions().subscribe(processOn(queue));
     await queue.drain();
 
-    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(upgradeEveryCompany).toHaveBeenCalledTimes(1);
     expect(queue.deadLettersOf(UPGRADE_QUEUE)).toEqual([]);
   });
 });
@@ -111,7 +105,8 @@ describe('events from other modules', () => {
     await work.bus.publish(createDomainEvent({ eventType: 'BuildRequested', companyId, payload: { applicationId: requested.payload.applicationId } }));
     await queue.drain();
 
-    expect(builds.start.mock.calls).toEqual([[requested.payload.buildId]]);
+    // With the try it is, so the last one can fail the build instead of leaving it waiting.
+    expect(builds.start.mock.calls).toEqual([[requested.payload.buildId, { last: false }]]);
     expect(queue.deadLettersOf('events.builds.BuildRequested')).toHaveLength(1);
   });
 });

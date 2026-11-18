@@ -1,34 +1,33 @@
-import { Logger } from '@nestjs/common';
 import { CompanyEditionChanged } from '@dreamdevops/contracts/editions/events';
 import type { CompanyEntitlements, EditionsOverview } from '@dreamdevops/contracts/editions/http';
 import type { FeatureAccess } from '@dreamdevops/contracts/editions/services';
-import { type CompanyId, currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
+import { type CompanyId, currentCompanyId, isUuid, type Logger, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { EditionError } from '../domain/errors.ts';
 import { type Edition, FEATURES, parseEdition, resolveFeatures } from '../domain/features.ts';
-import type { EntitlementProvider, ProviderStatus } from './ports.ts';
+import type { EditionsStore, EntitlementProvider, ProviderStatus } from './ports.ts';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 
 /** Says which features each company has, and lets platform admins set each company's edition. */
 export class Entitlements implements FeatureAccess {
-  readonly #logger = new Logger(Entitlements.name);
-  readonly #database: TenantDatabase;
+  readonly #store: EditionsStore;
   readonly #companies: CompanyDirectory;
   readonly #provider: EntitlementProvider;
+  readonly #logger: Logger;
 
-  constructor(database: TenantDatabase, companies: CompanyDirectory, provider: EntitlementProvider) {
-    this.#database = database;
+  constructor(store: EditionsStore, companies: CompanyDirectory, provider: EntitlementProvider, logger: Logger) {
+    this.#store = store;
     this.#companies = companies;
     this.#provider = provider;
+    this.#logger = logger;
   }
 
   /** The current company's edition and features. */
   async forCurrentCompany(): Promise<CompanyEntitlements> {
     const companyId = currentCompanyId();
-    const edition = await this.#database.transaction((tx) => editionOf(tx, companyId));
+    const edition = await this.#store.transaction((session) => session.editionOf(companyId));
     const enabled = await this.#enabled(companyId, edition);
     return {
       edition,
@@ -38,23 +37,15 @@ export class Entitlements implements FeatureAccess {
 
   async isEnabled(companyIdValue: string, featureKey: string): Promise<boolean> {
     const companyId = parseCompanyId(companyIdValue);
-    const edition = await runWithCompany(companyId, () =>
-      this.#database.transaction((tx) => editionOf(tx, companyId)),
-    );
+    const edition = await runWithCompany(companyId, () => this.#store.transaction((session) => session.editionOf(companyId)));
     return (await this.#enabled(companyId, edition)).has(featureKey);
   }
 
   /** Every company's edition, for platform admins. It reveals no company data. */
   async listCompanies(): Promise<EditionsOverview> {
     const all = await this.#companies.all();
-    const editions = await runWithCompany(NO_COMPANY, () =>
-      this.#database.transaction(async (tx) => {
-        const { rows } = await tx.query<{ company_id: string; edition: Edition; changed_at: Date }>(
-          'SELECT company_id, edition, changed_at FROM editions.company_editions',
-        );
-        return new Map(rows.map((row) => [row.company_id, row]));
-      }),
-    );
+    const chosen = await runWithCompany(NO_COMPANY, () => this.#store.transaction((session) => session.chosen()));
+    const editions = new Map(chosen.map((row) => [row.companyId, row]));
     // A company without a row is on the Community Edition.
     const companies = all.map((company) => {
       const chosen = editions.get(company.id);
@@ -62,7 +53,7 @@ export class Entitlements implements FeatureAccess {
         companyId: company.id,
         companyName: company.name,
         edition: chosen?.edition ?? 'community',
-        changedAt: chosen?.changed_at.toISOString() ?? null,
+        changedAt: chosen?.changedAt.toISOString() ?? null,
       };
     });
     return { provider: await this.#status(), companies };
@@ -82,21 +73,15 @@ export class Entitlements implements FeatureAccess {
       throw new EditionError('not-found', 'This company does not exist.');
     }
     await runWithCompany(companyId, () =>
-      this.#database.transaction(async (tx) => {
+      this.#store.transaction(async (session) => {
         // One change per company at a time, so the recorded previous edition is always right.
-        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('editions:' || $1, 0))", [companyId]);
-        const previous = await editionOf(tx, companyId);
+        await session.lockCompany(companyId);
+        const previous = await session.editionOf(companyId);
         if (previous === edition) {
           return;
         }
-        await tx.query(
-          `INSERT INTO editions.company_editions (company_id, edition, changed_by)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (company_id) DO UPDATE
-             SET edition = EXCLUDED.edition, changed_by = EXCLUDED.changed_by, changed_at = now()`,
-          [companyId, edition, actor.userId],
-        );
-        await appendToOutbox(tx, [
+        await session.setEdition(companyId, edition, actor.userId);
+        await session.record([
           CompanyEditionChanged.create({
             companyId,
             actorId: actor.userId,
@@ -128,12 +113,4 @@ export class Entitlements implements FeatureAccess {
       return { name: 'Unavailable', commercialAvailable: false, detail: 'The license could not be checked.' };
     }
   }
-}
-
-async function editionOf(tx: TenantTransaction, companyId: string): Promise<Edition> {
-  const { rows } = await tx.query<{ edition: Edition }>(
-    'SELECT edition FROM editions.company_editions WHERE company_id = $1',
-    [companyId],
-  );
-  return rows[0]?.edition ?? 'community';
 }

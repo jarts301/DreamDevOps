@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProgress } from '../src/builds/domain/build.ts';
+import { buildProgress, pipelineHasReported } from '../src/builds/domain/build.ts';
 import { failed, passed, warning } from '../src/builds/domain/checks.ts';
 
 const states = (progress: ReturnType<typeof buildProgress>) => progress.map((step) => step.state);
@@ -54,5 +54,19 @@ describe('build progress', () => {
 
   it('has only the Dockerfile rules, the secret scan and the tests for pull request checks', () => {
     expect(buildProgress('check', 'queued', {}).map((step) => step.job)).toEqual(['dockerfile', 'secrets', 'test']);
+  });
+});
+
+describe('whether a pipeline has said anything', () => {
+  it('is no until a job starts, reports, or fails, whatever the platform checked before', () => {
+    const dockerfile = { checks: [passed('Base images are pinned by digest')], facts: [] };
+
+    expect(pipelineHasReported({})).toBe(false);
+    expect(pipelineHasReported({ dockerfile })).toBe(false);
+    expect(pipelineHasReported({ dockerfile, started: { secrets: '2026-01-01T00:00:00Z' } })).toBe(true);
+    // A job whose first call was lost can still report.
+    expect(pipelineHasReported({ tests: { passed: true, log: '' } })).toBe(true);
+    expect(pipelineHasReported({ secrets: { found: 0, findings: [] } })).toBe(true);
+    expect(pipelineHasReported({ failedJobs: ['secrets'] })).toBe(true);
   });
 });

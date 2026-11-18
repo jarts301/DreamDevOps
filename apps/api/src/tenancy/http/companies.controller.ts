@@ -1,9 +1,15 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Req } from '@nestjs/common';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { SentInvitation } from '@dreamdevops/contracts/identity-access/http';
+import type {
+  CompanySummary,
+  CreateCompany,
+  CreatedCompany,
+  InviteFirstAdmin,
+  RenameCompany,
+} from '@dreamdevops/contracts/tenancy/http';
 import { RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import type { SentInvitation } from '@dreamdevops/contracts/identity-access/http';
-import type { CompanySummary, CreatedCompany } from '@dreamdevops/contracts/tenancy/http';
-import { INVITATION_MAILER, type InvitationMailer } from '@dreamdevops/contracts/notifications/services';
 import { CompaniesService } from '../application/companies.service.ts';
 
 const MANAGE_COMPANIES = 'companies:manage';
@@ -13,14 +19,9 @@ const MANAGE_COMPANIES = 'companies:manage';
 @RequirePermissions(MANAGE_COMPANIES)
 export class CompaniesController {
   readonly #service: CompaniesService;
-  readonly #emails: InvitationMailer;
 
-  constructor(
-    @Inject(CompaniesService) service: CompaniesService,
-    @Inject(INVITATION_MAILER) emails: InvitationMailer,
-  ) {
+  constructor(@Inject(CompaniesService) service: CompaniesService) {
     this.#service = service;
-    this.#emails = emails;
   }
 
   @Get()
@@ -29,25 +30,13 @@ export class CompaniesController {
   }
 
   @Post()
-  async create(
-    @Req() request: ApiRequest,
-    @Body() body: { name?: unknown; firstAdminEmail?: unknown },
-  ): Promise<CreatedCompany> {
-    const { company, invitation } = await this.#service.create(request.principal!, body?.name, body?.firstAdminEmail);
-    const emailSent = await this.#emails.send({
-      to: invitation.email,
-      companyName: company.name,
-      role: invitation.role,
-      invitedBy: request.principal!.displayName,
-      token: invitation.token,
-      expiresAt: invitation.expiresAt,
-    });
-    return { company, invitation: { ...invitation, emailSent } };
+  create(@Req() request: ApiRequest, @Body() body: Unchecked<CreateCompany> | undefined): Promise<CreatedCompany> {
+    return this.#service.create(request.principal!, body?.name, body?.firstAdminEmail);
   }
 
   @Patch(':id')
   @HttpCode(204)
-  rename(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: { name?: unknown }): Promise<void> {
+  rename(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Unchecked<RenameCompany> | undefined): Promise<void> {
     return this.#service.rename(request.principal!, id, body?.name);
   }
 
@@ -70,20 +59,11 @@ export class CompaniesController {
   }
 
   @Post(':id/first-admin-invitation')
-  async inviteFirstAdmin(
+  inviteFirstAdmin(
     @Req() request: ApiRequest,
     @Param('id') id: string,
-    @Body() body: { email?: unknown },
+    @Body() body: Unchecked<InviteFirstAdmin> | undefined,
   ): Promise<SentInvitation> {
-    const { invitation, companyName } = await this.#service.inviteFirstAdmin(request.principal!, id, body?.email);
-    const emailSent = await this.#emails.send({
-      to: invitation.email,
-      companyName,
-      role: invitation.role,
-      invitedBy: request.principal!.displayName,
-      token: invitation.token,
-      expiresAt: invitation.expiresAt,
-    });
-    return { ...invitation, emailSent };
+    return this.#service.inviteFirstAdmin(request.principal!, id, body?.email);
   }
 }

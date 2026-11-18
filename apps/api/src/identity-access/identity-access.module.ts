@@ -4,16 +4,26 @@ import type pg from 'pg';
 import { NotificationsModule } from '../notifications/notifications.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { PostgresSessionStore } from '../session/postgres-session-store.ts';
-import { SESSION_STORE } from '../session/session-store.ts';
+import { SESSION_STORE, type SessionStore } from '../session/session-store.ts';
 import { DATABASE_POOL } from '../tokens.ts';
 import { CompanyAccessService } from './application/company-access.service.ts';
 import { COMPANY_MEMBERS, FIRST_ADMIN_INVITATIONS } from '@dreamdevops/contracts/identity-access/services';
 import { MemberDirectory } from './application/member-directory.ts';
-import { IDENTITY_PROVIDER, USER_DIRECTORY } from './application/ports.ts';
+import {
+  IDENTITY_PROVIDER,
+  type IdentityProvider,
+  MEMBERSHIP_STORE,
+  type MembershipStore,
+  USER_DIRECTORY,
+  type UserDirectory,
+} from './application/ports.ts';
+import { SignIn } from './application/sign-in.ts';
 import { AuthController } from './http/auth.controller.ts';
 import { CompanyAccessController, InvitationsController } from './http/company-access.controller.ts';
 import { KeycloakIdentityProvider } from './infrastructure/keycloak-identity-provider.ts';
+import { postgresMembershipStore } from './infrastructure/postgres-membership-store.ts';
 import { PostgresUserDirectory } from './infrastructure/postgres-user-directory.ts';
+import { INVITATION_MAILER, type InvitationMailer } from '@dreamdevops/contracts/notifications/services';
 
 /** Login, sessions, and who belongs to which company with which role. */
 @Module({})
@@ -47,17 +57,28 @@ export class IdentityAccessModule {
               inject: [DATABASE_POOL],
             },
             {
+              provide: SignIn,
+              useFactory: (provider: IdentityProvider, directory: UserDirectory, sessions: SessionStore) =>
+                new SignIn(provider, directory, sessions, {
+                  publicUrl: config.publicUrl,
+                  dashboardUrl: config.dashboardUrl,
+                  session: { absoluteMs: config.sessionAbsoluteMs, idleMs: config.sessionIdleMs },
+                }),
+              inject: [IDENTITY_PROVIDER, USER_DIRECTORY, SESSION_STORE],
+            },
+            { provide: MEMBERSHIP_STORE, useFactory: postgresMembershipStore, inject: [TenantDatabase, DATABASE_POOL] },
+            {
               provide: CompanyAccessService,
-              useFactory: (database: TenantDatabase, pool: pg.Pool) =>
-                new CompanyAccessService(database, pool, { requireVerifiedEmail: config.requireVerifiedEmail }),
-              inject: [TenantDatabase, DATABASE_POOL],
+              useFactory: (store: MembershipStore, emails: InvitationMailer) =>
+                new CompanyAccessService(store, emails, { requireVerifiedEmail: config.requireVerifiedEmail }),
+              inject: [MEMBERSHIP_STORE, INVITATION_MAILER],
             },
             // Tenancy invites a new company's first admin through this.
             { provide: FIRST_ADMIN_INVITATIONS, useExisting: CompanyAccessService },
             {
               provide: COMPANY_MEMBERS,
-              useFactory: (database: TenantDatabase) => new MemberDirectory(database),
-              inject: [TenantDatabase],
+              useFactory: (store: MembershipStore) => new MemberDirectory(store),
+              inject: [MEMBERSHIP_STORE],
             },
           ],
           settings.overrides,

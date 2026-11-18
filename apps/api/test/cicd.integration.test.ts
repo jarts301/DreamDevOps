@@ -601,6 +601,99 @@ describe('feature images', () => {
     expect(existsSync(part)).toBe(false);
   });
 
+  it("fail with the reason when their pipeline can't be set up, rather than wait for it", async () => {
+    const setup = await setUp();
+    source.push(setup.organization, setup.name, 'feature/no-pipeline');
+    const requestBuild = () =>
+      setup.developer
+        .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+        .send({ branch: 'feature/no-pipeline' })
+        .expect(201);
+    // The Git service keeps failing, for every try of the start.
+    pipelines.setupFailures = Number.POSITIVE_INFINITY;
+    let first: { id: string };
+    try {
+      first = (await requestBuild()).body;
+
+      await eventually(async () =>
+        expect((await buildsOf(setup.developer, setup.applicationId))[0]).toMatchObject({
+          id: first.id,
+          status: 'failed',
+          failureReason: 'The pipeline could not be started: The Git service could not add the pipeline (status 503).',
+        }),
+      );
+      const [build] = await buildsOf(setup.developer, setup.applicationId);
+      // The Dockerfile was checked, and nothing after it ran.
+      expect(build!.progress.slice(0, 3).map((step) => `${step.job}: ${step.state}`)).toEqual([
+        'dockerfile: passed',
+        'secrets: skipped',
+        'test: skipped',
+      ]);
+      expect(pipelines.tokenOf(first.id)).toBeUndefined();
+    } finally {
+      pipelines.setupFailures = 0;
+    }
+
+    // Asking again builds it anew, rather than giving back the failed build.
+    const { body: second } = await requestBuild();
+    expect(second.id).not.toBe(first.id);
+    await eventually(() => expect(pipelines.tokenOf(second.id)).toBeDefined());
+  });
+
+  it('start once the Git service is back, after a failed try', async () => {
+    const setup = await setUp();
+    source.push(setup.organization, setup.name, 'feature/blip');
+    pipelines.setupFailures = 1;
+    try {
+      const { body } = await setup.developer
+        .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+        .send({ branch: 'feature/blip' })
+        .expect(201);
+
+      await eventually(() => expect(pipelines.tokenOf(body.id)).toBeDefined());
+      expect((await buildsOf(setup.developer, setup.applicationId))[0]).toMatchObject({ status: 'running', failureReason: null });
+    } finally {
+      pipelines.setupFailures = 0;
+    }
+  });
+
+  it('fail when no job of their pipeline says anything in time, such as with no free runner', async () => {
+    const setup = await setUp();
+    const requestBuild = async (branch: string) => {
+      source.push(setup.organization, setup.name, branch);
+      const { body } = await setup.developer
+        .post(`/api/v1/company/applications/${setup.applicationId}/feature-builds`)
+        .send({ branch })
+        .expect(201);
+      await eventually(() => expect(pipelines.tokenOf(body.id)).toBeDefined());
+      return body.id as string;
+    };
+    const silent = await requestBuild('feature/silent');
+    const started = await requestBuild('feature/started');
+    // This one's first job got going, as its first step says.
+    await job(started).started('secrets').expect(204);
+    const superuser = new pg.Pool({ connectionString: database.superuserUrl() });
+    try {
+      await superuser.query("UPDATE builds.builds SET pipeline_started_at = now() - interval '16 minutes' WHERE id = ANY($1)", [
+        [silent, started],
+      ]);
+    } finally {
+      await superuser.end();
+    }
+
+    await app.get(Builds).expireStale();
+
+    const builds = await buildsOf(setup.developer, setup.applicationId);
+    expect(builds.find((build) => build.id === silent)).toMatchObject({
+      status: 'failed',
+      failureReason:
+        "No pipeline job started within 15 minutes: the runners may all be busy or offline, or their jobs can't reach the platform. Try the build again later.",
+    });
+    // A pipeline whose jobs run keeps going, however long they take, up to the build's own timeout.
+    expect(builds.find((build) => build.id === started)).toMatchObject({ status: 'running' });
+    await job(silent).started('secrets').expect(401);
+  });
+
   it('leave no uploads behind once nothing can use them, such as after a crash', async () => {
     const folder = testConfig().buildWorkDir;
     await mkdir(folder, { recursive: true });

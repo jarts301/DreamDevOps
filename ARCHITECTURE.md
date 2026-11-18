@@ -42,18 +42,32 @@ Each context is a folder in `apps/api/src`, with its own guide. What it publishe
 
 ## Inside a context
 
-Each context uses the same folders, so any of them reads the same way:
+Each context uses the same folders, so any of them reads the same way, and each folder has one job:
 
-| Folder | Holds | May use |
+| Folder | Its job | May use |
 |---|---|---|
-| `domain/` | Rules and types with no I/O, such as versions, Dockerfile checks and Git Flow | Its own domain, the contracts, `shared/`, the shared kernel and Node built-ins |
-| `application/` | Use cases, and ports for outside tools. Its services implement the interfaces the context publishes in its contracts. | Its own domain and application, the contracts, the shared kernel |
-| `infrastructure/` | Adapters for outside tools, such as Forgejo, Docker and PostgreSQL | Its own application and domain |
-| `http/` | Controllers, the REST API, which answers with the types in the context's `http.ts` contract | Its own context |
-| `messaging/` | The events the context reacts to, and its own job queues | Its own context |
-| `<context>.module.ts` | The Nest module that puts the context together, and provides the tokens of the services it publishes, such as `COMPANY_DIRECTORY` | Other contexts' modules, to wire them in |
+| `domain/` | The rules, with no I/O, such as versions, Dockerfile checks and Git Flow | Its own domain, the contracts, `shared/`, the shared kernel and Node built-ins |
+| `application/` | The use cases, such as registering an application, and the ports they need: its store, and outside tools. Its services implement the interfaces the context publishes in its contracts. | Its own domain and application, the contracts, the shared kernel's core, never its PostgreSQL part |
+| `infrastructure/` | Adapters that implement the ports: the context's PostgreSQL store, and clients of outside tools, such as Forgejo and Docker | Its own application and domain, the shared kernel's PostgreSQL part |
+| `http/` | Controllers, which carry HTTP to the context's own use cases, and answer with the types in the context's `http.ts` contract | Its own application and domain, the contracts' HTTP types |
+| `messaging/` | Subscribers, which carry the events the context reacts to, and its own jobs, to its own use cases | Its own application and domain, the contracts' events |
+| `<context>.module.ts` | The Nest module that puts the context together: it picks the adapters, and provides the tokens of the services it publishes, such as `COMPANY_DIRECTORY` | Anything in the context, other contexts' modules, to wire them in |
 
-Application code depends on ports, such as `PipelineHost` or `SourceHost`, and infrastructure implements them. That's what lets tests swap in fakes, and what will let a context's adapters change without its use cases changing. Where a context's domain or application code uses a published type, such as `BuildStatus`, it imports it from the contracts, and may re-export it, so its own code reads the same either way.
+Use cases depend on ports, and adapters implement them. That's what lets tests swap in fakes, and what will let a context's adapters change, such as for its own database, without its use cases changing. Where a context's domain or application code uses a published type, such as `BuildStatus`, it imports it from the contracts, and may re-export it, so its own code reads the same either way.
+
+### Stores
+
+Each context that keeps data has a store: a port in `application/ports.ts`, such as `CatalogStore`, and its PostgreSQL adapter in `infrastructure/`, such as `postgres-catalog-store.ts`. Use cases work in transactions through it, with a session that has the context's reads and writes, named for what they mean, such as `session.lockNames()` or `session.isSlugTaken(slug)`, and records the events a change publishes:
+
+```ts
+return this.#store.transaction(async (session) => {
+  const current = await findOrFail(session, id, { lock: true });
+  await session.setStatus(id, 'archived');
+  await session.record([ApplicationArchived.create({ companyId, actorId, payload: { applicationId: id, name: current.name } })]);
+});
+```
+
+The change and its events commit together, or neither does. Only the store has SQL, and maps rows to the records its port defines, such as `StoredApplication`. The shared kernel gives stores `Transactional`, `EventLog` and, for PostgreSQL, `PostgresSession` and `transactional`.
 
 ## How contexts work together
 
@@ -87,7 +101,11 @@ These are checked by `apps/api/test/architecture.test.ts`:
 | Every context has a Nest module | The module is the unit that moves to a new service |
 | Contexts reach each other only through the contracts, and only their Nest modules import each other, to wire them together | Everything else can change freely, and is what a service keeps private |
 | The domain uses no framework, database or outer layer | Domain rules stay testable and portable |
-| Application code doesn't use adapters, controllers, NestJS, or packages other than the shared kernel's and the contracts | Use cases don't depend on how they're called or what they call |
+| Only adapters and modules use the database, and only adapters hold SQL | How a context keeps its data can change without its use cases changing |
+| Use cases don't use adapters, controllers, subscribers, NestJS, or packages other than the shared kernel's core and the contracts | Use cases don't depend on how they're called or what they call |
+| Controllers and subscribers carry requests and events only to their own context's use cases, never to its adapters, another context's services or the database | HTTP and messaging stay thin, and each use case has one home |
+| Adapters don't reach back into controllers, subscribers or the module | Dependencies point inwards, to the use cases |
+| Every context that keeps data has a store, behind a port | Each context's data can move, and its use cases can be tested without it |
 | Each context's SQL touches only its own schemas, and the kernel's | Each context's data can move to its own database |
 | Only the platform wires other contexts' background work | A context's subscriptions move with it |
 | Events are only made through their contracts, and every event people can be notified about has one | No event is published without a contract, and the notification settings never show unknown events |
@@ -99,7 +117,7 @@ These are checked by `apps/api/test/architecture.test.ts`:
 
 The contracts' own tests check that they depend only on each other, the shared kernel and Zod, and that every `http.ts`, and every contract file the dashboard imports, runs in a browser.
 
-Exceptions are listed in the test with a reason, and the list should only shrink, so the test also fails when an exception is no longer needed. Today they are: NestJS's logger in three application files, the `yaml` library and the database driver's types in two application files, the cycle of calls above, the guards that belong to Identity and access, and the migrations that use another context's schema, such as through foreign keys.
+Exceptions are listed in the test with a reason, and the list should only shrink, so the test also fails when an exception is no longer needed. Today they are: the `yaml` library in application code, the cycle of calls above, the guards that belong to Identity and access, and the migrations that use another context's schema, such as through foreign keys.
 
 Lint rules, run by `npm run lint` with oxlint, catch code mistakes such as loose equality, `any` and import cycles between files.
 
@@ -131,6 +149,7 @@ Already in place:
 
 - Each context has its own module, schema, contracts and subscriptions.
 - Contexts import nothing of each other but their contracts, and don't read each other's tables. The architecture test keeps it that way.
+- Each context reaches its own data only through its store, so moving the data to a database of its own changes only the store.
 - Every call to another context goes through an interface in the contracts, injected by its token, so an HTTP client can answer it instead.
 - Every event has a versioned contract, checked before any consumer sees it, and each version has its own topic, so an event can change without breaking those who hear it.
 - The HTTP API's answers are typed in the contracts, so the dashboard can follow a context that moves.

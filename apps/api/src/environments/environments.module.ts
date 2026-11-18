@@ -20,7 +20,9 @@ import { EnvironmentGitOpsService } from './application/environment-gitops.ts';
 import { Environments } from './application/environments.ts';
 import {
   ENVIRONMENT_REPOSITORIES,
+  ENVIRONMENTS_STORE,
   type EnvironmentRepositories,
+  type EnvironmentsStore,
   PULL_ACCOUNTS,
   type PullAccounts,
   SECRET_STORE,
@@ -32,6 +34,7 @@ import { EnvironmentAgentController } from './http/agent.controller.ts';
 import { EnvironmentsController } from './http/environments.controller.ts';
 import { ForgejoEnvironmentRepositories, ForgejoPullAccounts } from './infrastructure/forgejo-environment-repositories.ts';
 import { OpenBaoSecretStore } from './infrastructure/openbao-secret-store.ts';
+import { postgresEnvironmentsStore } from './infrastructure/postgres-environments-store.ts';
 import { EnvironmentsSubscriptions } from './messaging/environments-subscriptions.ts';
 
 /** Each company's environments, the targets that run them, and their variables and secrets. */
@@ -47,22 +50,23 @@ export class EnvironmentsModule {
         controllers: [EnvironmentsController, EnvironmentAgentController],
         providers: withOverrides(
           [
+            { provide: ENVIRONMENTS_STORE, useFactory: postgresEnvironmentsStore, inject: [TenantDatabase] },
             {
               provide: Environments,
-              useFactory: (database: TenantDatabase) =>
-                new Environments(database, { agentApiUrl: config.agentApiUrl, agentChart: config.agentChart, localHosting: config.localHosting }),
-              inject: [TenantDatabase],
+              useFactory: (store: EnvironmentsStore) =>
+                new Environments(store, { agentApiUrl: config.agentApiUrl, agentChart: config.agentChart, localHosting: config.localHosting }),
+              inject: [ENVIRONMENTS_STORE],
             },
             {
               provide: TargetAgents,
-              useFactory: (database: TenantDatabase) =>
-                new TargetAgents(database, {
+              useFactory: (store: EnvironmentsStore) =>
+                new TargetAgents(store, {
                   agentApiUrl: config.agentApiUrl,
                   lostAfterSeconds: config.targetLostAfterSeconds,
                   // Its own key, made from the signing secret, so a telemetry token can never sign anything else.
                   telemetryKey: createHmac('sha256', config.signingKeySecret).update('telemetry-tokens').digest('base64'),
                 }),
-              inject: [TenantDatabase],
+              inject: [ENVIRONMENTS_STORE],
             },
             {
               provide: ENVIRONMENT_REPOSITORIES,
@@ -83,14 +87,14 @@ export class EnvironmentsModule {
             },
             {
               provide: EnvironmentConfig,
-              useFactory: (database: TenantDatabase, secrets: SecretStore, applications: ApplicationDirectory) =>
-                new EnvironmentConfig(database, secrets, applications),
-              inject: [TenantDatabase, SECRET_STORE, APPLICATION_DIRECTORY],
+              useFactory: (store: EnvironmentsStore, secrets: SecretStore, applications: ApplicationDirectory) =>
+                new EnvironmentConfig(store, secrets, applications),
+              inject: [ENVIRONMENTS_STORE, SECRET_STORE, APPLICATION_DIRECTORY],
             },
             {
               provide: TargetConfigurations,
               useFactory: (
-                database: TenantDatabase,
+                store: EnvironmentsStore,
                 companies: CompanyDirectory,
                 agents: TargetAgents,
                 repositories: EnvironmentRepositories,
@@ -99,7 +103,7 @@ export class EnvironmentsModule {
                 signingKeys: ImageSigningKeys,
               ) =>
                 new TargetConfigurations(
-                  database,
+                  store,
                   companies,
                   agents,
                   repositories,
@@ -115,7 +119,7 @@ export class EnvironmentsModule {
                     agentApiUrl: config.agentApiUrl,
                   },
                 ),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, TargetAgents, ENVIRONMENT_REPOSITORIES, PULL_ACCOUNTS, SECRET_STORE, IMAGE_SIGNING_KEYS],
+              inject: [ENVIRONMENTS_STORE, COMPANY_DIRECTORY, TargetAgents, ENVIRONMENT_REPOSITORIES, PULL_ACCOUNTS, SECRET_STORE, IMAGE_SIGNING_KEYS],
             },
             // What other contexts ask Environments for: its environments, their values, their
             // repositories, and which target an agent's or collector's token belongs to.

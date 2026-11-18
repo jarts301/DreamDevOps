@@ -16,14 +16,17 @@ import {
   type EnvironmentDirectory,
   type EnvironmentGitOps,
   type EnvironmentValues,
+  TARGET_AUTHENTICATION,
+  type TargetAuthentication,
 } from '@dreamdevops/contracts/environments/services';
 import { EnvironmentsModule } from '../environments/environments.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { REPOSITORY_LOOKUP, type RepositoryLookup } from '@dreamdevops/contracts/source-governance/services';
 import { SourceGovernanceModule } from '../source-governance/source-governance.module.ts';
 import { Deployments } from './application/deployments.ts';
-import { HOST_RUNTIME, type HostRuntime } from './application/ports.ts';
+import { DEPLOYMENTS_STORE, type DeploymentsStore, HOST_RUNTIME, type HostRuntime } from './application/ports.ts';
 import { LocalDockerRuntime } from './infrastructure/local-docker-runtime.ts';
+import { postgresDeploymentsStore } from './infrastructure/postgres-deployments-store.ts';
 import { AgentController } from './http/agent.controller.ts';
 import { DeploymentsController } from './http/deployments.controller.ts';
 import { DeploymentsSubscriptions } from './messaging/deployments-subscriptions.ts';
@@ -48,10 +51,11 @@ export class DeploymentsModule {
       controllers: [DeploymentsController, AgentController],
       providers: withOverrides(
         [
+          { provide: DEPLOYMENTS_STORE, useFactory: postgresDeploymentsStore, inject: [TenantDatabase] },
           {
             provide: Deployments,
             useFactory: (
-              database: TenantDatabase,
+              store: DeploymentsStore,
               gitOps: EnvironmentGitOps,
               values: EnvironmentValues,
               environments: EnvironmentDirectory,
@@ -61,9 +65,10 @@ export class DeploymentsModule {
               blueprints: BlueprintCatalog,
               entitlements: FeatureAccess,
               runtime: HostRuntime,
+              targets: TargetAuthentication,
             ) =>
               new Deployments(
-                database,
+                store,
                 gitOps,
                 values,
                 environments,
@@ -73,6 +78,7 @@ export class DeploymentsModule {
                 blueprints,
                 entitlements,
                 runtime,
+                targets,
                 {
                   targetRegistryHost: settings.config.targetRegistryHost,
                   targetOtlpEndpoint: settings.config.targetOtlpEndpoint,
@@ -81,7 +87,7 @@ export class DeploymentsModule {
                 },
               ),
             inject: [
-              TenantDatabase,
+              DEPLOYMENTS_STORE,
               ENVIRONMENT_GITOPS,
               ENVIRONMENT_VALUES,
               ENVIRONMENT_DIRECTORY,
@@ -91,6 +97,7 @@ export class DeploymentsModule {
               BLUEPRINT_CATALOG,
               FEATURE_ACCESS,
               HOST_RUNTIME,
+              TARGET_AUTHENTICATION,
             ],
           },
           {

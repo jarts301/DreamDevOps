@@ -50,6 +50,15 @@ Each step reports what it checked. A failed check says what's wrong and how to f
 
 The pipeline repository is closed to company teams, so people can't read Forgejo's job logs. The jobs send what explains a failure instead: the test job the end of the tests' output, and the image job the end of the build's output, which names the instruction that failed. Both show on the build. A job that stopped before it reported, such as when a tool couldn't be downloaded, is named, with the advice to try again.
 
+## A build that can't start
+
+A build waits until its pipeline runs, and nothing else moves it on, so the platform makes sure it never waits for nothing:
+
+- **The pipeline can't be started**, such as while the Git service is down: the start is tried again a few times, `PROVISIONING_RETRY_SECONDS` apart. If the last try fails too, the build fails with the reason, such as *The pipeline could not be started: The Git service could not add the pipeline (status 503).*, and asking again starts a new build.
+- **No job says anything**, because no runner is free or online, or the jobs can't reach the API at `TOOLS_API_URL`: once `BUILD_START_TIMEOUT_MINUTES` pass since the pipeline started without a job starting, reporting or failing, the build fails, and the API logs what to check. A pipeline whose jobs run keeps going, up to `BUILD_TIMEOUT_MINUTES`.
+
+Every failed try of a background job, a build's start included, is in the API's log.
+
 ## What jobs can and can't do
 
 - **No credentials:** each run gets a one-time token that only reads that build's source and reports that build's results, while the build runs. Only its hash is stored.
@@ -86,6 +95,7 @@ All routes start with `/api/v1`.
 |---|---|
 | `SIGNING_KEY_SECRET` | At least 32 characters. The API refuses to start in production with the sample value. |
 | `BUILD_TIMEOUT_MINUTES` | Builds that haven't finished by then fail. Default 60. |
+| `BUILD_START_TIMEOUT_MINUTES` | Builds none of whose pipeline's jobs has started by then, from when the pipeline started, fail. Default 15, and at most `BUILD_TIMEOUT_MINUTES`. |
 | `BUILD_WORK_DIR` | Where uploaded images wait during a build. Default: the system's temporary folder. |
 | `PIPELINES_DIR` | The pipeline definitions. Default: the repository's `pipelines` folder. |
 | `IMAGE_RUNNER_LABEL` | The label of the runner that builds images. The API refuses to start in production with the sample value. |

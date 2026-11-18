@@ -11,7 +11,7 @@ import {
   type ScaffoldValues,
   unknownPlaceholders,
 } from '../domain/blueprint.ts';
-import type { BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
+import type { BlueprintSource } from '../application/ports.ts';
 
 /** The file that lists every published version and its checksum. */
 export const PUBLISHED_FILE = 'published.json';
@@ -27,7 +27,7 @@ export interface Blueprint {
  * blueprint.json and a files folder with the scaffold. A version must be listed in
  * published.json with its checksum, so a published version can never change unnoticed.
  */
-export class BlueprintLibrary implements BlueprintCatalog {
+export class BlueprintLibrary implements BlueprintSource {
   readonly #blueprints: readonly Blueprint[];
 
   private constructor(blueprints: readonly Blueprint[]) {

@@ -1,19 +1,20 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { InvitationRevoked, MemberRemoved, RoleGranted, UserInvited } from '@dreamdevops/contracts/identity-access/events';
-import { currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { Pool } from 'pg';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import { InvitationRevoked, MemberRemoved, RoleGranted, UserInvited } from '@dreamdevops/contracts/identity-access/events';
 import type {
   AcceptedInvitation,
   CreatedInvitation,
   InvitationView,
   MemberView,
   RoleView,
+  SentInvitation,
 } from '@dreamdevops/contracts/identity-access/http';
 import type { FirstAdminInvitations } from '@dreamdevops/contracts/identity-access/services';
+import type { InvitationMailer } from '@dreamdevops/contracts/notifications/services';
+import { currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { normalizeEmail } from '../domain/email.ts';
 import { AccessError } from '../domain/errors.ts';
+import type { MembershipSession, MembershipStore } from './ports.ts';
 
 const COMPANY_ADMIN = 'company-admin';
 const INVITATION_LIFETIME_DAYS = 7;
@@ -27,58 +28,44 @@ export interface CompanyAccessOptions {
 
 /** Manages who belongs to a company and with which role. Every change publishes an event. */
 export class CompanyAccessService implements FirstAdminInvitations {
-  readonly #database: TenantDatabase;
-  readonly #pool: Pool;
+  readonly #store: MembershipStore;
+  readonly #emails: InvitationMailer;
   readonly #options: CompanyAccessOptions;
 
-  constructor(database: TenantDatabase, pool: Pool, options: CompanyAccessOptions) {
-    this.#database = database;
-    this.#pool = pool;
+  constructor(store: MembershipStore, emails: InvitationMailer, options: CompanyAccessOptions) {
+    this.#store = store;
+    this.#emails = emails;
     this.#options = options;
   }
 
   listRoles(): Promise<RoleView[]> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<RoleView>(
-        `SELECT r.key, r.name, coalesce(array_agg(p.permission ORDER BY p.permission), '{}') AS permissions
-         FROM identity.roles r
-         JOIN identity.role_permissions p ON p.role_key = r.key
-         WHERE r.is_company_role
-         GROUP BY r.key, r.name
-         ORDER BY r.key`,
-      );
-      return rows;
-    });
+    return this.#store.transaction((session) => session.companyRoles());
   }
 
-  listMembers(): Promise<MemberView[]> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ user_id: string; email: string; display_name: string; role_key: string; joined_at: Date }>(
-        'SELECT user_id, email, display_name, role_key, joined_at FROM identity.company_members()',
-      );
-      return rows.map((row) => ({
-        userId: row.user_id,
-        email: row.email,
-        displayName: row.display_name,
-        role: row.role_key,
-        joinedAt: row.joined_at.toISOString(),
-      }));
-    });
+  async listMembers(): Promise<MemberView[]> {
+    const members = await this.#store.transaction((session) => session.members());
+    return members.map((member) => ({
+      userId: member.userId,
+      email: member.email,
+      displayName: member.displayName,
+      role: member.role,
+      joinedAt: member.joinedAt.toISOString(),
+    }));
   }
 
   changeRole(actor: Principal, userIdValue: unknown, roleValue: unknown): Promise<void> {
     const userId = uuid(userIdValue);
-    return this.#database.transaction(async (tx) => {
-      const role = await assignableRole(tx, roleValue);
-      const currentRole = await lockMemberRole(tx, userId);
+    return this.#store.transaction(async (session) => {
+      const role = await assignableRole(session, roleValue);
+      const currentRole = await lockMemberRole(session, userId);
       if (currentRole === role) {
         return;
       }
       if (currentRole === COMPANY_ADMIN) {
-        await assertAnotherAdminRemains(tx, userId);
+        await assertAnotherAdminRemains(session, userId);
       }
-      await tx.query('UPDATE identity.memberships SET role_key = $2 WHERE user_id = $1', [userId, role]);
-      await appendToOutbox(tx, [
+      await session.setRole(userId, role);
+      await session.record([
         RoleGranted.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -90,13 +77,13 @@ export class CompanyAccessService implements FirstAdminInvitations {
 
   removeMember(actor: Principal, userIdValue: unknown): Promise<void> {
     const userId = uuid(userIdValue);
-    return this.#database.transaction(async (tx) => {
-      const currentRole = await lockMemberRole(tx, userId);
+    return this.#store.transaction(async (session) => {
+      const currentRole = await lockMemberRole(session, userId);
       if (currentRole === COMPANY_ADMIN) {
-        await assertAnotherAdminRemains(tx, userId);
+        await assertAnotherAdminRemains(session, userId);
       }
-      await tx.query('DELETE FROM identity.memberships WHERE user_id = $1', [userId]);
-      await appendToOutbox(tx, [
+      await session.removeMember(userId);
+      await session.record([
         MemberRemoved.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -106,47 +93,57 @@ export class CompanyAccessService implements FirstAdminInvitations {
     });
   }
 
-  invite(actor: Principal, emailValue: unknown, roleValue: unknown): Promise<CreatedInvitation> {
+  /**
+   * Invites someone to the current company, and emails them the link. The invitation stands
+   * even if the email can't be sent, and the answer says so, so the inviter can send the link.
+   * The local demo's setup sends none.
+   */
+  async invite(
+    actor: Principal,
+    emailValue: unknown,
+    roleValue: unknown,
+    options: { readonly sendEmail?: boolean } = {},
+  ): Promise<SentInvitation> {
     const email = normalizeEmail(emailValue);
-    return this.#database.transaction(async (tx) => {
-      const role = await assignableRole(tx, roleValue);
-      const { rows: members } = await tx.query('SELECT 1 FROM identity.company_members() WHERE email = $1', [email]);
-      if (members.length > 0) {
+    const invitation = await this.#store.transaction(async (session) => {
+      const role = await assignableRole(session, roleValue);
+      if (await session.hasMemberWithEmail(email)) {
         throw new AccessError('conflict', 'This person is already a member of the company.');
       }
-      return createInvitation(tx, email, role, actor.userId);
+      return createInvitation(session, email, role, actor.userId);
     });
+    if (options.sendEmail === false) {
+      return { ...invitation, emailSent: false };
+    }
+    const emailSent = await this.#emails.send({
+      to: invitation.email,
+      companyName: actor.companyName ?? 'your company',
+      role: invitation.role,
+      invitedBy: actor.displayName,
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
+    });
+    return { ...invitation, emailSent };
   }
 
-  listInvitations(): Promise<InvitationView[]> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ id: string; email: string; role_key: string; created_at: Date; expires_at: Date }>(
-        `SELECT id, email, role_key, created_at, expires_at
-         FROM identity.invitations
-         WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
-         ORDER BY created_at, id`,
-      );
-      return rows.map((row) => ({
-        id: row.id,
-        email: row.email,
-        role: row.role_key,
-        createdAt: row.created_at.toISOString(),
-        expiresAt: row.expires_at.toISOString(),
-      }));
-    });
+  async listInvitations(): Promise<InvitationView[]> {
+    const invitations = await this.#store.transaction((session) => session.openInvitations());
+    return invitations.map((invitation) => ({
+      id: invitation.id,
+      email: invitation.email,
+      role: invitation.role,
+      createdAt: invitation.createdAt.toISOString(),
+      expiresAt: invitation.expiresAt.toISOString(),
+    }));
   }
 
   revokeInvitation(actor: Principal, idValue: unknown): Promise<void> {
     const id = uuid(idValue);
-    return this.#database.transaction(async (tx) => {
-      const { rowCount } = await tx.query(
-        'UPDATE identity.invitations SET revoked_at = now() WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL',
-        [id],
-      );
-      if (rowCount === 0) {
+    return this.#store.transaction(async (session) => {
+      if (!(await session.revokeInvitation(id))) {
         throw new AccessError('not-found', 'This invitation does not exist.');
       }
-      await appendToOutbox(tx, [
+      await session.record([
         InvitationRevoked.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -162,12 +159,11 @@ export class CompanyAccessService implements FirstAdminInvitations {
    */
   inviteFirstAdmin(actor: Principal, emailValue: string): Promise<CreatedInvitation> {
     const email = normalizeEmail(emailValue);
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query('SELECT 1 FROM identity.memberships LIMIT 1');
-      if (rows.length > 0) {
+    return this.#store.transaction(async (session) => {
+      if (await session.hasMembers()) {
         throw new AccessError('conflict', 'This company already has members.');
       }
-      return createInvitation(tx, email, COMPANY_ADMIN, actor.userId);
+      return createInvitation(session, email, COMPANY_ADMIN, actor.userId);
     });
   }
 
@@ -177,12 +173,8 @@ export class CompanyAccessService implements FirstAdminInvitations {
       throw invalidInvitation();
     }
     const tokenHash = hashToken(tokenValue);
-    const { rows } = await this.#pool.query<{ company_id: string | null }>(
-      'SELECT identity.invitation_company($1) AS company_id',
-      [tokenHash],
-    );
-    const companyId = rows[0]?.company_id;
-    if (companyId === null || companyId === undefined) {
+    const companyId = await this.#store.invitationCompany(tokenHash);
+    if (companyId === null) {
       throw invalidInvitation();
     }
     if (this.#options.requireVerifiedEmail && !principal.emailVerified) {
@@ -190,40 +182,23 @@ export class CompanyAccessService implements FirstAdminInvitations {
     }
 
     return runWithCompany(parseCompanyId(companyId), () =>
-      this.#database.transaction(async (tx) => {
-        const { rows: invitations } = await tx.query<{ id: string; email: string; role_key: string }>(
-          `SELECT id, email, role_key
-           FROM identity.invitations
-           WHERE token_hash = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
-           FOR UPDATE`,
-          [tokenHash],
-        );
-        const invitation = invitations[0];
-        if (invitation === undefined || invitation.email !== principal.email.toLowerCase()) {
+      this.#store.transaction(async (session) => {
+        const invitation = await session.lockUsableInvitation(tokenHash);
+        if (invitation === null || invitation.email !== principal.email.toLowerCase()) {
           throw invalidInvitation();
         }
-
-        const { rowCount } = await tx.query(
-          `INSERT INTO identity.memberships (company_id, user_id, role_key)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (company_id, user_id) DO NOTHING`,
-          [companyId, principal.userId, invitation.role_key],
-        );
-        if (rowCount === 0) {
+        if (!(await session.addMember(companyId, principal.userId, invitation.role))) {
           throw new AccessError('conflict', 'You are already a member of this company.');
         }
-        await tx.query('UPDATE identity.invitations SET accepted_at = now(), accepted_by = $2 WHERE id = $1', [
-          invitation.id,
-          principal.userId,
-        ]);
-        await appendToOutbox(tx, [
+        await session.markAccepted(invitation.id, principal.userId);
+        await session.record([
           RoleGranted.create({
             companyId: currentCompanyId(),
             actorId: principal.userId,
-            payload: { userId: principal.userId, role: invitation.role_key, invitationId: invitation.id },
+            payload: { userId: principal.userId, role: invitation.role, invitationId: invitation.id },
           }),
         ]);
-        return { companyId, role: invitation.role_key };
+        return { companyId, role: invitation.role };
       }),
     );
   }
@@ -240,73 +215,50 @@ function uuid(value: unknown): string {
   return value.toLowerCase();
 }
 
-async function assignableRole(tx: TenantTransaction, value: unknown): Promise<string> {
-  const { rows } = await tx.query('SELECT 1 FROM identity.roles WHERE key = $1 AND is_company_role', [
-    typeof value === 'string' ? value : '',
-  ]);
-  if (rows.length === 0) {
+async function assignableRole(session: MembershipSession, value: unknown): Promise<string> {
+  if (typeof value !== 'string' || !(await session.isCompanyRole(value))) {
     throw new AccessError('invalid', 'This role does not exist in a company.');
   }
-  return value as string;
+  return value;
 }
 
-async function lockMemberRole(tx: TenantTransaction, userId: string): Promise<string> {
-  const { rows } = await tx.query<{ role_key: string }>(
-    'SELECT role_key FROM identity.memberships WHERE user_id = $1 FOR UPDATE',
-    [userId],
-  );
-  const member = rows[0];
-  if (member === undefined) {
+async function lockMemberRole(session: MembershipSession, userId: string): Promise<string> {
+  const role = await session.lockRoleOf(userId);
+  if (role === null) {
     throw new AccessError('not-found', 'This person is not a member of the company.');
   }
-  return member.role_key;
+  return role;
 }
 
 /** Locks the company's admins, so two requests can't each remove the other's last admin. */
-async function assertAnotherAdminRemains(tx: TenantTransaction, leavingUserId: string): Promise<void> {
-  const { rows } = await tx.query<{ user_id: string }>(
-    'SELECT user_id FROM identity.memberships WHERE role_key = $1 ORDER BY user_id FOR UPDATE',
-    [COMPANY_ADMIN],
-  );
-  if (!rows.some((admin) => admin.user_id !== leavingUserId)) {
+async function assertAnotherAdminRemains(session: MembershipSession, leavingUserId: string): Promise<void> {
+  const admins = await session.lockMembersWithRole(COMPANY_ADMIN);
+  if (!admins.some((admin) => admin !== leavingUserId)) {
     throw new AccessError('conflict', 'A company must keep at least one Company Admin.');
   }
 }
 
-async function createInvitation(
-  tx: TenantTransaction,
-  email: string,
-  role: string,
-  invitedBy: string,
-): Promise<CreatedInvitation> {
+async function createInvitation(session: MembershipSession, email: string, role: string, invitedBy: string): Promise<CreatedInvitation> {
   // An expired invitation no longer counts, so it mustn't block sending a new one.
-  await tx.query(
-    `UPDATE identity.invitations SET revoked_at = now()
-     WHERE email = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= now()`,
-    [email],
-  );
-  const { rows: open } = await tx.query(
-    'SELECT 1 FROM identity.invitations WHERE email = $1 AND accepted_at IS NULL AND revoked_at IS NULL',
-    [email],
-  );
-  if (open.length > 0) {
+  await session.revokeExpiredInvitations(email);
+  if (await session.hasOpenInvitation(email)) {
     throw new AccessError('conflict', 'This person already has an open invitation.');
   }
 
   const token = randomBytes(32).toString('base64url');
-  const { rows } = await tx.query<{ id: string; expires_at: Date }>(
-    `INSERT INTO identity.invitations (company_id, email, role_key, token_hash, invited_by, expires_at)
-     VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6))
-     RETURNING id, expires_at`,
-    [currentCompanyId(), email, role, hashToken(token), invitedBy, INVITATION_LIFETIME_DAYS],
-  );
-  const invitation = rows[0]!;
-  await appendToOutbox(tx, [
+  const invitation = await session.addInvitation({
+    email,
+    role,
+    tokenHash: hashToken(token),
+    invitedBy,
+    lifetimeDays: INVITATION_LIFETIME_DAYS,
+  });
+  await session.record([
     UserInvited.create({
       companyId: currentCompanyId(),
       actorId: invitedBy,
       payload: { invitationId: invitation.id, role, invitedBy },
     }),
   ]);
-  return { id: invitation.id, token, expiresAt: invitation.expires_at.toISOString(), email, role };
+  return { id: invitation.id, token, expiresAt: invitation.expiresAt.toISOString(), email, role };
 }

@@ -67,6 +67,7 @@ export const testConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   signingKeySecret: 'test-signing-key-secret-that-is-long-enough',
   buildWorkDir: join(tmpdir(), 'dreamdevops-test-builds'),
   buildTimeoutMinutes: 60,
+  buildStartTimeoutMinutes: 15,
   imageRunnerLabel: 'test-image-runner',
   agentApiUrl: 'http://api.test',
   agentChart: 'oci://charts.test/dreamdevops-agent',

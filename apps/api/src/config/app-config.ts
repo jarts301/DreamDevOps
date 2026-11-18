@@ -57,6 +57,11 @@ export interface AppConfig {
   readonly buildWorkDir: string;
   /** Builds that haven't finished by then are marked as failed. */
   readonly buildTimeoutMinutes: number;
+  /**
+   * Builds none of whose pipeline's jobs has started by then fail, rather than wait for the
+   * whole timeout, such as when no runner is free or jobs can't reach TOOLS_API_URL.
+   */
+  readonly buildStartTimeoutMinutes: number;
   /** The secret label of the runner that builds images, put in the platform's pipeline. */
   readonly imageRunnerLabel: string;
   /** The API's address as agents in targets reach it. Defaults to API_PUBLIC_URL. */
@@ -210,6 +215,11 @@ export function loadConfig(env: Variables): AppConfig {
   if (!HOST_PATTERN.test(host)) {
     throw new InvalidConfigError('API_HOST must be an address or host name, such as 127.0.0.1 or 0.0.0.0.');
   }
+  const buildTimeoutMinutes = integer(env, 'BUILD_TIMEOUT_MINUTES', 60, { min: 1 });
+  const buildStartTimeoutMinutes = integer(env, 'BUILD_START_TIMEOUT_MINUTES', 15, { min: 1 });
+  if (buildStartTimeoutMinutes > buildTimeoutMinutes) {
+    throw new InvalidConfigError('BUILD_START_TIMEOUT_MINUTES can be at most BUILD_TIMEOUT_MINUTES.');
+  }
   const sessionIdleMinutes = integer(env, 'SESSION_IDLE_MINUTES', 30, { min: 1 });
   const sessionAbsoluteMinutes = integer(env, 'SESSION_ABSOLUTE_MINUTES', 480, { min: 1 });
   if (sessionIdleMinutes > sessionAbsoluteMinutes) {
@@ -268,7 +278,8 @@ export function loadConfig(env: Variables): AppConfig {
     webhookSecretKey,
     signingKeySecret,
     buildWorkDir: env.BUILD_WORK_DIR || join(tmpdir(), 'dreamdevops-builds'),
-    buildTimeoutMinutes: integer(env, 'BUILD_TIMEOUT_MINUTES', 60, { min: 1 }),
+    buildTimeoutMinutes,
+    buildStartTimeoutMinutes,
     imageRunnerLabel,
     agentApiUrl,
     agentChart,

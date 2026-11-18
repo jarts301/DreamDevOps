@@ -13,10 +13,10 @@ export interface Place {
   readonly production: boolean;
 }
 
-/** An alert's environment and application, as its row keeps them. */
-export interface PlaceRow {
-  readonly environment_id: string;
-  readonly application_id: string;
+/** An alert's environment and application. */
+export interface PlaceIds {
+  readonly environmentId: string;
+  readonly applicationId: string;
 }
 
 /**
@@ -35,7 +35,7 @@ export class Places {
 
   /** The place, or null when the company has no such environment or application. */
   async find(environmentId: string, applicationId: string): Promise<Place | null> {
-    return (await this.of([{ environment_id: environmentId, application_id: applicationId }])).get(placeId(environmentId, applicationId)) ?? null;
+    return (await this.of([{ environmentId, applicationId }])).get(placeId(environmentId, applicationId)) ?? null;
   }
 
   /**
@@ -43,7 +43,7 @@ export class Places {
    * longer exists are left out. Any other failure, such as the database being down, is
    * thrown, so it isn't mistaken for a place that's gone.
    */
-  async of(rows: readonly PlaceRow[]): Promise<Map<string, Place>> {
+  async of(rows: readonly PlaceIds[]): Promise<Map<string, Place>> {
     const quietly = <T>(lookup: Promise<T>) =>
       lookup.catch((error: unknown) => {
         if (error instanceof DomainError && error.kind === 'not-found') {
@@ -53,22 +53,22 @@ export class Places {
       });
     const environments = new Map(
       await Promise.all(
-        [...new Set(rows.map((row) => row.environment_id))].map(async (id) => [id, await quietly(this.#environments.get(id))] as const),
+        [...new Set(rows.map((row) => row.environmentId))].map(async (id) => [id, await quietly(this.#environments.get(id))] as const),
       ),
     );
     const applications = new Map(
       await Promise.all(
-        [...new Set(rows.map((row) => row.application_id))].map(async (id) => [id, await quietly(this.#catalog.get(id))] as const),
+        [...new Set(rows.map((row) => row.applicationId))].map(async (id) => [id, await quietly(this.#catalog.get(id))] as const),
       ),
     );
     const places = new Map<string, Place>();
     for (const row of rows) {
-      const environment = environments.get(row.environment_id);
-      const application = applications.get(row.application_id);
+      const environment = environments.get(row.environmentId);
+      const application = applications.get(row.applicationId);
       if (environment === undefined || environment === null || application === undefined || application === null) {
         continue;
       }
-      const id = placeId(row.environment_id, row.application_id);
+      const id = placeId(row.environmentId, row.applicationId);
       places.set(id, {
         placeId: id,
         environmentId: environment.id,

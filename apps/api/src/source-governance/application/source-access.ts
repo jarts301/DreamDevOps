@@ -2,12 +2,11 @@ import { MemberRemoved, RoleGranted } from '@dreamdevops/contracts/identity-acce
 import { RepositoryCreated } from '@dreamdevops/contracts/source-governance/events';
 import { CompanyProvisioned, CompanyReactivated, CompanySuspended } from '@dreamdevops/contracts/tenancy/events';
 import { currentCompanyId, type EventContract } from '@dreamdevops/shared-kernel';
-import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { planTeamChanges, TEAMS, teamFor, type TeamKey } from '../domain/git-flow.ts';
 import type { SourceAccessView } from '@dreamdevops/contracts/source-governance/http';
-import type { SourceHost } from './ports.ts';
+import type { SourceHost, SourceStore } from './ports.ts';
 
 /** The events that change who should be in which team. */
 export const ACCESS_TRIGGERS: readonly EventContract[] = [
@@ -19,25 +18,19 @@ export const ACCESS_TRIGGERS: readonly EventContract[] = [
   RepositoryCreated,
 ];
 
-interface MemberAccount {
-  user_id: string;
-  username: string;
-  permissions: string[];
-}
-
 /**
  * Keeps each organization's teams in line with the company's members and roles. People
  * get a Git account the first time they sign in to Forgejo, so they join their team at
  * the next sync after that. Removals and role changes apply at once, through events.
  */
 export class SourceAccess {
-  readonly #database: TenantDatabase;
+  readonly #store: SourceStore;
   readonly #companies: CompanyDirectory;
   readonly #host: SourceHost;
   readonly #publicUrl: string;
 
-  constructor(database: TenantDatabase, companies: CompanyDirectory, host: SourceHost, publicUrl: string) {
-    this.#database = database;
+  constructor(store: SourceStore, companies: CompanyDirectory, host: SourceHost, publicUrl: string) {
+    this.#store = store;
     this.#companies = companies;
     this.#host = host;
     this.#publicUrl = publicUrl.replace(/\/$/, '');
@@ -46,10 +39,7 @@ export class SourceAccess {
   /** Brings the current company's teams in line. Safe to repeat. */
   async syncCompany(): Promise<void> {
     const company = await this.#companies.find(currentCompanyId());
-    const members = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<MemberAccount>('SELECT * FROM source.member_accounts()');
-      return rows;
-    });
+    const members = await this.#store.transaction((session) => session.memberAccounts());
     // Until the organization exists there's nothing to sync. A suspended company keeps
     // its organization, and has no members here, so everyone is removed.
     if (company === null || (company.status !== 'active' && company.status !== 'suspended')) {
@@ -80,12 +70,7 @@ export class SourceAccess {
 
   /** The signed-in member's Git access in the current company. */
   async mine(principal: Principal): Promise<SourceAccessView> {
-    const account = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<MemberAccount>('SELECT * FROM source.member_accounts() WHERE user_id = $1', [
-        principal.userId,
-      ]);
-      return rows[0];
-    });
+    const [account] = await this.#store.transaction((session) => session.memberAccounts(principal.userId));
     return {
       signInUrl: `${this.#publicUrl}/user/oauth2/keycloak`,
       gitUrl: this.#publicUrl,

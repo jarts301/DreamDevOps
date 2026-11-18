@@ -38,6 +38,22 @@ export interface CreatedInvitation {
   readonly expiresAt: string;
 }
 
+/** Invites someone to the current company with a role. */
+export interface InviteMember {
+  readonly email: string;
+  readonly role: string;
+}
+
+/** Gives a member another role. */
+export interface ChangeRole {
+  readonly role: string;
+}
+
+/** Joins a company with an invitation's token. */
+export interface AcceptInvitation {
+  readonly token: string;
+}
+
 /** An invitation just made, and whether the API emailed its link. */
 export interface SentInvitation extends CreatedInvitation {
   readonly emailSent: boolean;

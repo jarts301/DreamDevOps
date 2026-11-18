@@ -1,14 +1,17 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Req } from '@nestjs/common';
 import { Authenticated, RequirePermissions, SignInRateLimit } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
+import type { Unchecked } from '@dreamdevops/contracts/http';
 import type {
+  AcceptInvitation,
   AcceptedInvitation,
+  ChangeRole,
+  InviteMember,
   InvitationView,
   MemberView,
   RoleView,
   SentInvitation,
 } from '@dreamdevops/contracts/identity-access/http';
-import { INVITATION_MAILER, type InvitationMailer } from '@dreamdevops/contracts/notifications/services';
 import { CompanyAccessService } from '../application/company-access.service.ts';
 
 const MANAGE_USERS = 'company-users:manage';
@@ -17,14 +20,9 @@ const MANAGE_USERS = 'company-users:manage';
 @Controller('company')
 export class CompanyAccessController {
   readonly #service: CompanyAccessService;
-  readonly #emails: InvitationMailer;
 
-  constructor(
-    @Inject(CompanyAccessService) service: CompanyAccessService,
-    @Inject(INVITATION_MAILER) emails: InvitationMailer,
-  ) {
+  constructor(@Inject(CompanyAccessService) service: CompanyAccessService) {
     this.#service = service;
-    this.#emails = emails;
   }
 
   @RequirePermissions(MANAGE_USERS)
@@ -42,7 +40,11 @@ export class CompanyAccessController {
   @RequirePermissions(MANAGE_USERS)
   @Patch('members/:userId')
   @HttpCode(204)
-  changeRole(@Req() request: ApiRequest, @Param('userId') userId: string, @Body() body: { role?: unknown }): Promise<void> {
+  changeRole(
+    @Req() request: ApiRequest,
+    @Param('userId') userId: string,
+    @Body() body: Unchecked<ChangeRole> | undefined,
+  ): Promise<void> {
     return this.#service.changeRole(request.principal!, userId, body?.role);
   }
 
@@ -61,18 +63,8 @@ export class CompanyAccessController {
 
   @RequirePermissions(MANAGE_USERS)
   @Post('invitations')
-  async invite(@Req() request: ApiRequest, @Body() body: { email?: unknown; role?: unknown }): Promise<SentInvitation> {
-    const principal = request.principal!;
-    const invitation = await this.#service.invite(principal, body?.email, body?.role);
-    const emailSent = await this.#emails.send({
-      to: invitation.email,
-      companyName: principal.companyName ?? 'your company',
-      role: invitation.role,
-      invitedBy: principal.displayName,
-      token: invitation.token,
-      expiresAt: invitation.expiresAt,
-    });
-    return { ...invitation, emailSent };
+  invite(@Req() request: ApiRequest, @Body() body: Unchecked<InviteMember> | undefined): Promise<SentInvitation> {
+    return this.#service.invite(request.principal!, body?.email, body?.role);
   }
 
   @RequirePermissions(MANAGE_USERS)
@@ -95,7 +87,7 @@ export class InvitationsController {
   @Authenticated()
   @Post('accept')
   @HttpCode(200)
-  accept(@Req() request: ApiRequest, @Body() body: { token?: unknown }): Promise<AcceptedInvitation> {
+  accept(@Req() request: ApiRequest, @Body() body: Unchecked<AcceptInvitation> | undefined): Promise<AcceptedInvitation> {
     return this.#service.acceptInvitation(request.principal!, body?.token);
   }
 }

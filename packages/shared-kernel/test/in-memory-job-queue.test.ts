@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { FailedAttempt } from '../src/index.ts';
 import { InMemoryJobQueue } from '../src/testing/index.ts';
 import { describeJobQueueContract } from './job-queue-contract.ts';
 
 describeJobQueueContract('in-memory fake', async () => {
-  const queue = new InMemoryJobQueue();
+  const failures: FailedAttempt[] = [];
+  const queue = new InMemoryJobQueue({ onJobFailed: (failure) => failures.push(failure) });
   return {
     queue,
+    failures,
     // Polls rather than drains, so a test can hold a job open while it checks something.
     eventually: (assertion) => vi.waitFor(assertion, { timeout: 2_000, interval: 5 }),
     deadLetters: async (queueName) => {

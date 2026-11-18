@@ -15,7 +15,6 @@ import type {
   EnvironmentView,
   ProductionConfirmation,
   ProviderView,
-  TargetStatus,
   TargetView,
   UpdateEnvironment,
 } from '@dreamdevops/contracts/environments/http';
@@ -24,7 +23,6 @@ import type { EnvironmentDirectory } from '@dreamdevops/contracts/environments/s
 import type { Unchecked } from '@dreamdevops/contracts/http';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import { keyFingerprint, newToken, REGISTRATION_MINUTES } from '../domain/agent-identity.ts';
 import {
   acceptedImageKinds,
@@ -40,12 +38,12 @@ import {
   findProvider,
   HOSTING_PROVIDERS,
   type HostingProvider,
-  type HostingProviderKey,
   type HostingSettings,
   KUBERNETES_PROVIDER,
   LOCAL_PROVIDER,
   parseSettings,
 } from '../domain/hosting-providers.ts';
+import type { EnvironmentsSession, EnvironmentsStore, StoredEnvironment, StoredTarget } from './ports.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -58,43 +56,13 @@ export interface EnvironmentsOptions {
   readonly localHosting: boolean;
 }
 
-interface EnvironmentRow {
-  id: string;
-  name: string;
-  slug: string;
-  kind: EnvironmentKind;
-  accepts_feature_images: boolean;
-  requires_approval: boolean;
-  status: EnvironmentStatus;
-  created_at: Date;
-  archived_at: Date | null;
-}
-
-interface TargetRow {
-  id: string;
-  environment_id: string;
-  provider: HostingProviderKey;
-  settings: HostingSettings;
-  status: TargetStatus;
-  registration_expires_at: Date | null;
-  public_key: string | null;
-  agent_version: string | null;
-  kubernetes_version: string | null;
-  registered_at: Date | null;
-  last_seen_at: Date | null;
-  created_at: Date;
-}
-
-const TARGET_COLUMNS = `id, environment_id, provider, settings, status, registration_expires_at, public_key, agent_version,
-  kubernetes_version, registered_at, last_seen_at, created_at`;
-
 /** Each company's environments and the targets that run them. Every query runs in the current company. */
 export class Environments implements EnvironmentDirectory {
-  readonly #database: TenantDatabase;
+  readonly #store: EnvironmentsStore;
   readonly #options: EnvironmentsOptions;
 
-  constructor(database: TenantDatabase, options: EnvironmentsOptions) {
-    this.#database = database;
+  constructor(store: EnvironmentsStore, options: EnvironmentsOptions) {
+    this.#store = store;
     this.#options = options;
   }
 
@@ -103,25 +71,19 @@ export class Environments implements EnvironmentDirectory {
     if (status !== 'active' && status !== 'archived') {
       throw new EnvironmentError('invalid', 'Choose active or archived environments.');
     }
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<EnvironmentRow>(
-        `SELECT * FROM environments.environments WHERE status = $1
-         ORDER BY kind = 'production' DESC, lower(name)`,
-        [status],
-      );
-      const { rows: targets } = await tx.query<TargetRow>(
-        `SELECT ${TARGET_COLUMNS} FROM environments.targets WHERE status <> 'revoked'`,
-      );
-      const byEnvironment = new Map(targets.map((target) => [target.environment_id, target]));
-      return rows.map((row) => toView(row, byEnvironment.get(row.id) ?? null));
+    return this.#store.transaction(async (session) => {
+      const environments = await session.listEnvironments(status);
+      const targets = await session.currentTargets();
+      const byEnvironment = new Map(targets.map((target) => [target.environmentId, target]));
+      return environments.map((environment) => toView(environment, byEnvironment.get(environment.id) ?? null));
     });
   }
 
   async get(idValue: unknown): Promise<EnvironmentView> {
     const id = parseId(idValue, 'environment');
-    return this.#database.transaction(async (tx) => {
-      const environment = await findOrFail(tx, id);
-      return toView(environment, await currentTarget(tx, id));
+    return this.#store.transaction(async (session) => {
+      const environment = await findOrFail(session, id);
+      return toView(environment, await session.currentTarget(id));
     });
   }
 
@@ -136,25 +98,20 @@ export class Environments implements EnvironmentDirectory {
     const companyId = currentCompanyId();
     const id = randomUUID();
 
-    return this.#database.transaction(async (tx) => {
+    return this.#store.transaction(async (session) => {
       // One at a time per company, so two people can't take the same name or short name.
-      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('environments:' || $1, 0))", [companyId]);
-      await assertNameFree(tx, name, null);
-      const slug = await freeSlug(tx, name);
-      await tx.query(
-        `INSERT INTO environments.environments
-           (id, company_id, name, slug, kind, accepts_feature_images, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)`,
-        [id, companyId, name, slug, kind, featureImages, actor.userId],
-      );
-      await appendToOutbox(tx, [
+      await session.lockNames();
+      await assertNameFree(session, name, null);
+      const slug = await freeSlug(session, name);
+      await session.addEnvironment({ id, name, slug, kind, acceptsFeatureImages: featureImages, createdBy: actor.userId });
+      await session.record([
         EnvironmentCreated.create({
           companyId,
           actorId: actor.userId,
           payload: { environmentId: id, name, slug, kind, acceptsFeatureImages: featureImages, ...(reason !== null && { reason }) },
         }),
       ]);
-      return toView(await findOrFail(tx, id), null);
+      return toView(await findOrFail(session, id), null);
     });
   }
 
@@ -169,16 +126,16 @@ export class Environments implements EnvironmentDirectory {
   ): Promise<void> {
     const id = parseId(idValue, 'environment');
     const name = input.name === undefined ? undefined : normalizeEnvironmentName(input.name);
-    return this.#database.transaction(async (tx) => {
-      const current = await findOrFail(tx, id, { lock: true });
+    return this.#store.transaction(async (session) => {
+      const current = await findOrFail(session, id, { lock: true });
       if (current.status === 'archived') {
         throw new EnvironmentError('conflict', 'Restore the environment first.');
       }
       const featureImages =
         input.acceptsFeatureImages === undefined
-          ? current.accepts_feature_images
+          ? current.acceptsFeatureImages
           : acceptsFeatureImages(current.kind, input.acceptsFeatureImages);
-      const requiresApproval = input.requiresApproval === undefined ? current.requires_approval : input.requiresApproval;
+      const requiresApproval = input.requiresApproval === undefined ? current.requiresApproval : input.requiresApproval;
       if (typeof requiresApproval !== 'boolean') {
         throw new EnvironmentError('invalid', 'Say whether deployments need approval.');
       }
@@ -192,15 +149,15 @@ export class Environments implements EnvironmentDirectory {
         acceptsFeatureImages?: boolean;
         reason?: string;
       } = {};
-      if (requiresApproval !== current.requires_approval) {
+      if (requiresApproval !== current.requiresApproval) {
         changes.requiresApproval = requiresApproval;
       }
       if (name !== undefined && name !== current.name) {
-        await assertNameFree(tx, name, id);
+        await assertNameFree(session, name, id);
         changes.name = name;
         changes.previousName = current.name;
       }
-      if (featureImages !== current.accepts_feature_images) {
+      if (featureImages !== current.acceptsFeatureImages) {
         changes.acceptsFeatureImages = featureImages;
       }
       if (Object.keys(changes).length === 0) {
@@ -211,13 +168,8 @@ export class Environments implements EnvironmentDirectory {
       if (reason !== null) {
         changes.reason = reason;
       }
-      await tx.query(
-        `UPDATE environments.environments
-         SET name = $2, accepts_feature_images = $3, requires_approval = $4, updated_at = now()
-         WHERE id = $1`,
-        [id, name ?? current.name, featureImages, requiresApproval],
-      );
-      await appendToOutbox(tx, [
+      await session.updateEnvironment(id, { name: name ?? current.name, acceptsFeatureImages: featureImages, requiresApproval });
+      await session.record([
         EnvironmentUpdated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -243,22 +195,17 @@ export class Environments implements EnvironmentDirectory {
     request: Unchecked<ProductionConfirmation>,
   ): Promise<void> {
     const id = parseId(idValue, 'environment');
-    return this.#database.transaction(async (tx) => {
-      const current = await findOrFail(tx, id, { lock: true });
+    return this.#store.transaction(async (session) => {
+      const current = await findOrFail(session, id, { lock: true });
       if (current.status === status) {
         return;
       }
-      if (status === 'archived' && (await currentTarget(tx, id)) !== null) {
+      if (status === 'archived' && (await session.currentTarget(id)) !== null) {
         throw new EnvironmentError('conflict', 'Disconnect its target first.');
       }
       const reason = status === 'archived' ? authorize(actor, current, 'archive', request) : null;
-      await tx.query(
-        `UPDATE environments.environments
-         SET status = $2, archived_at = CASE WHEN $2 = 'archived' THEN now() END, updated_at = now()
-         WHERE id = $1`,
-        [id, status],
-      );
-      await appendToOutbox(tx, [
+      await session.setEnvironmentStatus(id, status);
+      await session.record([
         (status === 'archived' ? EnvironmentArchived : EnvironmentRestored).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -268,15 +215,15 @@ export class Environments implements EnvironmentDirectory {
     });
   }
 
-  /**
-   * Starts connecting a target: makes a one-time registration token and the Helm command
-   * that installs the agent with it. A new token replaces one not used yet.
-   */
   /** Where environments can run, with what each needs, and whether it can be chosen here. */
   providers(): ProviderView[] {
     return HOSTING_PROVIDERS.map((provider) => ({ ...provider, unavailableReason: this.#unavailable(provider) }));
   }
 
+  /**
+   * Starts connecting a target. For a cluster: makes a one-time registration token and the
+   * Helm command that installs the agent with it. A new token replaces one not used yet.
+   */
   connect(actor: Principal, idValue: unknown, input: Unchecked<ConnectTarget> = {}): Promise<Connection> {
     const id = parseId(idValue, 'environment');
     const companyId = currentCompanyId();
@@ -292,34 +239,18 @@ export class Environments implements EnvironmentDirectory {
     if (provider.key === LOCAL_PROVIDER) {
       return this.#connectLocal(actor, id, settings);
     }
-    return this.#database.transaction(async (tx) => {
-      const environment = await findOrFail(tx, id, { lock: true });
-      if (environment.status === 'archived') {
-        throw new EnvironmentError('conflict', 'Restore the environment first.');
-      }
-      authorize(actor, environment, 'connect-target', {});
-      const existing = await currentTarget(tx, id);
-      if (existing !== null && existing.status !== 'pending') {
-        throw new EnvironmentError('conflict', 'This environment already has a target. Disconnect it first.');
-      }
-      if (existing !== null) {
-        await tx.query(
-          `UPDATE environments.targets
-           SET status = 'revoked', registration_token_hash = NULL, revoked_at = now(), revoked_by = $2, updated_at = now()
-           WHERE id = $1`,
-          [existing.id, actor.userId],
-        );
-      }
+    return this.#store.transaction(async (session) => {
+      const environment = await this.#connectable(session, actor, id);
       const targetId = randomUUID();
       const { token, hash } = newToken(targetId);
-      const { rows } = await tx.query<{ registration_expires_at: Date }>(
-        `INSERT INTO environments.targets
-           (id, company_id, environment_id, status, registration_token_hash, registration_expires_at, created_by)
-         VALUES ($1, $2, $3, 'pending', $4, now() + make_interval(mins => $5), $6)
-         RETURNING registration_expires_at`,
-        [targetId, companyId, id, hash, REGISTRATION_MINUTES, actor.userId],
-      );
-      await appendToOutbox(tx, [
+      const expiresAt = await session.addPendingTarget({
+        id: targetId,
+        environmentId: id,
+        registrationTokenHash: hash,
+        registrationMinutes: REGISTRATION_MINUTES,
+        createdBy: actor.userId,
+      });
+      await session.record([
         TargetRegistrationStarted.create({
           companyId,
           actorId: actor.userId,
@@ -330,7 +261,7 @@ export class Environments implements EnvironmentDirectory {
         targetId,
         provider: KUBERNETES_PROVIDER,
         registrationToken: token,
-        expiresAt: rows[0]!.registration_expires_at.toISOString(),
+        expiresAt: expiresAt.toISOString(),
         command: this.#command(token),
       };
     });
@@ -339,31 +270,11 @@ export class Environments implements EnvironmentDirectory {
   /** This machine needs no agent, so it's connected at once. */
   #connectLocal(actor: Principal, id: string, settings: HostingSettings): Promise<Connection> {
     const companyId = currentCompanyId();
-    return this.#database.transaction(async (tx) => {
-      const environment = await findOrFail(tx, id, { lock: true });
-      if (environment.status === 'archived') {
-        throw new EnvironmentError('conflict', 'Restore the environment first.');
-      }
-      authorize(actor, environment, 'connect-target', {});
-      const existing = await currentTarget(tx, id);
-      if (existing !== null && existing.status !== 'pending') {
-        throw new EnvironmentError('conflict', 'This environment already has a target. Disconnect it first.');
-      }
-      if (existing !== null) {
-        await tx.query(
-          `UPDATE environments.targets
-           SET status = 'revoked', registration_token_hash = NULL, revoked_at = now(), revoked_by = $2, updated_at = now()
-           WHERE id = $1`,
-          [existing.id, actor.userId],
-        );
-      }
+    return this.#store.transaction(async (session) => {
+      const environment = await this.#connectable(session, actor, id);
       const targetId = randomUUID();
-      await tx.query(
-        `INSERT INTO environments.targets (id, company_id, environment_id, provider, settings, status, registered_at, created_by)
-         VALUES ($1, $2, $3, $4, $5, 'connected', now(), $6)`,
-        [targetId, companyId, id, LOCAL_PROVIDER, JSON.stringify(settings), actor.userId],
-      );
-      await appendToOutbox(tx, [
+      await session.addConnectedTarget({ id: targetId, environmentId: id, provider: LOCAL_PROVIDER, settings, createdBy: actor.userId });
+      await session.record([
         TargetConnected.create({
           companyId,
           actorId: actor.userId,
@@ -372,6 +283,26 @@ export class Environments implements EnvironmentDirectory {
       ]);
       return { targetId, provider: LOCAL_PROVIDER, registrationToken: null, expiresAt: null, command: null };
     });
+  }
+
+  /**
+   * The environment, locked, if a target can connect to it now: it's active, and has no
+   * target, or one still waiting for its agent, which the new one replaces.
+   */
+  async #connectable(session: EnvironmentsSession, actor: Principal, id: string): Promise<StoredEnvironment> {
+    const environment = await findOrFail(session, id, { lock: true });
+    if (environment.status === 'archived') {
+      throw new EnvironmentError('conflict', 'Restore the environment first.');
+    }
+    authorize(actor, environment, 'connect-target', {});
+    const existing = await session.currentTarget(id);
+    if (existing !== null && existing.status !== 'pending') {
+      throw new EnvironmentError('conflict', 'This environment already has a target. Disconnect it first.');
+    }
+    if (existing !== null) {
+      await session.revokeTarget(existing.id, actor.userId);
+    }
+    return environment;
   }
 
   #unavailable(provider: HostingProvider): string | null {
@@ -387,21 +318,15 @@ export class Environments implements EnvironmentDirectory {
   /** Cuts the target off: its key and tokens stop working at once, and a new one can connect. */
   disconnect(actor: Principal, idValue: unknown, request: Unchecked<ProductionConfirmation> = {}): Promise<void> {
     const id = parseId(idValue, 'environment');
-    return this.#database.transaction(async (tx) => {
-      const environment = await findOrFail(tx, id, { lock: true });
-      const target = await currentTarget(tx, id);
+    return this.#store.transaction(async (session) => {
+      const environment = await findOrFail(session, id, { lock: true });
+      const target = await session.currentTarget(id);
       if (target === null) {
         throw new EnvironmentError('conflict', 'This environment has no target.');
       }
       const reason = authorize(actor, environment, 'disconnect-target', request);
-      await tx.query(
-        `UPDATE environments.targets
-         SET status = 'revoked', registration_token_hash = NULL, access_token_hash = NULL,
-             access_token_expires_at = NULL, revoked_at = now(), revoked_by = $2, updated_at = now()
-         WHERE id = $1`,
-        [target.id, actor.userId],
-      );
-      await appendToOutbox(tx, [
+      await session.revokeTarget(target.id, actor.userId);
+      await session.record([
         TargetRevoked.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -439,82 +364,65 @@ function parseId(value: unknown, what: string): string {
   return value;
 }
 
-/** Row-level security limits this to the current company, so another company's ID isn't found. */
-async function findOrFail(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<EnvironmentRow> {
-  const { rows } = await tx.query<EnvironmentRow>(
-    `SELECT * FROM environments.environments WHERE id = $1${options.lock ? ' FOR UPDATE' : ''}`,
-    [id],
-  );
-  if (rows[0] === undefined) {
+/** Another company's environment is never found, so its ID gets the same answer as a made-up one. */
+async function findOrFail(session: EnvironmentsSession, id: string, options: { lock?: boolean } = {}): Promise<StoredEnvironment> {
+  const environment = await session.findEnvironment(id, options);
+  if (environment === null) {
     throw new EnvironmentError('not-found', 'This environment does not exist.');
   }
-  return rows[0];
-}
-
-async function currentTarget(tx: TenantTransaction, environmentId: string): Promise<TargetRow | null> {
-  const { rows } = await tx.query<TargetRow>(
-    `SELECT ${TARGET_COLUMNS} FROM environments.targets WHERE environment_id = $1 AND status <> 'revoked'`,
-    [environmentId],
-  );
-  return rows[0] ?? null;
+  return environment;
 }
 
 /** Archived environments keep their names, so a name always points to one environment. */
-async function assertNameFree(tx: TenantTransaction, name: string, exceptId: string | null): Promise<void> {
-  const { rows } = await tx.query<{ status: EnvironmentStatus }>(
-    'SELECT status FROM environments.environments WHERE lower(name) = lower($1) AND id <> $2',
-    [name, exceptId ?? '00000000-0000-0000-0000-000000000000'],
-  );
-  if (rows[0] !== undefined) {
+async function assertNameFree(session: EnvironmentsSession, name: string, exceptId: string | null): Promise<void> {
+  const status = await session.statusOfName(name, exceptId);
+  if (status !== null) {
     throw new EnvironmentError(
       'conflict',
-      rows[0].status === 'archived'
-        ? 'An archived environment already has this name.'
-        : 'Another environment already has this name.',
+      status === 'archived' ? 'An archived environment already has this name.' : 'Another environment already has this name.',
     );
   }
 }
 
-async function freeSlug(tx: TenantTransaction, name: string): Promise<string> {
+async function freeSlug(session: EnvironmentsSession, name: string): Promise<string> {
   for (let number = 1; number <= 100; number += 1) {
     const candidate = environmentSlug(name, number);
-    const { rows } = await tx.query('SELECT 1 FROM environments.environments WHERE slug = $1', [candidate]);
-    if (rows.length === 0) {
+    if (!(await session.isSlugTaken(candidate))) {
       return candidate;
     }
   }
   throw new EnvironmentError('conflict', 'Too many environments have a similar name.');
 }
 
-function toView(row: EnvironmentRow, target: TargetRow | null): EnvironmentView {
+function toView(environment: StoredEnvironment, target: StoredTarget | null): EnvironmentView {
   return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    kind: row.kind,
-    acceptsFeatureImages: row.accepts_feature_images,
-    acceptedImages: acceptedImageKinds({ kind: row.kind, acceptsFeatureImages: row.accepts_feature_images }),
-    requiresApproval: row.requires_approval,
-    status: row.status,
-    createdAt: row.created_at.toISOString(),
-    archivedAt: row.archived_at?.toISOString() ?? null,
+    id: environment.id,
+    name: environment.name,
+    slug: environment.slug,
+    kind: environment.kind,
+    acceptsFeatureImages: environment.acceptsFeatureImages,
+    acceptedImages: acceptedImageKinds({ kind: environment.kind, acceptsFeatureImages: environment.acceptsFeatureImages }),
+    requiresApproval: environment.requiresApproval,
+    status: environment.status,
+    createdAt: environment.createdAt.toISOString(),
+    archivedAt: environment.archivedAt?.toISOString() ?? null,
     target: target === null ? null : toTargetView(target),
   };
 }
 
-function toTargetView(row: TargetRow): TargetView {
+function toTargetView(target: StoredTarget): TargetView {
   return {
-    id: row.id,
-    provider: row.provider,
-    settings: row.settings,
-    status: row.status,
-    registrationExpiresAt: row.status === 'pending' ? (row.registration_expires_at?.toISOString() ?? null) : null,
-    keyFingerprint: row.public_key === null ? null : keyFingerprint(row.public_key),
-    agentVersion: row.agent_version,
-    kubernetesVersion: row.kubernetes_version,
-    registeredAt: row.registered_at?.toISOString() ?? null,
-    lastSeenAt: row.last_seen_at?.toISOString() ?? null,
-    createdAt: row.created_at.toISOString(),
+    id: target.id,
+    provider: target.provider,
+    settings: target.settings,
+    status: target.status,
+    registrationExpiresAt: target.status === 'pending' ? (target.registrationExpiresAt?.toISOString() ?? null) : null,
+    keyFingerprint: target.publicKey === null ? null : keyFingerprint(target.publicKey),
+    agentVersion: target.agentVersion,
+    kubernetesVersion: target.kubernetesVersion,
+    registeredAt: target.registeredAt?.toISOString() ?? null,
+    lastSeenAt: target.lastSeenAt?.toISOString() ?? null,
+    createdAt: target.createdAt.toISOString(),
   };
 }
 

@@ -1,10 +1,10 @@
 import { describeError, deterministicJobId, type JobQueue, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { CompanyMembers } from '@dreamdevops/contracts/identity-access/services';
 import type { AlertMailer } from '@dreamdevops/contracts/notifications/services';
 import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { describeCondition } from '../domain/alert.ts';
 import type { AlertResolved, AlertTriggered } from '@dreamdevops/contracts/alerts/events';
+import type { AlertsStore } from './ports.ts';
 
 export const EMAIL_QUEUE = 'alerts.email';
 
@@ -23,13 +23,13 @@ export interface EmailJob {
  * people who are members when the email is sent get it, at their address then.
  */
 export class AlertDeliveries {
-  readonly #database: TenantDatabase;
+  readonly #store: AlertsStore;
   readonly #companies: CompanyDirectory;
   readonly #emails: AlertMailer;
   readonly #members: CompanyMembers;
 
-  constructor(database: TenantDatabase, companies: CompanyDirectory, emails: AlertMailer, members: CompanyMembers) {
-    this.#database = database;
+  constructor(store: AlertsStore, companies: CompanyDirectory, emails: AlertMailer, members: CompanyMembers) {
+    this.#store = store;
     this.#companies = companies;
     this.#emails = emails;
     this.#members = members;
@@ -41,12 +41,8 @@ export class AlertDeliveries {
    * reach each member once, even if the event arrives twice.
    */
   async fanOut(event: AlertTriggered | AlertResolved, queue: JobQueue): Promise<void> {
-    const recipientIds = await this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ recipient_ids: string[] }>('SELECT recipient_ids FROM alerts.alerts WHERE id = $1', [
-        event.payload.alertId,
-      ]);
-      return rows[0]?.recipient_ids ?? [];
-    });
+    const alert = await this.#store.transaction((session) => session.find(event.payload.alertId));
+    const recipientIds = alert?.recipientIds ?? [];
     for (const member of await this.#members.find(recipientIds)) {
       const job: EmailJob = { event, userId: member.userId };
       await queue.send(EMAIL_QUEUE, job, { id: deterministicJobId('alert-email', event.eventId, member.userId) });
@@ -87,13 +83,6 @@ export class AlertDeliveries {
   }
 
   async #record(alertId: string, error: string | null): Promise<void> {
-    await this.#database.transaction((tx) =>
-      tx.query(
-        `UPDATE alerts.alerts SET last_notification_error = $2,
-           last_notified_at = CASE WHEN $2::text IS NULL THEN now() ELSE last_notified_at END
-         WHERE id = $1`,
-        [alertId, error],
-      ),
-    );
+    await this.#store.transaction((session) => session.recordNotification(alertId, { notified: error === null, error }));
   }
 }

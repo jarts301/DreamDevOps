@@ -5,6 +5,7 @@ import {
   currentCompanyId,
   deadLetterQueueName,
   EventBus,
+  type FailedAttempt,
   parseCompanyId,
   runWithCompany,
 } from '../src/index.ts';
@@ -15,14 +16,17 @@ import { contractFor } from './contracts.ts';
 
 describeJobQueueContract('pg-boss', async () => {
   const database = await startTestDatabase();
+  const failures: FailedAttempt[] = [];
   const queue = await PgBossJobQueue.start({
     connectionString: database.urlFor('jobs'),
     pollingIntervalSeconds: 0.5,
+    onJobFailed: (failure) => failures.push(failure),
   });
   const inspector = new pg.Pool({ connectionString: database.urlFor('jobs'), max: 1 });
 
   return {
     queue,
+    failures,
     eventually: (assertion) => vi.waitFor(assertion, { timeout: 15_000, interval: 100 }),
     deadLetters: async (queueName) => {
       const { rows } = await inspector.query('SELECT id, data FROM pgboss.job WHERE name = $1', [

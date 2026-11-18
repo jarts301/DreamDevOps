@@ -12,8 +12,10 @@ import {
   type RepositoryLookup,
 } from '@dreamdevops/contracts/source-governance/services';
 import { SourceGovernanceModule } from '../source-governance/source-governance.module.ts';
+import { RELEASES_STORE, type ReleasesStore } from './application/ports.ts';
 import { Releases } from './application/releases.ts';
 import { ReleasesController } from './http/releases.controller.ts';
+import { postgresReleasesStore } from './infrastructure/postgres-releases-store.ts';
 import { ReleasesSubscriptions } from './messaging/releases-subscriptions.ts';
 
 /** Release branches, release candidates and final versions, following Git Flow. */
@@ -26,16 +28,17 @@ export class ReleasesModule {
       controllers: [ReleasesController],
       providers: withOverrides(
         [
+          { provide: RELEASES_STORE, useFactory: postgresReleasesStore, inject: [TenantDatabase] },
           {
             provide: Releases,
             useFactory: (
-              database: TenantDatabase,
+              store: ReleasesStore,
               catalog: ApplicationDirectory,
               repositories: RepositoryLookup,
               host: RepositoryGit,
               builds: BuildRequests,
-            ) => new Releases(database, catalog, repositories, host, builds),
-            inject: [TenantDatabase, APPLICATION_DIRECTORY, REPOSITORY_LOOKUP, REPOSITORY_GIT, BUILD_REQUESTS],
+            ) => new Releases(store, catalog, repositories, host, builds),
+            inject: [RELEASES_STORE, APPLICATION_DIRECTORY, REPOSITORY_LOOKUP, REPOSITORY_GIT, BUILD_REQUESTS],
           },
           {
             provide: ReleasesSubscriptions,

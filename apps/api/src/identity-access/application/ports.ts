@@ -1,3 +1,4 @@
+import type { EventLog, Transactional } from '@dreamdevops/shared-kernel';
 import type { UserAccess } from '../domain/access.ts';
 
 export const IDENTITY_PROVIDER = Symbol('IDENTITY_PROVIDER');
@@ -52,4 +53,79 @@ export interface UserDirectory {
   /** Creates or updates the user from a login, and returns their ID. */
   recordLogin(identity: ExternalIdentity): Promise<string>;
   loadAccess(userId: string): Promise<UserAccess | null>;
+}
+
+/** A role a company member can have, with what it grants. */
+export interface CompanyRole {
+  readonly key: string;
+  readonly name: string;
+  readonly permissions: readonly string[];
+}
+
+/** A member of the current company. */
+export interface StoredMember {
+  readonly userId: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly role: string;
+  readonly joinedAt: Date;
+}
+
+/** An invitation not yet accepted, revoked or expired. */
+export interface OpenInvitation {
+  readonly id: string;
+  readonly email: string;
+  readonly role: string;
+  readonly createdAt: Date;
+  readonly expiresAt: Date;
+}
+
+export interface NewInvitation {
+  readonly email: string;
+  readonly role: string;
+  /** Only the token's hash is kept, so the token works only for whoever was given it. */
+  readonly tokenHash: string;
+  readonly invitedBy: string;
+  readonly lifetimeDays: number;
+}
+
+/** The current company's members and invitations, in one transaction. */
+export interface MembershipSession extends EventLog {
+  /** The roles a company member can have, by key. */
+  companyRoles(): Promise<CompanyRole[]>;
+  isCompanyRole(key: string): Promise<boolean>;
+  /** Every member, in the order they joined. */
+  members(): Promise<StoredMember[]>;
+  /** The members with these IDs, or every member when none are given, by name. */
+  membersByName(userIds: readonly string[] | null): Promise<StoredMember[]>;
+  hasMembers(): Promise<boolean>;
+  hasMemberWithEmail(email: string): Promise<boolean>;
+  /** A member's role, locked until the transaction ends, or null if they aren't a member. */
+  lockRoleOf(userId: string): Promise<string | null>;
+  /** The IDs of the members with a role, locked, so two requests can't each remove the other's last admin. */
+  lockMembersWithRole(role: string): Promise<string[]>;
+  setRole(userId: string, role: string): Promise<void>;
+  removeMember(userId: string): Promise<void>;
+  /** Adds a member. False when they're a member already. */
+  addMember(companyId: string, userId: string, role: string): Promise<boolean>;
+  openInvitations(): Promise<OpenInvitation[]>;
+  /** Revokes an invitation nobody accepted yet. False when there's none such. */
+  revokeInvitation(id: string): Promise<boolean>;
+  /** Revokes an address's expired invitations, which no longer count. */
+  revokeExpiredInvitations(email: string): Promise<void>;
+  hasOpenInvitation(email: string): Promise<boolean>;
+  addInvitation(invitation: NewInvitation): Promise<{ readonly id: string; readonly expiresAt: Date }>;
+  /** The usable invitation with this token hash, locked, or null. */
+  lockUsableInvitation(tokenHash: string): Promise<{ readonly id: string; readonly email: string; readonly role: string } | null>;
+  markAccepted(invitationId: string, userId: string): Promise<void>;
+}
+
+export const MEMBERSHIP_STORE = Symbol('MEMBERSHIP_STORE');
+
+export interface MembershipStore extends Transactional<MembershipSession> {
+  /**
+   * The company an invitation belongs to, found by its token's hash. The person accepting
+   * has no company context until this answers, so it needs none.
+   */
+  invitationCompany(tokenHash: string): Promise<string | null>;
 }

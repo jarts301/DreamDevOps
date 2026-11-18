@@ -1,24 +1,17 @@
-import { isUuid } from '@dreamdevops/shared-kernel';
-import type { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { CompanyMember, CompanyMembers } from '@dreamdevops/contracts/identity-access/services';
-
-const SELECT_MEMBERS = `
-  SELECT user_id AS "userId", display_name AS "displayName", email, role_key AS role
-  FROM identity.company_members()`;
+import { isUuid } from '@dreamdevops/shared-kernel';
+import type { MembershipStore, StoredMember } from './ports.ts';
 
 /** Answers CompanyMembers from the memberships, in the current company only. */
 export class MemberDirectory implements CompanyMembers {
-  readonly #database: TenantDatabase;
+  readonly #store: MembershipStore;
 
-  constructor(database: TenantDatabase) {
-    this.#database = database;
+  constructor(store: MembershipStore) {
+    this.#store = store;
   }
 
-  list(): Promise<CompanyMember[]> {
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<CompanyMember>(`${SELECT_MEMBERS} ORDER BY lower(display_name), user_id`);
-      return rows;
-    });
+  async list(): Promise<CompanyMember[]> {
+    return (await this.#store.transaction((session) => session.membersByName(null))).map(toCompanyMember);
   }
 
   async find(userIds: readonly string[]): Promise<CompanyMember[]> {
@@ -26,12 +19,10 @@ export class MemberDirectory implements CompanyMembers {
     if (ids.length === 0) {
       return [];
     }
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<CompanyMember>(
-        `${SELECT_MEMBERS} WHERE user_id = ANY ($1::uuid[]) ORDER BY lower(display_name), user_id`,
-        [ids],
-      );
-      return rows;
-    });
+    return (await this.#store.transaction((session) => session.membersByName(ids))).map(toCompanyMember);
   }
+}
+
+function toCompanyMember(member: StoredMember): CompanyMember {
+  return { userId: member.userId, displayName: member.displayName, email: member.email, role: member.role };
 }

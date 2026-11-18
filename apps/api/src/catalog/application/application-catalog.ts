@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ApplicationArchived, ApplicationRegistered, ApplicationRestored, ApplicationUpdated } from '@dreamdevops/contracts/catalog/events';
 import { currentCompanyId, isUuid } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { BlueprintCatalog, BlueprintManifest } from '@dreamdevops/contracts/blueprints/services';
 import type {
   ApplicationType,
@@ -21,54 +20,23 @@ import {
   normalizeDescription,
 } from '../domain/application.ts';
 import { CatalogError } from '../domain/errors.ts';
-
-interface TypeRow {
-  key: string;
-  name: string;
-  description: string;
-  /** The blueprint applications of the type start from when none is chosen, or null for its first by key. */
-  default_blueprint: string | null;
-}
-
-interface ApplicationRow {
-  id: string;
-  name: string;
-  slug: string;
-  type_key: string;
-  type_name: string;
-  blueprint_key: string;
-  description: string;
-  status: ApplicationStatus;
-  created_at: Date;
-  created_by: string | null;
-  creator_name: string | null;
-  archived_at: Date | null;
-}
-
-/** Reads through a function, because the app's database role can't read user names directly. */
-const SELECT_APPLICATIONS = 'SELECT * FROM catalog.applications_view() a';
+import type { CatalogSession, CatalogStore, StoredApplication } from './ports.ts';
 
 /** Each company's register of applications. Every query runs in the current company. */
 export class ApplicationCatalog implements ApplicationDirectory {
-  readonly #database: TenantDatabase;
+  readonly #store: CatalogStore;
   readonly #blueprints: BlueprintCatalog;
 
-  constructor(database: TenantDatabase, blueprints: BlueprintCatalog) {
-    this.#database = database;
+  constructor(store: CatalogStore, blueprints: BlueprintCatalog) {
+    this.#store = store;
     this.#blueprints = blueprints;
   }
 
   /** The types a company can register now: available ones that have a blueprint. */
   async types(): Promise<ApplicationType[]> {
     currentCompanyId();
-    const rows = await this.#database.transaction(async (tx) => {
-      const { rows: types } = await tx.query<TypeRow>(
-        `SELECT key, name, description, default_blueprint FROM catalog.application_types
-         WHERE available ORDER BY sort_order, name`,
-      );
-      return types;
-    });
-    return rows.flatMap(({ default_blueprint: defaultKey, ...type }) => {
+    const types = await this.#store.transaction((session) => session.availableTypes());
+    return types.flatMap(({ defaultBlueprint: defaultKey, ...type }) => {
       const blueprint = this.#defaultBlueprint(type.key, defaultKey);
       return blueprint === null
         ? []
@@ -91,13 +59,8 @@ export class ApplicationCatalog implements ApplicationDirectory {
     if (status !== 'active' && status !== 'archived') {
       throw new CatalogError('invalid', 'Choose active or archived applications.');
     }
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<ApplicationRow>(
-        `${SELECT_APPLICATIONS} WHERE a.status = $1 ORDER BY lower(a.name)`,
-        [status],
-      );
-      return rows.map((row) => this.#toView(row));
-    });
+    const applications = await this.#store.transaction((session) => session.list(status));
+    return applications.map((application) => this.#toView(application));
   }
 
   /**
@@ -110,17 +73,12 @@ export class ApplicationCatalog implements ApplicationDirectory {
     if (wanted.length === 0) {
       return new Map();
     }
-    return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ id: string; slug: string }>('SELECT id, slug FROM catalog.applications WHERE slug = ANY ($1)', [
-        wanted,
-      ]);
-      return new Map(rows.map((row) => [row.slug, row.id]));
-    });
+    return this.#store.transaction((session) => session.idsBySlug(wanted));
   }
 
   async get(idValue: unknown): Promise<ApplicationView> {
     const id = parseApplicationId(idValue);
-    return this.#database.transaction(async (tx) => this.#toView(await findOrFail(tx, id)));
+    return this.#toView(await this.#store.transaction((session) => findOrFail(session, id)));
   }
 
   /**
@@ -136,27 +94,24 @@ export class ApplicationCatalog implements ApplicationDirectory {
     const companyId = currentCompanyId();
     const id = randomUUID();
 
-    return this.#database.transaction(async (tx) => {
+    const registered = await this.#store.transaction(async (session) => {
       // One registration per company at a time, so two people can't take the same name or short name.
-      await lockCompanyNames(tx);
-      const type = await availableType(tx, input.type);
+      await session.lockNames();
+      const type = await availableType(session, input.type);
       const blueprint = this.#chosenBlueprint(type.key, type.defaultBlueprint, input.blueprint);
-      await assertNameFree(tx, name, null);
-      const slug = await freeSlug(tx, name);
-      await tx.query(
-        `INSERT INTO catalog.applications (id, company_id, name, slug, type_key, blueprint_key, description, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)`,
-        [id, companyId, name, slug, type.key, blueprint.key, description, actor.userId],
-      );
-      await appendToOutbox(tx, [
+      await assertNameFree(session, name, null);
+      const slug = await freeSlug(session, name);
+      await session.add({ id, name, slug, typeKey: type.key, blueprintKey: blueprint.key, description, createdBy: actor.userId });
+      await session.record([
         ApplicationRegistered.create({
           companyId,
           actorId: actor.userId,
           payload: { applicationId: id, name, slug, type: type.key, blueprint: blueprint.key },
         }),
       ]);
-      return this.#toView(await findOrFail(tx, id));
+      return findOrFail(session, id);
     });
+    return this.#toView(registered);
   }
 
   /** The blueprint chosen for a type, or its default when none is chosen. */
@@ -175,10 +130,10 @@ export class ApplicationCatalog implements ApplicationDirectory {
     return blueprint;
   }
 
-  #toView(row: ApplicationRow): ApplicationView {
-    const blueprint = this.#blueprints.latestOf(row.blueprint_key);
+  #toView(application: StoredApplication): ApplicationView {
+    const blueprint = this.#blueprints.latestOf(application.blueprintKey);
     return toView(
-      row,
+      application,
       blueprint === null
         ? null
         : { key: blueprint.key, name: blueprint.name, language: blueprint.language, framework: blueprint.framework },
@@ -191,30 +146,25 @@ export class ApplicationCatalog implements ApplicationDirectory {
     const name = input.name === undefined ? undefined : normalizeApplicationName(input.name);
     const description = input.description === undefined ? undefined : normalizeDescription(input.description);
 
-    return this.#database.transaction(async (tx) => {
+    return this.#store.transaction(async (session) => {
       if (name !== undefined) {
         // The lock registering takes, so a rename and a registration can't take the same name at once.
-        await lockCompanyNames(tx);
+        await session.lockNames();
       }
-      const current = await findOrFail(tx, id, { lock: true });
+      const current = await findOrFail(session, id, { lock: true });
       if (current.status === 'archived') {
         throw new CatalogError('conflict', 'Restore the application first.');
       }
       const renamed = name !== undefined && name !== current.name;
       if (renamed) {
-        await assertNameFree(tx, name, id);
+        await assertNameFree(session, name, id);
       }
       const descriptionChanged = description !== undefined && description !== current.description;
       if (!renamed && !descriptionChanged) {
         return;
       }
-      await tx.query(
-        `UPDATE catalog.applications
-         SET name = $2, description = $3, updated_at = now()
-         WHERE id = $1`,
-        [id, name ?? current.name, description ?? current.description],
-      );
-      await appendToOutbox(tx, [
+      await session.update(id, { name: name ?? current.name, description: description ?? current.description });
+      await session.record([
         ApplicationUpdated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -236,18 +186,13 @@ export class ApplicationCatalog implements ApplicationDirectory {
 
   #setStatus(actor: Principal, idValue: unknown, status: ApplicationStatus): Promise<void> {
     const id = parseApplicationId(idValue);
-    return this.#database.transaction(async (tx) => {
-      const current = await findOrFail(tx, id, { lock: true });
+    return this.#store.transaction(async (session) => {
+      const current = await findOrFail(session, id, { lock: true });
       if (current.status === status) {
         return;
       }
-      await tx.query(
-        `UPDATE catalog.applications
-         SET status = $2, archived_at = CASE WHEN $2 = 'archived' THEN now() END, updated_at = now()
-         WHERE id = $1`,
-        [id, status],
-      );
-      await appendToOutbox(tx, [
+      await session.setStatus(id, status);
+      await session.record([
         (status === 'archived' ? ApplicationArchived : ApplicationRestored).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -265,57 +210,38 @@ function parseApplicationId(value: unknown): string {
   return value;
 }
 
-/** Row-level security limits this to the current company, so another company's ID isn't found. */
-async function findOrFail(tx: TenantTransaction, id: string, options: { lock?: boolean } = {}): Promise<ApplicationRow> {
-  if (options.lock) {
-    await tx.query('SELECT 1 FROM catalog.applications WHERE id = $1 FOR UPDATE', [id]);
-  }
-  const { rows } = await tx.query<ApplicationRow>(`${SELECT_APPLICATIONS} WHERE a.id = $1`, [id]);
-  if (rows[0] === undefined) {
+/** Another company's application is never found, so its ID gets the same answer as a made-up one. */
+async function findOrFail(session: CatalogSession, id: string, options: { lock?: boolean } = {}): Promise<StoredApplication> {
+  const application = await session.find(id, options);
+  if (application === null) {
     throw new CatalogError('not-found', 'This application does not exist.');
   }
-  return rows[0];
+  return application;
 }
 
-/** Lets one registration or rename at a time choose a name in the current company. */
-async function lockCompanyNames(tx: TenantTransaction): Promise<void> {
-  await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalog:' || $1, 0))", [currentCompanyId()]);
-}
-
-async function availableType(tx: TenantTransaction, value: unknown): Promise<{ key: string; defaultBlueprint: string | null }> {
-  if (typeof value === 'string') {
-    const { rows } = await tx.query<{ default_blueprint: string | null }>(
-      'SELECT default_blueprint FROM catalog.application_types WHERE key = $1 AND available',
-      [value],
-    );
-    if (rows[0] !== undefined) {
-      return { key: value, defaultBlueprint: rows[0].default_blueprint };
-    }
+async function availableType(session: CatalogSession, value: unknown): Promise<{ key: string; defaultBlueprint: string | null }> {
+  const type = typeof value === 'string' ? await session.availableType(value) : null;
+  if (type === null) {
+    throw new CatalogError('invalid', 'Choose one of the available application types.');
   }
-  throw new CatalogError('invalid', 'Choose one of the available application types.');
+  return { key: type.key, defaultBlueprint: type.defaultBlueprint };
 }
 
 /** Archived applications keep their names, so a name always points to one application. */
-async function assertNameFree(tx: TenantTransaction, name: string, exceptId: string | null): Promise<void> {
-  const { rows } = await tx.query<{ status: ApplicationStatus }>(
-    'SELECT status FROM catalog.applications WHERE lower(name) = lower($1) AND id <> $2',
-    [name, exceptId ?? '00000000-0000-0000-0000-000000000000'],
-  );
-  if (rows[0] !== undefined) {
+async function assertNameFree(session: CatalogSession, name: string, exceptId: string | null): Promise<void> {
+  const status = await session.statusOfName(name, exceptId);
+  if (status !== null) {
     throw new CatalogError(
       'conflict',
-      rows[0].status === 'archived'
-        ? 'An archived application already has this name.'
-        : 'Another application already has this name.',
+      status === 'archived' ? 'An archived application already has this name.' : 'Another application already has this name.',
     );
   }
 }
 
-async function freeSlug(tx: TenantTransaction, name: string): Promise<string> {
+async function freeSlug(session: CatalogSession, name: string): Promise<string> {
   for (let number = 1; number <= 100; number += 1) {
     const candidate = applicationSlug(name, number);
-    const { rows } = await tx.query('SELECT 1 FROM catalog.applications WHERE slug = $1', [candidate]);
-    if (rows.length === 0) {
+    if (!(await session.isSlugTaken(candidate))) {
       return candidate;
     }
   }
@@ -333,17 +259,17 @@ function choiceOf(blueprint: BlueprintManifest): BlueprintChoice {
   };
 }
 
-function toView(row: ApplicationRow, blueprint: ApplicationView['blueprint']): ApplicationView {
+function toView(application: StoredApplication, blueprint: ApplicationView['blueprint']): ApplicationView {
   return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    type: { key: row.type_key, name: row.type_name },
+    id: application.id,
+    name: application.name,
+    slug: application.slug,
+    type: { key: application.typeKey, name: application.typeName },
     blueprint,
-    description: row.description,
-    status: row.status,
-    createdAt: row.created_at.toISOString(),
-    createdBy: row.created_by === null ? null : { userId: row.created_by, displayName: row.creator_name },
-    archivedAt: row.archived_at?.toISOString() ?? null,
+    description: application.description,
+    status: application.status,
+    createdAt: application.createdAt.toISOString(),
+    createdBy: application.createdBy === null ? null : { userId: application.createdBy, displayName: application.creatorName },
+    archivedAt: application.archivedAt?.toISOString() ?? null,
   };
 }

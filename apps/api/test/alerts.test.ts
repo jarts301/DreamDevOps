@@ -263,7 +263,7 @@ describe('alert jobs', () => {
 describe('the places alerts watch', () => {
   const environment = { id: 'env-1', name: 'Live', kind: 'production' };
   const application = { id: 'app-1', name: 'Billing API' };
-  const row = { environment_id: 'env-1', application_id: 'app-1' };
+  const row = { environmentId: 'env-1', applicationId: 'app-1' };
 
   it('leave out a place whose environment or application is gone', async () => {
     const gone = new CatalogError('not-found', 'This application does not exist.');

@@ -180,6 +180,16 @@ export function evaluate(reports: Reports, kind: BuildKind = 'feature'): Outcome
   return complete ? { state: 'passed' } : { state: 'waiting' };
 }
 
+/**
+ * Whether any of the pipeline's jobs has said anything: that it started, a report, or that
+ * jobs failed. The first job's first step says it started, so a pipeline still silent a
+ * while after it started is one whose jobs never ran, or can't reach the platform.
+ * builds.unstarted_builds reads the same reports.
+ */
+export function pipelineHasReported(reports: Reports): boolean {
+  return reports.started !== undefined || reports.secrets !== undefined || reports.tests !== undefined || reports.failedJobs !== undefined;
+}
+
 type Json = Record<string, unknown>;
 
 /** Reads Gitleaks' JSON report. Secrets are redacted by Gitleaks, and only locations are kept. */

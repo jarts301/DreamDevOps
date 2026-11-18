@@ -1,12 +1,19 @@
 import type { TargetConfiguration } from '@dreamdevops/contracts/agent/protocol';
 import { currentCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { ImageSigningKeys } from '@dreamdevops/contracts/builds/services';
 import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import type { SealedBox } from '../../shared/sealed-box.ts';
-import { acceptedImageKinds, type EnvironmentKind } from '../domain/environment.ts';
+import { acceptedImageKinds } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
-import type { EnvironmentRepositories, EnvironmentRepository, PullAccounts, SecretStore } from './ports.ts';
+import type {
+  EnvironmentRepositories,
+  EnvironmentRepository,
+  EnvironmentsSession,
+  EnvironmentsStore,
+  PullAccounts,
+  SecretStore,
+  StoredEnvironment,
+} from './ports.ts';
 import type { TargetAgents } from './target-agents.ts';
 
 export interface TargetConfigurationOptions {
@@ -21,15 +28,6 @@ export interface TargetConfigurationOptions {
 
 // What a target needs is the agent protocol, kept in the contracts.
 export type { TargetConfiguration } from '@dreamdevops/contracts/agent/protocol';
-
-interface EnvironmentRow {
-  id: string;
-  name: string;
-  slug: string;
-  kind: EnvironmentKind;
-  accepts_feature_images: boolean;
-  repository: string | null;
-}
 
 const DEPLOY_KEY = /^ssh-ed25519 [A-Za-z0-9+/=]{60,100}$/;
 
@@ -49,7 +47,7 @@ export function environmentRepositoryName(slug: string): string {
  * secrets. Nothing here reaches another environment.
  */
 export class TargetConfigurations {
-  readonly #database: TenantDatabase;
+  readonly #store: EnvironmentsStore;
   readonly #companies: CompanyDirectory;
   readonly #agents: TargetAgents;
   readonly #repositories: EnvironmentRepositories;
@@ -60,7 +58,7 @@ export class TargetConfigurations {
   readonly #options: TargetConfigurationOptions;
 
   constructor(
-    database: TenantDatabase,
+    store: EnvironmentsStore,
     companies: CompanyDirectory,
     agents: TargetAgents,
     repositories: EnvironmentRepositories,
@@ -70,7 +68,7 @@ export class TargetConfigurations {
     box: SealedBox,
     options: TargetConfigurationOptions,
   ) {
-    this.#database = database;
+    this.#store = store;
     this.#companies = companies;
     this.#agents = agents;
     this.#repositories = repositories;
@@ -91,9 +89,7 @@ export class TargetConfigurations {
     await runWithCompany(companyId, async () => {
       const repository = await this.repositoryOf(environmentId);
       await this.#repositories.setDeployKey(repository, `target-${targetId}`, publicKey);
-      await this.#database.transaction((tx) =>
-        tx.query('UPDATE environments.targets SET deploy_key = $2, updated_at = now() WHERE id = $1', [targetId, publicKey]),
-      );
+      await this.#store.transaction((session) => session.setDeployKey(targetId, publicKey));
     });
   }
 
@@ -101,7 +97,7 @@ export class TargetConfigurations {
     const { companyId, environmentId, targetId } = await this.#agents.authenticate(accessToken);
     return runWithCompany(companyId, async () => {
       const repository = await this.repositoryOf(environmentId);
-      const environment = await this.#database.transaction((tx) => findEnvironment(tx, environmentId));
+      const environment = await this.#store.transaction((session) => findEnvironment(session, environmentId));
       // Builds' key, asked for once this context's transaction has ended.
       const trustedKey = await this.#signingKeys.publicKey(environment.kind === 'production' ? 'release' : 'test');
       const pull = await this.#pullCredentials(repository.organization);
@@ -114,7 +110,7 @@ export class TargetConfigurations {
           name: environment.name,
           slug: environment.slug,
           kind: environment.kind,
-          acceptedImages: acceptedImageKinds({ kind: environment.kind, acceptsFeatureImages: environment.accepts_feature_images }),
+          acceptedImages: acceptedImageKinds({ kind: environment.kind, acceptsFeatureImages: environment.acceptsFeatureImages }),
         },
         registry: { host: this.#options.registryHost, organization: repository.organization, ...pull },
         trustedKey,
@@ -143,11 +139,11 @@ export class TargetConfigurations {
   async repositoryOf(environmentId: string): Promise<EnvironmentRepository> {
     // The company's Git organization is named by its short name, which Tenancy knows.
     const company = await this.#companies.find(currentCompanyId());
-    const repository = await this.#database.transaction(async (tx) => {
-      const environment = await findEnvironment(tx, environmentId);
+    const repository = await this.#store.transaction(async (session) => {
+      const environment = await findEnvironment(session, environmentId);
       const name = environment.repository ?? environmentRepositoryName(environment.slug);
       if (environment.repository === null) {
-        await tx.query('UPDATE environments.environments SET repository = $2 WHERE id = $1', [environmentId, name]);
+        await session.setRepository(environmentId, name);
       }
       return { organization: company!.slug, name, environmentId };
     });
@@ -157,20 +153,14 @@ export class TargetConfigurations {
 
   /** The company's pull account, made once. A lock keeps two targets from making it at once. */
   #pullCredentials(organization: string): Promise<{ username: string; token: string }> {
-    return this.#database.transaction(async (tx) => {
-      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('pull-account:' || $1, 0))", [currentCompanyId()]);
-      const { rows } = await tx.query<{ username: string; token: string }>(
-        'SELECT username, token FROM environments.pull_accounts',
-      );
-      if (rows[0] !== undefined) {
-        return { username: rows[0].username, token: this.#box.open(rows[0].token) };
+    return this.#store.transaction(async (session) => {
+      await session.lockPullAccount();
+      const existing = await session.pullAccount();
+      if (existing !== null) {
+        return { username: existing.username, token: this.#box.open(existing.sealedToken) };
       }
       const created = await this.#pullAccounts.create(organization);
-      await tx.query('INSERT INTO environments.pull_accounts (company_id, username, token) VALUES ($1, $2, $3)', [
-        currentCompanyId(),
-        created.username,
-        this.#box.seal(created.token),
-      ]);
+      await session.addPullAccount(created.username, this.#box.seal(created.token));
       return created;
     });
   }
@@ -182,13 +172,10 @@ export class TargetConfigurations {
   }
 }
 
-async function findEnvironment(tx: TenantTransaction, id: string): Promise<EnvironmentRow> {
-  const { rows } = await tx.query<EnvironmentRow>(
-    'SELECT id, name, slug, kind, accepts_feature_images, repository FROM environments.environments WHERE id = $1',
-    [id],
-  );
-  if (rows[0] === undefined) {
+async function findEnvironment(session: EnvironmentsSession, id: string): Promise<StoredEnvironment> {
+  const environment = await session.findEnvironment(id);
+  if (environment === null) {
     throw new EnvironmentError('not-found', 'This environment does not exist.');
   }
-  return rows[0];
+  return environment;
 }

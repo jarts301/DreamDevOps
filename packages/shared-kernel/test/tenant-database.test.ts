@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { parseCompanyId, runWithCompany } from '../src/index.ts';
-import { TenantDatabase } from '../src/postgres/index.ts';
+import { createDomainEvent, parseCompanyId, runWithCompany } from '../src/index.ts';
+import { PostgresSession, TenantDatabase, transactional } from '../src/postgres/index.ts';
 
 const companyId = parseCompanyId('a1b2c3d4-0000-4000-8000-00000000000a');
 
@@ -46,5 +46,48 @@ describe('TenantDatabase', () => {
     ).rejects.toThrow('Business rule');
 
     expect(client.release).toHaveBeenCalledWith(expect.objectContaining({ message: 'Connection terminated' }));
+  });
+});
+
+describe('transactional', () => {
+  class NamesSession extends PostgresSession {
+    async rename(name: string): Promise<void> {
+      await this.tx.query('UPDATE names SET name = $1', [name]);
+    }
+  }
+
+  it('runs the work and records its events in one transaction, which commits once it all succeeds', async () => {
+    const { pool, client } = poolWith({ rollbackFails: false });
+    const store = transactional(new TenantDatabase(pool), (tx) => new NamesSession(tx));
+    const event = createDomainEvent({ eventType: 'Renamed', companyId, payload: { name: 'New' } });
+
+    const result = await runWithCompany(companyId, () =>
+      store.transaction(async (session) => {
+        await session.rename('New');
+        await session.record([event]);
+        return 'done';
+      }),
+    );
+
+    const statements = client.query.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/).slice(0, 3).join(' '));
+    expect(result).toBe('done');
+    expect(statements).toEqual(['BEGIN', "SELECT set_config('app.current_company_id', $1,", 'UPDATE names SET', 'INSERT INTO kernel.outbox', 'COMMIT']);
+  });
+
+  it('rolls back the change and its events together when the work fails', async () => {
+    const { pool, client } = poolWith({ rollbackFails: false });
+    const store = transactional(new TenantDatabase(pool), (tx) => new NamesSession(tx));
+
+    await expect(
+      runWithCompany(companyId, () =>
+        store.transaction(async (session) => {
+          await session.rename('New');
+          throw new Error('Business rule');
+        }),
+      ),
+    ).rejects.toThrow('Business rule');
+
+    expect(client.query.mock.calls.map(([sql]) => sql)).toContain('ROLLBACK');
+    expect(client.query.mock.calls.map(([sql]) => sql)).not.toContain('COMMIT');
   });
 });

@@ -14,11 +14,14 @@ export default defineConfig({
     // npm run test:coverage measures the unit tests. The thresholds are today's levels, so
     // coverage can only go up. They were lowered once, when events' wording and checks moved
     // to the contracts package, whose own tests cover them with thresholds of their own.
+    // Each context's PostgreSQL store is left out: only a real database can test its SQL,
+    // which the integration tests do.
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
+      exclude: ['src/**/infrastructure/postgres-*-store.ts'],
       reporter: ['text-summary', 'json-summary', 'html'],
-      thresholds: { lines: 38, branches: 33, functions: 35, statements: 37 },
+      thresholds: { lines: 40, branches: 34, functions: 35, statements: 39 },
     },
     projects: [
       {

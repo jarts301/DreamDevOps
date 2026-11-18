@@ -1,12 +1,14 @@
-import { generateKeyPairSync, type KeyObject, randomBytes, sign } from 'node:crypto';
+import { createHash, generateKeyPairSync, type KeyObject, randomBytes, sign } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { EnvironmentConfig } from '../src/environments/application/environment-config.ts';
 import { TargetAgents } from '../src/environments/application/target-agents.ts';
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
 import { FakeGitProvider, FakeIdentityProvider } from './fakes.ts';
+import { parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { buildApp } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
 
@@ -367,5 +369,36 @@ describe('archiving an environment', () => {
     expect((await admin.get('/api/v1/company/environments?status=archived').expect(200)).body).toHaveLength(1);
     await admin.post(`/api/v1/company/environments/${environment.id}/target`).expect(409);
     await admin.post(`/api/v1/company/environments/${environment.id}/restore`).expect(204);
+  });
+});
+
+describe("an application's values", () => {
+  it('have a fingerprint worked out as it always was, so what ran before an upgrade still counts as up to date', async () => {
+    const { admin, companyId } = await createCompany();
+    const environment = await createEnvironment(admin);
+    const applicationId = '00000000-0000-4000-8000-0000000000a1';
+    await admin.put(`/api/v1/company/environments/${environment.id}/variables/LOG_LEVEL`).send({ value: 'debug' }).expect(204);
+    // The fingerprint covers each secret's size and when it changed, never its value, which stays in the secret store.
+    await superuser.query(
+      `INSERT INTO environments.secrets (id, company_id, environment_id, application_id, name, value_bytes, updated_by)
+       SELECT gen_random_uuid(), company_id, id, NULL, 'API_KEY', 12, NULL FROM environments.environments WHERE id = $1`,
+      [environment.id],
+    );
+    const rows = async (sql: string) => (await superuser.query(sql, [environment.id, applicationId])).rows;
+    const scope = 'environment_id = $1 AND (application_id IS NULL OR application_id = $2) ORDER BY application_id NULLS FIRST, name';
+    const expected = createHash('sha256')
+      .update(
+        JSON.stringify([
+          await rows(`SELECT name, value, application_id FROM environments.variables WHERE ${scope}`),
+          await rows(`SELECT name, application_id, value_bytes, updated_at FROM environments.secrets WHERE ${scope}`),
+        ]),
+      )
+      .digest('hex');
+
+    const fingerprint = await runWithCompany(parseCompanyId(companyId), () =>
+      app.get(EnvironmentConfig).fingerprint(environment.id, applicationId),
+    );
+
+    expect(fingerprint).toBe(expected);
   });
 });

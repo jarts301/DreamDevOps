@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from 'node:crypto';
 import {
   EnvironmentSecretRemoved,
   EnvironmentSecretSet,
@@ -6,7 +5,6 @@ import {
   EnvironmentVariableSet,
 } from '@dreamdevops/contracts/environments/events';
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import type {
   ConfigScope,
@@ -21,18 +19,10 @@ import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { EnvironmentKind } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
 import { assertWithinLimits, parseVariableName, parseVariableValue } from '../domain/variables.ts';
-import type { SecretStore } from './ports.ts';
+import type { EnvironmentsSession, EnvironmentsStore, SecretStore, StoredValue, ValueKind, ValueScope } from './ports.ts';
 import { secretsPath } from './target-configuration.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-interface Row {
-  name: string;
-  value?: string;
-  application_id: string | null;
-  updated_at: Date;
-  updated_by: string | null;
-}
 
 /**
  * Each environment's variables and secrets, for all its applications or for one. Secret
@@ -40,12 +30,12 @@ interface Row {
  * apply at the next deployment.
  */
 export class EnvironmentConfig implements EnvironmentValues {
-  readonly #database: TenantDatabase;
+  readonly #store: EnvironmentsStore;
   readonly #secrets: SecretStore;
   readonly #applications: ApplicationDirectory;
 
-  constructor(database: TenantDatabase, secrets: SecretStore, applications: ApplicationDirectory) {
-    this.#database = database;
+  constructor(store: EnvironmentsStore, secrets: SecretStore, applications: ApplicationDirectory) {
+    this.#store = store;
     this.#applications = applications;
     this.#secrets = secrets;
   }
@@ -57,31 +47,25 @@ export class EnvironmentConfig implements EnvironmentValues {
     if (applicationId !== null) {
       await this.#applications.get(applicationId);
     }
-    return this.#database.transaction(async (tx) => {
-      await findEnvironment(tx, environmentId);
-      const scoped = (table: 'variables' | 'secrets', columns: string) =>
-        tx.query<Row>(
-          `SELECT ${columns}, application_id, updated_at, updated_by FROM environments.${table}
-           WHERE environment_id = $1 AND (application_id IS NULL OR application_id = $2)
-           ORDER BY name, application_id NULLS FIRST`,
-          [environmentId, applicationId],
-        );
-      const { rows: variables } = await scoped('variables', 'name, value');
-      const { rows: secrets } = await scoped('secrets', 'name');
-      const scope = (row: Row): ConfigScope => (row.application_id === null ? 'environment' : 'application');
+    return this.#store.transaction(async (session) => {
+      await findEnvironment(session, environmentId);
+      const scope = { environmentId, applicationId };
+      const variables = await session.values('variables', scope);
+      const secrets = await session.values('secrets', scope);
+      const scopeOf = (value: StoredValue): ConfigScope => (value.applicationId === null ? 'environment' : 'application');
       return {
-        variables: variables.map((row) => ({
-          name: row.name,
-          value: row.value!,
-          scope: scope(row),
-          updatedAt: row.updated_at.toISOString(),
-          updatedBy: row.updated_by,
+        variables: variables.map((variable) => ({
+          name: variable.name,
+          value: variable.value!,
+          scope: scopeOf(variable),
+          updatedAt: variable.updatedAt.toISOString(),
+          updatedBy: variable.updatedBy,
         })),
-        secrets: secrets.map((row) => ({
-          name: row.name,
-          scope: scope(row),
-          updatedAt: row.updated_at.toISOString(),
-          updatedBy: row.updated_by,
+        secrets: secrets.map((secret) => ({
+          name: secret.name,
+          scope: scopeOf(secret),
+          updatedAt: secret.updatedAt.toISOString(),
+          updatedBy: secret.updatedBy,
         })),
       };
     });
@@ -90,17 +74,11 @@ export class EnvironmentConfig implements EnvironmentValues {
   async setVariable(actor: Principal, environmentValue: unknown, nameValue: unknown, input: Unchecked<SetValue>): Promise<void> {
     const name = parseVariableName(nameValue);
     const value = parseVariableValue(input.value, { secret: false });
-    await this.#change(actor, environmentValue, input.application, input, async (tx, environmentId, applicationId) => {
-      await assertNameFree(tx, 'secrets', environmentId, applicationId, name);
-      await assertSameCase(tx, 'variables', environmentId, applicationId, name);
-      await tx.query(
-        `INSERT INTO environments.variables (id, company_id, environment_id, application_id, name, value, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (environment_id, coalesce(application_id, '00000000-0000-0000-0000-000000000000'), upper(name))
-         DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-        [randomUUID(), currentCompanyId(), environmentId, applicationId, name, value, actor.userId],
-      );
-      await assertScopeWithinLimits(tx, environmentId, applicationId);
+    await this.#change(actor, environmentValue, input.application, input, async (session, scope) => {
+      await assertNameFree(session, 'secrets', scope, name);
+      await assertSameCase(session, 'variables', scope, name);
+      await session.setVariable(scope, { name, value, updatedBy: actor.userId });
+      assertWithinLimits(await session.sizes(scope));
       return { event: EnvironmentVariableSet, name };
     });
   }
@@ -113,13 +91,8 @@ export class EnvironmentConfig implements EnvironmentValues {
     request: Unchecked<ProductionConfirmation> = {},
   ): Promise<void> {
     const name = parseVariableName(nameValue);
-    await this.#change(actor, environmentValue, applicationValue, request, async (tx, environmentId, applicationId) => {
-      const { rowCount } = await tx.query(
-        `DELETE FROM environments.variables
-         WHERE environment_id = $1 AND application_id IS NOT DISTINCT FROM $2 AND name = $3`,
-        [environmentId, applicationId, name],
-      );
-      if (rowCount === 0) {
+    await this.#change(actor, environmentValue, applicationValue, request, async (session, scope) => {
+      if (!(await session.removeValue('variables', scope, name))) {
         throw new EnvironmentError('not-found', 'There is no such variable.');
       }
       return { event: EnvironmentVariableRemoved, name };
@@ -130,19 +103,13 @@ export class EnvironmentConfig implements EnvironmentValues {
   async setSecret(actor: Principal, environmentValue: unknown, nameValue: unknown, input: Unchecked<SetValue>): Promise<void> {
     const name = parseVariableName(nameValue);
     const value = parseVariableValue(input.value, { secret: true });
-    await this.#change(actor, environmentValue, input.application, input, async (tx, environmentId, applicationId, application) => {
-      await assertNameFree(tx, 'variables', environmentId, applicationId, name);
-      await assertSameCase(tx, 'secrets', environmentId, applicationId, name);
-      await tx.query(
-        `INSERT INTO environments.secrets (id, company_id, environment_id, application_id, name, value_bytes, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (environment_id, coalesce(application_id, '00000000-0000-0000-0000-000000000000'), upper(name))
-         DO UPDATE SET value_bytes = excluded.value_bytes, updated_by = excluded.updated_by, updated_at = now()`,
-        [randomUUID(), currentCompanyId(), environmentId, applicationId, name, Buffer.byteLength(value, 'utf8'), actor.userId],
-      );
-      await assertScopeWithinLimits(tx, environmentId, applicationId);
+    await this.#change(actor, environmentValue, input.application, input, async (session, scope, application) => {
+      await assertNameFree(session, 'variables', scope, name);
+      await assertSameCase(session, 'secrets', scope, name);
+      await session.setSecret(scope, { name, bytes: Buffer.byteLength(value, 'utf8'), updatedBy: actor.userId });
+      assertWithinLimits(await session.sizes(scope));
       // Written last, inside the transaction: if the store refuses, the name isn't kept.
-      await this.#secrets.write(secretPathOf(environmentId, application), { [name]: value });
+      await this.#secrets.write(secretPathOf(scope.environmentId, application), { [name]: value });
       return { event: EnvironmentSecretSet, name };
     });
   }
@@ -155,16 +122,11 @@ export class EnvironmentConfig implements EnvironmentValues {
     request: Unchecked<ProductionConfirmation> = {},
   ): Promise<void> {
     const name = parseVariableName(nameValue);
-    await this.#change(actor, environmentValue, applicationValue, request, async (tx, environmentId, applicationId, application) => {
-      const { rowCount } = await tx.query(
-        `DELETE FROM environments.secrets
-         WHERE environment_id = $1 AND application_id IS NOT DISTINCT FROM $2 AND name = $3`,
-        [environmentId, applicationId, name],
-      );
-      if (rowCount === 0) {
+    await this.#change(actor, environmentValue, applicationValue, request, async (session, scope, application) => {
+      if (!(await session.removeValue('secrets', scope, name))) {
         throw new EnvironmentError('not-found', 'There is no such secret.');
       }
-      await this.#secrets.remove(secretPathOf(environmentId, application), [name]);
+      await this.#secrets.remove(secretPathOf(scope.environmentId, application), [name]);
       return { event: EnvironmentSecretRemoved, name };
     });
   }
@@ -188,7 +150,7 @@ export class EnvironmentConfig implements EnvironmentValues {
    * one of them is set or removed, so deployments can tell when what runs has older ones.
    */
   fingerprint(environmentId: string, applicationId: string): Promise<string> {
-    return this.#database.transaction((tx) => fingerprintIn(tx, environmentId, applicationId));
+    return this.#store.transaction((session) => session.fingerprint(environmentId, applicationId));
   }
 
   /** The fingerprints of several applications' values, in the order asked, in one transaction. */
@@ -196,10 +158,10 @@ export class EnvironmentConfig implements EnvironmentValues {
     if (places.length === 0) {
       return Promise.resolve([]);
     }
-    return this.#database.transaction(async (tx) => {
+    return this.#store.transaction(async (session) => {
       const hashes: string[] = [];
       for (const place of places) {
-        hashes.push(await fingerprintIn(tx, place.environmentId, place.applicationId));
+        hashes.push(await session.fingerprint(place.environmentId, place.applicationId));
       }
       return hashes;
     });
@@ -207,7 +169,7 @@ export class EnvironmentConfig implements EnvironmentValues {
 
   /** The variables an application gets in an environment, and where its secrets are. */
   resolve(environmentId: string, application: { readonly id: string; readonly slug: string }): Promise<ResolvedConfig> {
-    return this.#database.transaction((tx) => resolveIn(tx, environmentId, application));
+    return this.#store.transaction((session) => resolveIn(session, environmentId, application));
   }
 
   async #change(
@@ -215,27 +177,22 @@ export class EnvironmentConfig implements EnvironmentValues {
     environmentValue: unknown,
     applicationValue: unknown,
     request: Unchecked<ProductionConfirmation>,
-    work: (
-      tx: TenantTransaction,
-      environmentId: string,
-      applicationId: string | null,
-      applicationSlug: string | null,
-    ) => Promise<{ event: ValueEvent; name: string }>,
+    work: (session: EnvironmentsSession, scope: ValueScope, applicationSlug: string | null) => Promise<{ event: ValueEvent; name: string }>,
   ): Promise<void> {
     const environmentId = parseId(environmentValue, 'environment');
     const applicationId = applicationValue === undefined || applicationValue === null || applicationValue === '' ? null : parseId(applicationValue, 'application');
     const application = applicationId === null ? null : await this.#applications.get(applicationId);
-    await this.#database.transaction(async (tx) => {
-      const environment = await findEnvironment(tx, environmentId);
+    await this.#store.transaction(async (session) => {
+      const environment = await findEnvironment(session, environmentId);
       assertMayManage(actor, environment.kind);
       const reason = authorizeChange({ name: environment.name, production: environment.kind === 'production' }, 'change-variables', {
         canManageProduction: actor.permissions.includes('environments-production:manage'),
         confirmation: request.confirmation,
         reason: request.reason,
       });
-      const { event, name } = await work(tx, environmentId, applicationId, application?.slug ?? null);
+      const { event, name } = await work(session, { environmentId, applicationId }, application?.slug ?? null);
       // Only names: values never enter the history.
-      await appendToOutbox(tx, [
+      await session.record([
         event.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
@@ -246,53 +203,25 @@ export class EnvironmentConfig implements EnvironmentValues {
   }
 }
 
-/**
- * A fingerprint of the values an application gets in an environment. It changes whenever
- * one of them is set or removed, so deployments can tell when what runs has older ones.
- */
-async function fingerprintIn(tx: TenantTransaction, environmentId: string, applicationId: string): Promise<string> {
-  const scope = 'environment_id = $1 AND (application_id IS NULL OR application_id = $2) ORDER BY application_id NULLS FIRST, name';
-  const { rows: variables } = await tx.query(`SELECT name, value, application_id FROM environments.variables WHERE ${scope}`, [
-    environmentId,
-    applicationId,
-  ]);
-  // Secret values aren't here, but every change to one is: it's saved again.
-  const { rows: secrets } = await tx.query(
-    `SELECT name, application_id, value_bytes, updated_at FROM environments.secrets WHERE ${scope}`,
-    [environmentId, applicationId],
-  );
-  return createHash('sha256').update(JSON.stringify([variables, secrets])).digest('hex');
-}
-
-/** The variables an application gets in an environment, and where its secrets are. */
+/** The variables an application gets in an environment, its own over the environment's, and where its secrets are. */
 async function resolveIn(
-  tx: TenantTransaction,
+  session: EnvironmentsSession,
   environmentId: string,
   application: { readonly id: string; readonly slug: string },
 ): Promise<ResolvedConfig> {
-  const { rows } = await tx.query<{ name: string; value: string; application_id: string | null }>(
-    `SELECT name, value, application_id FROM environments.variables
-     WHERE environment_id = $1 AND (application_id IS NULL OR application_id = $2)
-     ORDER BY application_id NULLS FIRST`,
-    [environmentId, application.id],
-  );
   const variables: Record<string, string> = {};
-  for (const row of rows) {
-    variables[row.name] = row.value;
+  for (const variable of await session.variablesFor(environmentId, application.id)) {
+    variables[variable.name] = variable.value;
   }
-  const { rows: secrets } = await tx.query<{ application_id: string | null }>(
-    `SELECT DISTINCT application_id FROM environments.secrets
-     WHERE environment_id = $1 AND (application_id IS NULL OR application_id = $2)`,
-    [environmentId, application.id],
-  );
+  const secrets = await session.secretScopes(environmentId, application.id);
   return {
     variables,
     secretPaths: {
       shared: secretPathOf(environmentId, null),
       application: secretPathOf(environmentId, application.slug),
     },
-    hasSharedSecrets: secrets.some((row) => row.application_id === null),
-    hasApplicationSecrets: secrets.some((row) => row.application_id !== null),
+    hasSharedSecrets: secrets.shared,
+    hasApplicationSecrets: secrets.application,
   };
 }
 
@@ -326,66 +255,29 @@ function parseId(value: unknown, what: string): string {
   return value;
 }
 
-async function findEnvironment(tx: TenantTransaction, id: string): Promise<{ name: string; kind: EnvironmentKind }> {
-  const { rows } = await tx.query<{ name: string; kind: EnvironmentKind }>(
-    'SELECT name, kind FROM environments.environments WHERE id = $1',
-    [id],
-  );
-  if (rows[0] === undefined) {
+async function findEnvironment(session: EnvironmentsSession, id: string): Promise<{ name: string; kind: EnvironmentKind }> {
+  const environment = await session.findEnvironment(id);
+  if (environment === null) {
     throw new EnvironmentError('not-found', 'This environment does not exist.');
   }
-  return rows[0];
+  return environment;
 }
 
-
 /** A name is a variable or a secret, never both, in any case. */
-async function assertNameFree(
-  tx: TenantTransaction,
-  other: 'variables' | 'secrets',
-  environmentId: string,
-  applicationId: string | null,
-  name: string,
-): Promise<void> {
-  const { rows } = await tx.query<{ name: string }>(
-    `SELECT name FROM environments.${other}
-     WHERE environment_id = $1 AND application_id IS NOT DISTINCT FROM $2 AND upper(name) = upper($3)`,
-    [environmentId, applicationId, name],
-  );
-  if (rows[0] !== undefined) {
+async function assertNameFree(session: EnvironmentsSession, other: ValueKind, scope: ValueScope, name: string): Promise<void> {
+  const existing = await session.nameInScope(other, scope, name);
+  if (existing !== null) {
     throw new EnvironmentError(
       'conflict',
-      `A ${other === 'secrets' ? 'secret' : 'variable'} is already named ${rows[0].name} here. A variable can't become a secret, nor the other way round.`,
+      `A ${other === 'secrets' ? 'secret' : 'variable'} is already named ${existing} here. A variable can't become a secret, nor the other way round.`,
     );
   }
 }
 
 /** Replacing a value keeps its name: one that differs only in case is another name, which isn't allowed. */
-async function assertSameCase(
-  tx: TenantTransaction,
-  table: 'variables' | 'secrets',
-  environmentId: string,
-  applicationId: string | null,
-  name: string,
-): Promise<void> {
-  const { rows } = await tx.query<{ name: string }>(
-    `SELECT name FROM environments.${table}
-     WHERE environment_id = $1 AND application_id IS NOT DISTINCT FROM $2 AND upper(name) = upper($3)`,
-    [environmentId, applicationId, name],
-  );
-  if (rows[0] !== undefined && rows[0].name !== name) {
-    throw new EnvironmentError('conflict', `${rows[0].name} is already set here. Names can't differ only in case.`);
+async function assertSameCase(session: EnvironmentsSession, kind: ValueKind, scope: ValueScope, name: string): Promise<void> {
+  const existing = await session.nameInScope(kind, scope, name);
+  if (existing !== null && existing !== name) {
+    throw new EnvironmentError('conflict', `${existing} is already set here. Names can't differ only in case.`);
   }
-}
-
-/** Each scope, the environment's shared values or an application's own, stays within the limits. */
-async function assertScopeWithinLimits(tx: TenantTransaction, environmentId: string, applicationId: string | null): Promise<void> {
-  const { rows } = await tx.query<{ bytes: number }>(
-    `SELECT octet_length(value) AS bytes FROM environments.variables
-     WHERE environment_id = $1 AND application_id IS NOT DISTINCT FROM $2
-     UNION ALL
-     SELECT value_bytes FROM environments.secrets
-     WHERE environment_id = $1 AND application_id IS NOT DISTINCT FROM $2`,
-    [environmentId, applicationId],
-  );
-  assertWithinLimits(rows.map((row) => Number(row.bytes)));
 }

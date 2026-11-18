@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { type Job, type JobQueue, UnrecoverableJobError } from '../src/index.ts';
+import { type FailedAttempt, type Job, type JobQueue, UnrecoverableJobError } from '../src/index.ts';
 
 export interface JobQueueHarness {
   readonly queue: JobQueue;
   /** Waits until the assertion passes, allowing for the implementation's own timing. */
   eventually(assertion: () => void | Promise<void>): Promise<void>;
   deadLetters(queueName: string): Promise<readonly Job[]>;
+  /** Every failed try the queue reported, as its onJobFailed option received them. */
+  readonly failures: readonly FailedAttempt[];
   stop(): Promise<void>;
 }
 
@@ -105,6 +107,41 @@ export function describeJobQueueContract(name: string, createHarness: () => Prom
 
       await harness.eventually(() => expect(calls.get(2)).toBe(2));
       expect([0, 1, 3, 4].map((index) => calls.get(index))).toEqual([1, 1, 1, 1]);
+    });
+
+    it('tells the handler which try is the last, so it can settle what would be left waiting', async () => {
+      const queue = queueName();
+      const tries: boolean[] = [];
+      await harness.queue.createQueue(queue, { retryLimit: 2, retryDelaySeconds: 1 });
+      await harness.queue.work(queue, async (_job, attempt) => {
+        tries.push(attempt.last);
+        throw new Error('Still failing');
+      });
+
+      await harness.queue.send(queue, {});
+
+      await vi.waitFor(() => expect(tries).toEqual([false, false, true]), { timeout: 20_000, interval: 250 });
+    });
+
+    it('reports every failed try, and whether the job will run again', async () => {
+      const queue = queueName();
+      await harness.queue.createQueue(queue, { retryLimit: 1, retryDelaySeconds: 1 });
+      await harness.queue.work(queue, async () => {
+        throw new Error('The Git service could not be reached.');
+      });
+
+      const jobId = await harness.queue.send(queue, {});
+
+      await vi.waitFor(
+        () => {
+          const reported = harness.failures.filter((failure) => failure.queue === queue);
+          expect(reported.map(({ jobId: id, last, error }) => ({ id, last, message: (error as Error).message }))).toEqual([
+            { id: jobId, last: false, message: 'The Git service could not be reached.' },
+            { id: jobId, last: true, message: 'The Git service could not be reached.' },
+          ]);
+        },
+        { timeout: 20_000, interval: 250 },
+      );
     });
 
     it('moves a job to the dead letter queue when its retries run out', async () => {

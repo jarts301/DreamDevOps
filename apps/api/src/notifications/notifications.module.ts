@@ -1,4 +1,4 @@
-import { type DynamicModule, Module } from '@nestjs/common';
+import { type DynamicModule, Logger, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
@@ -7,8 +7,9 @@ import { AlertEmails } from './application/alert-emails.ts';
 import { InvitationEmails } from './application/invitation-emails.ts';
 import { NotificationRules } from './application/notification-rules.ts';
 import { ALERT_MAILER, INVITATION_MAILER } from '@dreamdevops/contracts/notifications/services';
-import { MAILER, type Mailer, WEBHOOK_SENDER, type WebhookSender } from './application/ports.ts';
+import { MAILER, type Mailer, RULES_STORE, type RulesStore, WEBHOOK_SENDER, type WebhookSender } from './application/ports.ts';
 import { NotificationRulesController } from './http/notification-rules.controller.ts';
+import { postgresRulesStore } from './infrastructure/postgres-rules-store.ts';
 import { SafeWebhookSender } from './infrastructure/safe-webhook-sender.ts';
 import { SmtpMailer } from './infrastructure/smtp-mailer.ts';
 import { NotificationsSubscriptions } from './messaging/notifications-subscriptions.ts';
@@ -39,7 +40,7 @@ export class NotificationsModule {
             },
             {
               provide: InvitationEmails,
-              useFactory: (mailer: Mailer) => new InvitationEmails(mailer, config.dashboardUrl),
+              useFactory: (mailer: Mailer) => new InvitationEmails(mailer, config.dashboardUrl, new Logger(InvitationEmails.name)),
               inject: [MAILER],
             },
             {
@@ -54,11 +55,12 @@ export class NotificationsModule {
               provide: WEBHOOK_SENDER,
               useFactory: () => new SafeWebhookSender({ allowPrivateNetworks: config.webhookAllowPrivateNetworks }),
             },
+            { provide: RULES_STORE, useFactory: postgresRulesStore, inject: [TenantDatabase] },
             {
               provide: NotificationRules,
-              useFactory: (database: TenantDatabase, companies: CompanyDirectory, sender: WebhookSender) =>
-                new NotificationRules(database, companies, sender, { allowInsecureWebhooks: config.webhookAllowInsecure }),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, WEBHOOK_SENDER],
+              useFactory: (store: RulesStore, companies: CompanyDirectory, sender: WebhookSender) =>
+                new NotificationRules(store, companies, sender, { allowInsecureWebhooks: config.webhookAllowInsecure }),
+              inject: [RULES_STORE, COMPANY_DIRECTORY, WEBHOOK_SENDER],
             },
             {
               provide: NotificationsSubscriptions,

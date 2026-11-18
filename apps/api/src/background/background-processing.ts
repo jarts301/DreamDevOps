@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
-import { EventBus } from '@dreamdevops/shared-kernel';
+import { describeError, EventBus, type FailedAttempt } from '@dreamdevops/shared-kernel';
 import { OutboxRelay, PgBossJobQueue } from '@dreamdevops/shared-kernel/postgres';
 import pg from 'pg';
 import type { AppConfig } from '../config/app-config.ts';
@@ -42,6 +42,7 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
       connectionString: this.#config.jobsDatabaseUrl,
       pollingIntervalSeconds: this.#config.jobPollingSeconds,
       onError,
+      onJobFailed: (failure) => this.#logFailure(failure),
     });
     this.#queue = queue;
     const bus = new EventBus(queue);
@@ -64,6 +65,18 @@ export class BackgroundProcessing implements OnApplicationBootstrap, OnApplicati
       }
     });
     await queue.schedule(OUTBOX_RETENTION_QUEUE, OUTBOX_RETENTION_SCHEDULE);
+  }
+
+  /**
+   * Every failed try of a background job, such as a build that couldn't start. A try that
+   * will be repeated is a warning; the last one is an error, since its work stops there.
+   */
+  #logFailure({ queue, jobId, error, last }: FailedAttempt): void {
+    if (last) {
+      this.#logger.error(`Job ${jobId} in ${queue} failed for the last time: ${describeError(error)}`);
+    } else {
+      this.#logger.warn(`Job ${jobId} in ${queue} failed, and will be tried again: ${describeError(error)}`);
+    }
   }
 
   async onApplicationShutdown(): Promise<void> {

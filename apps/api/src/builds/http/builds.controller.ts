@@ -3,18 +3,15 @@ import type { BuildView, PublicSigningKey, RequestFeatureBuild, SbomDocument } f
 import type { Unchecked } from '@dreamdevops/contracts/http';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { REPOSITORY_LOOKUP, type RepositoryLookup } from '@dreamdevops/contracts/source-governance/services';
 import { Builds } from '../application/builds.ts';
 
 /** Every member can see builds and versions. Users without a company are refused. */
 @Controller('company')
 export class BuildsController {
   readonly #builds: Builds;
-  readonly #repositories: RepositoryLookup;
 
-  constructor(@Inject(Builds) builds: Builds, @Inject(REPOSITORY_LOOKUP) repositories: RepositoryLookup) {
+  constructor(@Inject(Builds) builds: Builds) {
     this.#builds = builds;
-    this.#repositories = repositories;
   }
 
   @Authenticated()
@@ -33,7 +30,7 @@ export class BuildsController {
   @Authenticated()
   @Get('applications/:id/branches')
   branches(@Param('id') id: string): Promise<string[]> {
-    return this.#repositories.branches(id);
+    return this.#builds.branches(id);
   }
 
   @RequirePermissions('feature-images:build')

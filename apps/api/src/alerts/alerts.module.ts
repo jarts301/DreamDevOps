@@ -17,7 +17,9 @@ import { AlertChecks } from './application/alert-checks.ts';
 import { AlertDeliveries } from './application/alert-deliveries.ts';
 import { AlertRules } from './application/alert-rules.ts';
 import { Places } from './application/places.ts';
+import { ALERTS_STORE, type AlertsStore } from './application/ports.ts';
 import { AlertsController } from './http/alerts.controller.ts';
+import { postgresAlertsStore } from './infrastructure/postgres-alerts-store.ts';
 import { AlertsSubscriptions } from './messaging/alerts-subscriptions.ts';
 
 /**
@@ -50,23 +52,24 @@ export class AlertsModule {
               useFactory: (environments: EnvironmentDirectory, catalog: ApplicationDirectory) => new Places(environments, catalog),
               inject: [ENVIRONMENT_DIRECTORY, APPLICATION_DIRECTORY],
             },
+            { provide: ALERTS_STORE, useFactory: postgresAlertsStore, inject: [TenantDatabase] },
             {
               provide: AlertRules,
-              useFactory: (database: TenantDatabase, places: Places, metrics: LatestMetrics, emails: AlertMailer, members: CompanyMembers) =>
-                new AlertRules(database, places, metrics, emails, members),
-              inject: [TenantDatabase, Places, LATEST_METRICS, ALERT_MAILER, COMPANY_MEMBERS],
+              useFactory: (store: AlertsStore, places: Places, metrics: LatestMetrics, emails: AlertMailer, members: CompanyMembers) =>
+                new AlertRules(store, places, metrics, emails, members),
+              inject: [ALERTS_STORE, Places, LATEST_METRICS, ALERT_MAILER, COMPANY_MEMBERS],
             },
             {
               provide: AlertChecks,
-              useFactory: (database: TenantDatabase, companies: CompanyDirectory, places: Places, metrics: LatestMetrics) =>
-                new AlertChecks(database, companies, places, metrics),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, Places, LATEST_METRICS],
+              useFactory: (store: AlertsStore, companies: CompanyDirectory, places: Places, metrics: LatestMetrics) =>
+                new AlertChecks(store, companies, places, metrics),
+              inject: [ALERTS_STORE, COMPANY_DIRECTORY, Places, LATEST_METRICS],
             },
             {
               provide: AlertDeliveries,
-              useFactory: (database: TenantDatabase, companies: CompanyDirectory, emails: AlertMailer, members: CompanyMembers) =>
-                new AlertDeliveries(database, companies, emails, members),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, ALERT_MAILER, COMPANY_MEMBERS],
+              useFactory: (store: AlertsStore, companies: CompanyDirectory, emails: AlertMailer, members: CompanyMembers) =>
+                new AlertDeliveries(store, companies, emails, members),
+              inject: [ALERTS_STORE, COMPANY_DIRECTORY, ALERT_MAILER, COMPANY_MEMBERS],
             },
             {
               provide: AlertsSubscriptions,
