@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId, isUuid } from '@dreamdevops/shared-kernel';
+import { ApplicationArchived, ApplicationRegistered, ApplicationRestored, ApplicationUpdated } from '@dreamdevops/contracts/catalog/events';
+import { currentCompanyId, isUuid } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
-import type { BlueprintManifest } from '../../blueprints/domain/blueprint.ts';
-import type { Principal } from '../../identity-access/domain/access.ts';
+import type { BlueprintCatalog, BlueprintManifest } from '@dreamdevops/contracts/blueprints/services';
+import type {
+  ApplicationType,
+  ApplicationView,
+  BlueprintChoice,
+  RegisterApplication,
+  UpdateApplication,
+} from '@dreamdevops/contracts/catalog/http';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import {
   type ApplicationStatus,
   applicationSlug,
@@ -12,41 +21,6 @@ import {
   normalizeDescription,
 } from '../domain/application.ts';
 import { CatalogError } from '../domain/errors.ts';
-import type { ApplicationRegisteredPayload, ApplicationStatusPayload } from '../domain/events.ts';
-
-/** A blueprint an application can start from: a language and a framework, such as TypeScript and React. */
-export interface BlueprintChoice {
-  readonly key: string;
-  readonly version: string;
-  readonly name: string;
-  readonly description: string;
-  readonly language: string;
-  readonly framework: string;
-}
-
-export interface ApplicationType {
-  readonly key: string;
-  readonly name: string;
-  readonly description: string;
-  /** The blueprint new applications of this type start from unless another is chosen. */
-  readonly blueprint: BlueprintChoice;
-  /** Every blueprint new applications of this type can start from, by language and name. */
-  readonly blueprints: readonly BlueprintChoice[];
-}
-
-export interface ApplicationView {
-  readonly id: string;
-  readonly name: string;
-  readonly slug: string;
-  readonly type: { readonly key: string; readonly name: string };
-  /** The blueprint it started from, chosen when it was registered. */
-  readonly blueprint: { readonly key: string; readonly name: string; readonly language: string; readonly framework: string } | null;
-  readonly description: string;
-  readonly status: ApplicationStatus;
-  readonly createdAt: string;
-  readonly createdBy: { readonly userId: string; readonly displayName: string | null } | null;
-  readonly archivedAt: string | null;
-}
 
 interface TypeRow {
   key: string;
@@ -75,7 +49,7 @@ interface ApplicationRow {
 const SELECT_APPLICATIONS = 'SELECT * FROM catalog.applications_view() a';
 
 /** Each company's register of applications. Every query runs in the current company. */
-export class ApplicationCatalog {
+export class ApplicationCatalog implements ApplicationDirectory {
   readonly #database: TenantDatabase;
   readonly #blueprints: BlueprintCatalog;
 
@@ -155,7 +129,7 @@ export class ApplicationCatalog {
    */
   async register(
     actor: Principal,
-    input: { name?: unknown; type?: unknown; blueprint?: unknown; description?: unknown },
+    input: Unchecked<RegisterApplication>,
   ): Promise<ApplicationView> {
     const name = normalizeApplicationName(input.name);
     const description = normalizeDescription(input.description);
@@ -175,8 +149,7 @@ export class ApplicationCatalog {
         [id, companyId, name, slug, type.key, blueprint.key, description, actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent<'ApplicationRegistered', ApplicationRegisteredPayload>({
-          eventType: 'ApplicationRegistered',
+        ApplicationRegistered.create({
           companyId,
           actorId: actor.userId,
           payload: { applicationId: id, name, slug, type: type.key, blueprint: blueprint.key },
@@ -213,7 +186,7 @@ export class ApplicationCatalog {
   }
 
   /** Changes the name or description. The short name stays fixed. */
-  update(actor: Principal, idValue: unknown, input: { name?: unknown; description?: unknown }): Promise<void> {
+  update(actor: Principal, idValue: unknown, input: Unchecked<UpdateApplication>): Promise<void> {
     const id = parseApplicationId(idValue);
     const name = input.name === undefined ? undefined : normalizeApplicationName(input.name);
     const description = input.description === undefined ? undefined : normalizeDescription(input.description);
@@ -227,14 +200,12 @@ export class ApplicationCatalog {
       if (current.status === 'archived') {
         throw new CatalogError('conflict', 'Restore the application first.');
       }
-      const changes: Record<string, string> = {};
-      if (name !== undefined && name !== current.name) {
+      const renamed = name !== undefined && name !== current.name;
+      if (renamed) {
         await assertNameFree(tx, name, id);
-        changes.name = name;
-        changes.previousName = current.name;
       }
       const descriptionChanged = description !== undefined && description !== current.description;
-      if (changes.name === undefined && !descriptionChanged) {
+      if (!renamed && !descriptionChanged) {
         return;
       }
       await tx.query(
@@ -244,12 +215,11 @@ export class ApplicationCatalog {
         [id, name ?? current.name, description ?? current.description],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'ApplicationUpdated',
+        ApplicationUpdated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           // The description can be long and isn't needed in the history, so only the fact is kept.
-          payload: { applicationId: id, ...changes, descriptionChanged },
+          payload: { applicationId: id, ...(renamed && { name, previousName: current.name }), descriptionChanged },
         }),
       ]);
     });
@@ -278,8 +248,7 @@ export class ApplicationCatalog {
         [id, status],
       );
       await appendToOutbox(tx, [
-        createDomainEvent<'ApplicationArchived' | 'ApplicationRestored', ApplicationStatusPayload>({
-          eventType: status === 'archived' ? 'ApplicationArchived' : 'ApplicationRestored',
+        (status === 'archived' ? ApplicationArchived : ApplicationRestored).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { applicationId: id, name: current.name },

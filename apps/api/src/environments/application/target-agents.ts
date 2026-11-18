@@ -1,4 +1,7 @@
-import { type CompanyId, createDomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import type { Registration } from '@dreamdevops/contracts/agent/protocol';
+import type { TargetAuthentication } from '@dreamdevops/contracts/environments/services';
+import { TargetConnected, TargetLost } from '@dreamdevops/contracts/environments/events';
+import { type CompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import {
   ACCESS_TOKEN_MINUTES,
@@ -16,7 +19,7 @@ import {
 } from '../domain/agent-identity.ts';
 import { acceptedImageKinds, type EnvironmentKind } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
-import type { TargetStatus } from './environments.ts';
+import type { TargetStatus } from '@dreamdevops/contracts/environments/http';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 
@@ -29,18 +32,8 @@ export interface TargetAgentsOptions {
   readonly telemetryKey: string;
 }
 
-export interface Registration {
-  readonly targetId: string;
-  readonly tokenUrl: string;
-  readonly heartbeatSeconds: number;
-  readonly environment: {
-    readonly id: string;
-    readonly name: string;
-    readonly slug: string;
-    readonly kind: EnvironmentKind;
-    readonly acceptedImages: readonly string[];
-  };
-}
+// What the agent registers with is the agent protocol, kept in the contracts.
+export type { Registration } from '@dreamdevops/contracts/agent/protocol';
 
 interface TargetRow {
   id: string;
@@ -67,7 +60,7 @@ interface EnvironmentRow {
  * first call, a signed assertion with the agent's own key proves each token request, and
  * a short-lived access token proves the rest.
  */
-export class TargetAgents {
+export class TargetAgents implements TargetAuthentication {
   readonly #database: TenantDatabase;
   readonly #options: TargetAgentsOptions;
 
@@ -122,8 +115,7 @@ export class TargetAgents {
           [target.id, publicKey, agentVersion, kubernetesVersion],
         );
         await appendToOutbox(tx, [
-          createDomainEvent({
-            eventType: 'TargetConnected',
+          TargetConnected.create({
             companyId,
             actorId: null,
             payload: {
@@ -320,8 +312,7 @@ export class TargetAgents {
           }
           const environment = await findEnvironment(tx, rows[0].environment_id);
           await appendToOutbox(tx, [
-            createDomainEvent({
-              eventType: 'TargetLost',
+            TargetLost.create({
               companyId,
               actorId: null,
               payload: {
@@ -345,8 +336,7 @@ export class TargetAgents {
     if (target.status === 'lost') {
       const environment = await findEnvironment(tx, target.environment_id);
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'TargetConnected',
+        TargetConnected.create({
           companyId,
           actorId: null,
           payload: {

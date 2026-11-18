@@ -2,7 +2,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { settle } from '../../testing';
 import { Blueprints } from './blueprints';
 
@@ -55,14 +54,5 @@ describe('Blueprints', () => {
     expect(text).toContain('250m CPU, 256Mi memory');
     expect(text).toContain('Recreate, Rolling, Blue/green, Canary, A/B');
     expect(text).toContain('Older versions: 1.0.0');
-  });
-
-  it('describes repository events in the audit log', () => {
-    expect(describeEvent('RepositoryCreated', { name: 'Billing', repository: 'acme/billing' })).toBe(
-      'Created the repository acme/billing for "Billing"',
-    );
-    expect(describeEvent('RepositoryCreationFailed', { name: 'Billing', reason: 'Name taken' })).toBe(
-      'Creating the repository of "Billing" failed: Name taken',
-    );
   });
 });

@@ -1,6 +1,6 @@
 import { isUuid } from '@dreamdevops/shared-kernel';
 import type { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import type { CompanyMember, CompanyMembers } from './company-members.ts';
+import type { CompanyMember, CompanyMembers } from '@dreamdevops/contracts/identity-access/services';
 
 const SELECT_MEMBERS = `
   SELECT user_id AS "userId", display_name AS "displayName", email, role_key AS role

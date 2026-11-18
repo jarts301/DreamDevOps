@@ -3,66 +3,32 @@ import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type { ProductionConfirmation } from '../../shared/production-confirmation';
 
-export type EnvironmentKind = 'test' | 'production';
-export type EnvironmentStatus = 'active' | 'archived';
-export type TargetStatus = 'pending' | 'connected' | 'lost';
+import type {
+  Connection,
+  ConnectTarget,
+  CreateEnvironment,
+  EnvironmentConfigView,
+  EnvironmentStatus,
+  EnvironmentView,
+  ProviderView,
+  SetValue,
+  TargetView,
+  UpdateEnvironment,
+} from '@dreamdevops/contracts/environments/http';
 
-export interface Target {
-  readonly id: string;
-  /** What runs the environment: a Kubernetes cluster with the agent, or This machine. */
-  readonly provider: string;
-  readonly settings: Readonly<Record<string, string | number>>;
-  readonly status: TargetStatus;
-  readonly registrationExpiresAt: string | null;
-  readonly keyFingerprint: string | null;
-  readonly agentVersion: string | null;
-  readonly kubernetesVersion: string | null;
-  readonly registeredAt: string | null;
-  readonly lastSeenAt: string | null;
-  readonly createdAt: string;
-}
-
-export interface Environment {
-  readonly id: string;
-  readonly name: string;
-  readonly slug: string;
-  readonly kind: EnvironmentKind;
-  readonly acceptsFeatureImages: boolean;
-  readonly acceptedImages: readonly string[];
-  readonly requiresApproval: boolean;
-  readonly status: EnvironmentStatus;
-  readonly createdAt: string;
-  readonly archivedAt: string | null;
-  readonly target: Target | null;
-}
-
-export type ConfigScope = 'environment' | 'application';
-
-export interface EnvironmentConfig {
-  readonly variables: readonly { readonly name: string; readonly value: string; readonly scope: ConfigScope; readonly updatedAt: string }[];
-  /** Names only: secret values can be replaced or deleted, never read. */
-  readonly secrets: readonly { readonly name: string; readonly scope: ConfigScope; readonly updatedAt: string }[];
-}
-
+// The API's answers are Environments' HTTP contract, under the names the pages use.
+export type {
+  ConfigScope,
+  Connection,
+  EnvironmentKind,
+  EnvironmentStatus,
+  TargetStatus,
+} from '@dreamdevops/contracts/environments/http';
+export type Target = TargetView;
+export type Environment = EnvironmentView;
+export type EnvironmentConfig = EnvironmentConfigView;
 /** A place environments can run, and what it needs. */
-export interface Provider {
-  readonly key: string;
-  readonly name: string;
-  readonly description: string;
-  readonly deploys: boolean;
-  readonly settings: readonly { readonly key: string; readonly label: string; readonly example: string; readonly help: string | null }[];
-  /** Why it can't be chosen here, or null when it can. */
-  readonly unavailableReason: string | null;
-}
-
-export interface Connection {
-  readonly targetId: string;
-  readonly provider: string;
-  /** For a cluster only: This machine needs no agent. */
-  readonly registrationToken: string | null;
-  readonly expiresAt: string | null;
-  readonly command: string | null;
-}
+export type Provider = ProviderView;
 
 const BASE = '/api/v1/company/environments';
 
@@ -74,7 +40,7 @@ export class EnvironmentsApi {
     return firstValueFrom(this.#http.get<Environment[]>(BASE, { params: { status } }));
   }
 
-  create(input: { name: string; kind: EnvironmentKind; acceptsFeatureImages: boolean }): Promise<Environment> {
+  create(input: CreateEnvironment): Promise<Environment> {
     return firstValueFrom(this.#http.post<Environment>(BASE, input));
   }
 
@@ -96,13 +62,8 @@ export class EnvironmentsApi {
     application?: string,
     confirmation?: ProductionConfirmation,
   ): Promise<void> {
-    return firstValueFrom(
-      this.#http.put<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, {
-        value,
-        ...(application && { application }),
-        ...confirmation,
-      }),
-    );
+    const body: SetValue = { value, ...(application && { application }), ...confirmation };
+    return firstValueFrom(this.#http.put<void>(`${BASE}/${id}/${kind}/${encodeURIComponent(name)}`, body));
   }
 
   removeValue(
@@ -120,10 +81,11 @@ export class EnvironmentsApi {
 
   update(
     id: string,
-    input: { name?: string; acceptsFeatureImages?: boolean; requiresApproval?: boolean },
+    input: Omit<UpdateEnvironment, 'confirmation' | 'reason'>,
     confirmation?: ProductionConfirmation,
   ): Promise<void> {
-    return firstValueFrom(this.#http.patch<void>(`${BASE}/${id}`, { ...input, ...confirmation }));
+    const body: UpdateEnvironment = { ...input, ...confirmation };
+    return firstValueFrom(this.#http.patch<void>(`${BASE}/${id}`, body));
   }
 
   archive(id: string, confirmation?: ProductionConfirmation): Promise<void> {
@@ -139,7 +101,8 @@ export class EnvironmentsApi {
   }
 
   connect(id: string, provider = 'kubernetes', settings: Readonly<Record<string, string>> = {}): Promise<Connection> {
-    return firstValueFrom(this.#http.post<Connection>(`${BASE}/${id}/target`, { provider, settings }));
+    const body: ConnectTarget = { provider, settings };
+    return firstValueFrom(this.#http.post<Connection>(`${BASE}/${id}/target`, body));
   }
 
   disconnect(id: string, confirmation?: ProductionConfirmation): Promise<void> {

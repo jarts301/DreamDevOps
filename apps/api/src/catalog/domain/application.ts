@@ -2,7 +2,8 @@ import { normalizeName } from '../../shared/names.ts';
 import { numberedSlug, slugFromName } from '../../shared/slug.ts';
 import { CatalogError } from './errors.ts';
 
-export type ApplicationStatus = 'active' | 'archived';
+// An application's status is the catalog's published language, kept in its contracts.
+export type { ApplicationStatus } from '@dreamdevops/contracts/catalog/http';
 
 /** Repository names allow more, but a short limit keeps them readable. */
 export const MAX_SLUG_LENGTH = 60;

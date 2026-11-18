@@ -60,7 +60,7 @@ Each environment has values for all its applications, and each application can h
 - **Values** are kept exactly, spaces included, and fit on one line, which is what every container runtime passes on safely. Encode multi-line values, such as keys, in base64. Each is up to 32 KB.
 - **Limits:** the environment's shared values, and each application's own, can each hold up to 100 variables and secrets, totalling 256 KB. The size of each secret is kept, never its value.
 - **From the platform:** every application also gets `PORT`, the blueprint's, `DREAMDEVOPS_ENVIRONMENT`, the environment's short name, `DREAMDEVOPS_PRODUCTION`, `true` or `false`, and `DREAMDEVOPS_VERSION`.
-- **Metrics and traces:** applications also get the standard OpenTelemetry settings: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (15000), `OTEL_SERVICE_NAME`, the application's short name, and `OTEL_RESOURCE_ATTRIBUTES` with `dreamdevops.place.id`, `dreamdevops.environment.id` and `dreamdevops.application.id`. The environment's own values can change all but those attributes, which are always added last, so they count. The rules are in `domain/telemetry.ts`, and [Monitoring](../monitoring/README.md#how-telemetry-gets-here) says where it all goes.
+- **Metrics and traces:** applications also get the standard OpenTelemetry settings: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_METRIC_EXPORT_INTERVAL` (15000), `OTEL_SERVICE_NAME`, the application's short name, and `OTEL_RESOURCE_ATTRIBUTES` with `dreamdevops.place.id`, `dreamdevops.environment.id` and `dreamdevops.application.id`. The environment's own values can change all but those attributes, which are always added last, so they count. The rules are in Environments' contract `environments/telemetry.ts`, and [Monitoring](../monitoring/README.md#how-telemetry-gets-here) says where it all goes.
 
 | | Variables | Secrets |
 |---|---|---|
@@ -78,7 +78,7 @@ A Tech Lead or Operator can make a production environment require a second perso
 
 ## Production protection
 
-Production is protected from mistakes in several layers. The rules are in `domain/protection.ts`, which deployments use too.
+Production is protected from mistakes in several layers. The rules are in Environments' contract `environments/protection.ts`, which Deployments applies too. How long a reason may be is in `environments/http.ts`, which the dashboard uses too.
 
 | Protection | How |
 |---|---|

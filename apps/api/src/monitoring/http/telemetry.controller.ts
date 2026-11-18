@@ -28,7 +28,7 @@ export class TelemetryController {
   /** Answers as OTLP does, with an empty response: every resource was taken, or dropped on purpose. */
   @Post(':kind')
   @HttpCode(200)
-  async receive(@Req() request: ApiRequest, @Param('kind') kind: string, @Body() body: unknown): Promise<object> {
+  async receive(@Req() request: ApiRequest, @Param('kind') kind: string, @Body() body: unknown): Promise<Record<string, never>> {
     await this.#gateway.receive(kind, bearer(request), body);
     return {};
   }

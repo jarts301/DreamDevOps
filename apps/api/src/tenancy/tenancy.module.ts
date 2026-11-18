@@ -1,6 +1,6 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import { CompanyAccessService } from '../identity-access/application/company-access.service.ts';
+import { FIRST_ADMIN_INVITATIONS, type FirstAdminInvitations } from '@dreamdevops/contracts/identity-access/services';
 import { IdentityAccessModule } from '../identity-access/identity-access.module.ts';
 import { NotificationsModule } from '../notifications/notifications.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
@@ -30,8 +30,8 @@ export class TenancyModule {
           [
             {
               provide: CompaniesService,
-              useFactory: (database: TenantDatabase, access: CompanyAccessService) => new CompaniesService(database, access),
-              inject: [TenantDatabase, CompanyAccessService],
+              useFactory: (database: TenantDatabase, invitations: FirstAdminInvitations) => new CompaniesService(database, invitations),
+              inject: [TenantDatabase, FIRST_ADMIN_INVITATIONS],
             },
             {
               provide: GIT_PROVIDER,

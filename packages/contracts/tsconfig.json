@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Contracts are read as source by the API's tests and by the dashboard and agent, which
+    // need no build of them, and as compiled output by the running API.
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

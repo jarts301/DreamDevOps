@@ -1,12 +1,12 @@
 import { Logger } from '@nestjs/common';
-import { deterministicJobId, parseCompanyId, payloadOf, runWithCompany } from '@dreamdevops/shared-kernel';
+import { AlertResolved, AlertTriggered } from '@dreamdevops/contracts/alerts/events';
+import { MemberRemoved } from '@dreamdevops/contracts/identity-access/events';
+import { deterministicJobId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
-import type { MemberRemoved } from '../../identity-access/domain/events.ts';
 import type { AlertChecks } from '../application/alert-checks.ts';
 import { type AlertDeliveries, EMAIL_QUEUE, type EmailJob } from '../application/alert-deliveries.ts';
 import type { AlertRules } from '../application/alert-rules.ts';
-import type { AlertResolved, AlertTriggered } from '../domain/events.ts';
 
 /** Sent every minute, on a schedule every API process shares, to check every company's alerts. */
 export const CHECK_QUEUE = 'alerts.check';
@@ -69,13 +69,13 @@ export class AlertsSubscriptions implements BackgroundSubscriber {
     await queue.createQueue(EMAIL_QUEUE, { retryLimit: 4, retryDelaySeconds: this.#config.notificationRetrySeconds });
     await queue.work(EMAIL_QUEUE, (job) => this.#deliveries.deliver(job.data as EmailJob));
     const fanOut = (event: AlertTriggered | AlertResolved) => this.#deliveries.fanOut(event, queue);
-    await bus.subscribe<AlertTriggered>('AlertTriggered', 'alerts-email', fanOut, { retryLimit: 5, retryDelaySeconds: 5 });
-    await bus.subscribe<AlertResolved>('AlertResolved', 'alerts-email', fanOut, { retryLimit: 5, retryDelaySeconds: 5 });
+    await bus.subscribe(AlertTriggered, 'alerts-email', fanOut, { retryLimit: 5, retryDelaySeconds: 5 });
+    await bus.subscribe(AlertResolved, 'alerts-email', fanOut, { retryLimit: 5, retryDelaySeconds: 5 });
 
-    await bus.subscribe<MemberRemoved>(
-      'MemberRemoved',
+    await bus.subscribe(
+      MemberRemoved,
       'alerts-recipients',
-      (event) => this.#rules.forgetMember(payloadOf(event).text('userId')),
+      ({ payload }) => this.#rules.forgetMember(payload.userId),
       { retryLimit: 5, retryDelaySeconds: 5 },
     );
 

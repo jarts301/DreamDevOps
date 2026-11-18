@@ -141,6 +141,7 @@ const spanOf = (overrides: Partial<Span> = {}): Span => ({
   parentSpanId: null,
   name: 'GET /',
   serviceName: 'website',
+  placeId: 'p-3',
   environmentId: 'e-3',
   environmentName: 'Staging',
   applicationName: 'Website',

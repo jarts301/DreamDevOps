@@ -1,4 +1,4 @@
-import { PLACE_ATTRIBUTE } from '../../environments/domain/telemetry.ts';
+import { PLACE_ATTRIBUTE } from '@dreamdevops/contracts/environments/telemetry';
 import type { StoredSpan, StoredTrace } from '../domain/traces.ts';
 import { type TraceStore, TracesUnavailableError } from '../application/ports.ts';
 

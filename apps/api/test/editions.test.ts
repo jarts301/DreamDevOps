@@ -1,12 +1,12 @@
+import { CompanyEditionChanged } from '@dreamdevops/contracts/editions/events';
 import { Controller, Get, type INestApplication } from '@nestjs/common';
-import { createDomainEvent, parseCompanyId } from '@dreamdevops/shared-kernel';
+import { parseCompanyId } from '@dreamdevops/shared-kernel';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Entitlements } from '../src/editions/application/entitlements.ts';
 import { FEATURES, parseEdition, resolveFeatures } from '../src/editions/domain/features.ts';
-import { RequireFeature } from '../src/editions/http/feature.guard.ts';
+import { Authenticated, RequireFeature, RequirePermissions } from '../src/http/access.decorators.ts';
 import { CommunityEntitlementProvider } from '../src/editions/infrastructure/community-entitlement-provider.ts';
-import { Authenticated, RequirePermissions } from '../src/http/access.decorators.ts';
 import { summarize } from '../src/notifications/domain/event-catalog.ts';
 import { COMPANY_A, COMPANY_B } from './fakes.ts';
 import { createTestApp } from './test-app.ts';
@@ -62,10 +62,9 @@ describe('the Community provider', () => {
 
 describe('edition change notifications', () => {
   it('say which edition the company moved to', () => {
-    const event = createDomainEvent({
-      eventType: 'CompanyEditionChanged',
+    const event = CompanyEditionChanged.create({
       companyId: parseCompanyId(COMPANY_A),
-      payload: { edition: 'commercial', previousEdition: 'community' },
+      payload: { edition: 'commercial', previousEdition: 'community', changedBy: '00000000-0000-4000-8000-0000000000ff' },
     });
     expect(summarize(event, 'Acme')).toBe('Acme: The company moved to the Commercial Edition.');
   });

@@ -8,7 +8,6 @@ import { BlueprintsModule } from './blueprints/blueprints.module.ts';
 import { BuildsModule } from './builds/builds.module.ts';
 import { CatalogModule } from './catalog/catalog.module.ts';
 import type { AppConfig } from './config/app-config.ts';
-import { AgentController } from './deployments/http/agent.controller.ts';
 import { DeploymentsModule } from './deployments/deployments.module.ts';
 import { DemoModule } from './demo/demo.module.ts';
 import type { EntitlementProvider } from './editions/application/ports.ts';
@@ -16,16 +15,14 @@ import { EditionsModule } from './editions/editions.module.ts';
 import { EnvironmentsModule } from './environments/environments.module.ts';
 import { FeatureGuard } from './editions/http/feature.guard.ts';
 import { HealthController } from './health/health.controller.ts';
+import { isSignInRoute } from './http/access.decorators.ts';
 import { AuthorizationGuard, OriginGuard, SessionGuard } from './http/guards.ts';
 import { ProblemDetailsFilter } from './http/problem-details.filter.ts';
 import { TenantContextInterceptor } from './http/tenant-context.interceptor.ts';
-import { AuthController } from './identity-access/http/auth.controller.ts';
-import { InvitationsController } from './identity-access/http/company-access.controller.ts';
 import { IdentityAccessModule } from './identity-access/identity-access.module.ts';
 import { MonitoringModule } from './monitoring/monitoring.module.ts';
 import { NotificationsModule } from './notifications/notifications.module.ts';
-import type { ModuleSettings } from './platform/module-settings.ts';
-import { tokenOf } from './platform/module-settings.ts';
+import { type ModuleSettings, tokenOf } from './platform/module-settings.ts';
 import { PlatformModule } from './platform/platform.module.ts';
 import { ReleasesModule } from './releases/releases.module.ts';
 import { SourceGovernanceModule } from './source-governance/source-governance.module.ts';
@@ -94,10 +91,8 @@ export class AppModule {
               name: 'auth',
               ttl: MINUTE_MS,
               limit: config.authRateLimitPerMinute,
-              skipIf: (context) => {
-                const controller = context.getClass();
-                return controller !== AuthController && controller !== InvitationsController && controller !== AgentController;
-              },
+              // Only routes marked as signing someone in, wherever they are.
+              skipIf: (context) => !isSignInRoute(context),
             },
           ],
         }),

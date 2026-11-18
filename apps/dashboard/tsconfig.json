@@ -16,7 +16,9 @@
     "experimentalDecorators": true,
     "importHelpers": true,
     "target": "ES2022",
-    "module": "preserve"
+    "module": "preserve",
+    // The contracts the API publishes are read as source, so they need no build first.
+    "customConditions": ["@dreamdevops/source"]
   },
   "angularCompilerOptions": {
     "enableI18nLegacyMessageIdFormat": false,

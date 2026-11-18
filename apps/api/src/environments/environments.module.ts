@@ -1,15 +1,22 @@
 import { createHmac } from 'node:crypto';
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import { SigningKeys } from '../builds/application/signing-keys.ts';
+import { IMAGE_SIGNING_KEYS, type ImageSigningKeys } from '@dreamdevops/contracts/builds/services';
 import { BuildsModule } from '../builds/builds.module.ts';
-import { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
+import { APPLICATION_DIRECTORY, type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import { CatalogModule } from '../catalog/catalog.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { SealedBox } from '../shared/sealed-box.ts';
-import { COMPANY_DIRECTORY, type CompanyDirectory } from '../tenancy/application/company-directory.ts';
+import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
+import {
+  ENVIRONMENT_DIRECTORY,
+  ENVIRONMENT_GITOPS,
+  ENVIRONMENT_VALUES,
+  TARGET_AUTHENTICATION,
+} from '@dreamdevops/contracts/environments/services';
 import { EnvironmentConfig } from './application/environment-config.ts';
+import { EnvironmentGitOpsService } from './application/environment-gitops.ts';
 import { Environments } from './application/environments.ts';
 import {
   ENVIRONMENT_REPOSITORIES,
@@ -21,6 +28,7 @@ import {
 } from './application/ports.ts';
 import { TargetAgents } from './application/target-agents.ts';
 import { TargetConfigurations } from './application/target-configuration.ts';
+import { EnvironmentAgentController } from './http/agent.controller.ts';
 import { EnvironmentsController } from './http/environments.controller.ts';
 import { ForgejoEnvironmentRepositories, ForgejoPullAccounts } from './infrastructure/forgejo-environment-repositories.ts';
 import { OpenBaoSecretStore } from './infrastructure/openbao-secret-store.ts';
@@ -36,7 +44,7 @@ export class EnvironmentsModule {
       return {
         module: EnvironmentsModule,
         imports: [CatalogModule.register(settings), CompanyDirectoryModule.register(settings), BuildsModule.register(settings)],
-        controllers: [EnvironmentsController],
+        controllers: [EnvironmentsController, EnvironmentAgentController],
         providers: withOverrides(
           [
             {
@@ -75,9 +83,9 @@ export class EnvironmentsModule {
             },
             {
               provide: EnvironmentConfig,
-              useFactory: (database: TenantDatabase, secrets: SecretStore, applications: ApplicationCatalog) =>
+              useFactory: (database: TenantDatabase, secrets: SecretStore, applications: ApplicationDirectory) =>
                 new EnvironmentConfig(database, secrets, applications),
-              inject: [TenantDatabase, SECRET_STORE, ApplicationCatalog],
+              inject: [TenantDatabase, SECRET_STORE, APPLICATION_DIRECTORY],
             },
             {
               provide: TargetConfigurations,
@@ -88,7 +96,7 @@ export class EnvironmentsModule {
                 repositories: EnvironmentRepositories,
                 pullAccounts: PullAccounts,
                 secrets: SecretStore,
-                signingKeys: SigningKeys,
+                signingKeys: ImageSigningKeys,
               ) =>
                 new TargetConfigurations(
                   database,
@@ -107,8 +115,19 @@ export class EnvironmentsModule {
                     agentApiUrl: config.agentApiUrl,
                   },
                 ),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, TargetAgents, ENVIRONMENT_REPOSITORIES, PULL_ACCOUNTS, SECRET_STORE, SigningKeys],
+              inject: [TenantDatabase, COMPANY_DIRECTORY, TargetAgents, ENVIRONMENT_REPOSITORIES, PULL_ACCOUNTS, SECRET_STORE, IMAGE_SIGNING_KEYS],
             },
+            // What other contexts ask Environments for: its environments, their values, their
+            // repositories, and which target an agent's or collector's token belongs to.
+            { provide: ENVIRONMENT_DIRECTORY, useExisting: Environments },
+            { provide: ENVIRONMENT_VALUES, useExisting: EnvironmentConfig },
+            {
+              provide: ENVIRONMENT_GITOPS,
+              useFactory: (configurations: TargetConfigurations, repositories: EnvironmentRepositories) =>
+                new EnvironmentGitOpsService(configurations, repositories),
+              inject: [TargetConfigurations, ENVIRONMENT_REPOSITORIES],
+            },
+            { provide: TARGET_AUTHENTICATION, useExisting: TargetAgents },
             {
               provide: EnvironmentsSubscriptions,
               useFactory: (agents: TargetAgents, configurations: TargetConfigurations, secrets: SecretStore) =>
@@ -120,12 +139,13 @@ export class EnvironmentsModule {
         ),
         // Deployments run in environments: they write to the environment's repository and
         // read its values, and the agents that report on them are the environments' targets.
+        // Environments is for the local demo's setup only; contexts use the published tokens.
         exports: [
+          ENVIRONMENT_DIRECTORY,
+          ENVIRONMENT_VALUES,
+          ENVIRONMENT_GITOPS,
+          TARGET_AUTHENTICATION,
           Environments,
-          EnvironmentConfig,
-          TargetAgents,
-          TargetConfigurations,
-          ENVIRONMENT_REPOSITORIES,
           EnvironmentsSubscriptions,
         ],
       };

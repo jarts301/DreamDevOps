@@ -1,4 +1,4 @@
-import { payloadOf } from '@dreamdevops/shared-kernel';
+import { DeploymentAborted, DeploymentFailed, DeploymentQueued } from '@dreamdevops/contracts/deployments/events';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
 import type { Deployments } from '../application/deployments.ts';
@@ -29,16 +29,10 @@ export class DeploymentsSubscriptions implements BackgroundSubscriber {
       retryLimit: this.#config.provisioningMaxAttempts + 2,
       retryDelaySeconds: this.#config.provisioningRetrySeconds,
     };
-    await bus.subscribe('DeploymentQueued', 'deployments', (event) => this.#deployments.commit(payloadOf(event).text('deploymentId')), retries);
-    for (const eventType of ['DeploymentFailed', 'DeploymentAborted']) {
-      // Git goes back to the last version that ran well, so Flux keeps running it.
-      await bus.subscribe(
-        eventType,
-        'deployment-restores',
-        (event) => this.#deployments.restorePrevious(payloadOf(event).text('deploymentId')),
-        retries,
-      );
-    }
+    await bus.subscribe(DeploymentQueued, 'deployments', ({ payload }) => this.#deployments.commit(payload.deploymentId), retries);
+    // Git goes back to the last version that ran well, so Flux keeps running it.
+    await bus.subscribe(DeploymentFailed, 'deployment-restores', ({ payload }) => this.#deployments.restorePrevious(payload.deploymentId), retries);
+    await bus.subscribe(DeploymentAborted, 'deployment-restores', ({ payload }) => this.#deployments.restorePrevious(payload.deploymentId), retries);
     await queue.createQueue(STALLED_QUEUE, { retryLimit: 0, exclusive: true, expireInSeconds: 600 });
     await queue.work(STALLED_QUEUE, () => this.#deployments.failStalled());
     await queue.schedule(STALLED_QUEUE, STALLED_SCHEDULE);

@@ -44,7 +44,9 @@ To see the whole flow:
 |---|---|
 | `src/app/core` | Session, route guards, error messages and role labels |
 | `src/app/shell` | The page frame and navigation. New feature areas add their menu item here. |
-| `src/app/features` | One folder per feature area |
+| `src/app/features` | One folder per feature area. Each area's `*.api.ts` calls its context's routes. |
+
+What each route answers, and the bodies it takes, come from the context's `http.ts` in the [contracts](../../packages/contracts/README.md), which the API's controllers use too, so a change to an answer that would break a page fails to compile. The dashboard imports only contract files that run in a browser, and reads them as source, through the `@dreamdevops/source` condition in `angular.json` and `vitest.config.ts`, so they need no build. The audit log shows each change as the API words it, from its event's contract.
 
 ## Tests
 

@@ -13,7 +13,7 @@ import { signaturePayload, verifyPayload } from '../src/builds/domain/cosign.ts'
 import { IDENTITY_PROVIDER } from '../src/identity-access/application/ports.ts';
 import { SOURCE_HOST } from '../src/source-governance/application/ports.ts';
 import { GIT_PROVIDER } from '../src/tenancy/application/ports.ts';
-import { webhookSecret } from '../src/webhooks/domain/signature.ts';
+import { webhookSecret } from '@dreamdevops/contracts/webhooks/signature';
 import { FakeGitProvider, FakeIdentityProvider, FakeImageRegistry, FakePipelineHost, FakeSourceHost } from './fakes.ts';
 import { buildApp, testConfig } from './test-app.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';

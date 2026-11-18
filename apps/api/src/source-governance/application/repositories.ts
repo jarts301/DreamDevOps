@@ -1,25 +1,21 @@
-import { createDomainEvent, currentCompanyId, describeError, withRenewal } from '@dreamdevops/shared-kernel';
+import { RepositoryCreated, RepositoryCreationFailed, RepositoryRequested } from '@dreamdevops/contracts/source-governance/events';
+import { currentCompanyId, describeError, withRenewal } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
-import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
-import type { Principal } from '../../identity-access/domain/access.ts';
-import type { CompanyDirectory, CompanyRecord } from '../../tenancy/application/company-directory.ts';
+import type { BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
+import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type { CompanyDirectory, CompanyRecord } from '@dreamdevops/contracts/tenancy/services';
 import { SourceError } from '../domain/errors.ts';
-import type { RepositoryCreatedPayload, RepositoryRequestedPayload } from '../domain/events.ts';
 import { GIT_FLOW, WEBHOOK_EVENTS } from '../domain/git-flow.ts';
 import { PermanentSourceError, type RepositorySpec, type SourceHost } from './ports.ts';
-import type { RepositoryLocation, RepositoryLookup } from './repository-lookup.ts';
+import type { RepositoryStatus, RepositoryView } from '@dreamdevops/contracts/source-governance/http';
+import type { RepositoryLocation, RepositoryLookup } from '@dreamdevops/contracts/source-governance/services';
 
 /**
  * The version of the rules a repository gets. Raise it when the rules change, and
  * repositories made before are brought up to date when the API starts.
  */
 export const POLICY_VERSION = 3;
-
-/** The events that make an application's repository need creating. */
-export const REPOSITORY_TRIGGERS = ['ApplicationRegistered', 'RepositoryRequested'] as const;
-
-export type RepositoryStatus = 'creating' | 'ready' | 'failed';
 
 /** How long a job's claim on a repository lasts, unless the job renews it. */
 const CLAIM_SECONDS = 120;
@@ -32,15 +28,6 @@ export class RepositoryBusyError extends Error {
     super('Another job is creating this repository. It will be tried again.');
     this.name = 'RepositoryBusyError';
   }
-}
-
-export interface RepositoryView {
-  readonly applicationId: string;
-  readonly status: RepositoryStatus;
-  readonly fullName: string;
-  readonly url: string;
-  readonly blueprint: { readonly key: string; readonly version: string } | null;
-  readonly lastError: string | null;
 }
 
 interface RepositoryRow {
@@ -73,7 +60,7 @@ export class Repositories implements RepositoryLookup {
   readonly #database: TenantDatabase;
   readonly #companies: CompanyDirectory;
   readonly #host: SourceHost;
-  readonly #catalog: ApplicationCatalog;
+  readonly #catalog: ApplicationDirectory;
   readonly #blueprints: BlueprintCatalog;
   readonly #options: RepositoriesOptions;
 
@@ -81,7 +68,7 @@ export class Repositories implements RepositoryLookup {
     database: TenantDatabase,
     companies: CompanyDirectory,
     host: SourceHost,
-    catalog: ApplicationCatalog,
+    catalog: ApplicationDirectory,
     blueprints: BlueprintCatalog,
     options: RepositoriesOptions,
   ) {
@@ -130,8 +117,7 @@ export class Repositories implements RepositoryLookup {
       }
       await upsertCreating(tx, application.id, company.slug, application.slug);
       await appendToOutbox(tx, [
-        createDomainEvent<'RepositoryRequested', RepositoryRequestedPayload>({
-          eventType: 'RepositoryRequested',
+        RepositoryRequested.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { applicationId: application.id },
@@ -226,8 +212,7 @@ export class Repositories implements RepositoryLookup {
           [applicationId, outcome.repositoryId, POLICY_VERSION],
         );
         await appendToOutbox(tx, [
-          createDomainEvent<'RepositoryCreated', RepositoryCreatedPayload>({
-            eventType: 'RepositoryCreated',
+          RepositoryCreated.create({
             companyId: currentCompanyId(),
             payload: {
               applicationId,
@@ -252,8 +237,7 @@ export class Repositories implements RepositoryLookup {
       );
       if (failed) {
         await appendToOutbox(tx, [
-          createDomainEvent({
-            eventType: 'RepositoryCreationFailed',
+          RepositoryCreationFailed.create({
             companyId: currentCompanyId(),
             payload: { applicationId, name: application.name, reason },
           }),

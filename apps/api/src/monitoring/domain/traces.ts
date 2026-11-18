@@ -1,4 +1,8 @@
+import type { TraceSummary } from '@dreamdevops/contracts/monitoring/http';
 import { MonitoringError } from './errors.ts';
+
+// A trace as a list shows it is Monitoring's published language, kept in its contracts.
+export type { TraceSummary } from '@dreamdevops/contracts/monitoring/http';
 
 /** One operation in a trace, such as a request a service answered, as the trace store keeps it. */
 export interface StoredSpan {
@@ -20,18 +24,6 @@ export interface StoredSpan {
 export interface StoredTrace {
   readonly traceId: string;
   readonly spans: readonly StoredSpan[];
-}
-
-/** A trace, as a list shows it. */
-export interface TraceSummary {
-  readonly traceId: string;
-  /** The name of its first span, such as GET. */
-  readonly name: string;
-  readonly start: string;
-  readonly durationMs: number;
-  readonly spans: number;
-  readonly errors: number;
-  readonly services: readonly string[];
 }
 
 /** The most traces a list shows. */

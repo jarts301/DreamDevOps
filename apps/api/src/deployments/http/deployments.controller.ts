@@ -1,7 +1,9 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req } from '@nestjs/common';
+import type { ChangeRunning, DeploymentView, RequestDeployment, RunningVersion } from '@dreamdevops/contracts/deployments/http';
+import type { Unchecked } from '@dreamdevops/contracts/http';
 import { Authenticated } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { type Confirmed, Deployments, type DeploymentView, type RunningVersion } from '../application/deployments.ts';
+import { type Confirmed, Deployments } from '../application/deployments.ts';
 
 /**
  * Every member can follow deployments. Who may deploy, approve, promote or abort depends
@@ -32,7 +34,7 @@ export class DeploymentsController {
   request(
     @Req() request: ApiRequest,
     @Param('id') id: string,
-    @Body() body: { environment?: unknown; version?: unknown; strategy?: unknown } & Confirmed,
+    @Body() body: Unchecked<RequestDeployment> | undefined,
   ): Promise<DeploymentView> {
     return this.#deployments.request(request.principal!, id, body ?? {});
   }
@@ -47,21 +49,21 @@ export class DeploymentsController {
   /** Removes what runs of the application in { environment }. Production also needs its name and a reason. */
   @Authenticated()
   @Post('applications/:id/stop')
-  stop(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: { environment?: unknown } & Confirmed): Promise<DeploymentView> {
+  stop(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Unchecked<ChangeRunning> | undefined): Promise<DeploymentView> {
     return this.#deployments.stop(request.principal!, id, body ?? {});
   }
 
   /** Runs what runs in { environment } again, with the environment's values as they are now. */
   @Authenticated()
   @Post('applications/:id/apply')
-  apply(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: { environment?: unknown } & Confirmed): Promise<DeploymentView> {
+  apply(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Unchecked<ChangeRunning> | undefined): Promise<DeploymentView> {
     return this.#deployments.apply(request.principal!, id, body ?? {});
   }
 
   @Authenticated()
   @Post('deployments/:id/approve')
   @HttpCode(204)
-  approve(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed): Promise<void> {
+  approve(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed | undefined): Promise<void> {
     return this.#deployments.approve(request.principal!, id, body ?? {});
   }
 
@@ -75,20 +77,20 @@ export class DeploymentsController {
   @Authenticated()
   @Post('deployments/:id/promote')
   @HttpCode(204)
-  promote(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed): Promise<void> {
+  promote(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed | undefined): Promise<void> {
     return this.#deployments.promote(request.principal!, id, body ?? {});
   }
 
   @Authenticated()
   @Post('deployments/:id/abort')
   @HttpCode(204)
-  abort(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed): Promise<void> {
+  abort(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed | undefined): Promise<void> {
     return this.#deployments.abort(request.principal!, id, body ?? {});
   }
 
   @Authenticated()
   @Post('deployments/:id/rollback')
-  rollback(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed): Promise<DeploymentView> {
+  rollback(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: Confirmed | undefined): Promise<DeploymentView> {
     return this.#deployments.rollback(request.principal!, id, body ?? {});
   }
 }

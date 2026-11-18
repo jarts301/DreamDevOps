@@ -1,8 +1,10 @@
+import type { CompanyStatus } from '@dreamdevops/contracts/tenancy/services';
 import { normalizeName } from '../../shared/names.ts';
 import { numberedSlug as sharedNumberedSlug, slugFromName as sharedSlugFromName } from '../../shared/slug.ts';
 import { TenancyError } from './errors.ts';
 
-export type CompanyStatus = 'provisioning' | 'active' | 'provisioning-failed' | 'suspended';
+// A company's status is Tenancy's published language, kept in its contracts.
+export type { CompanyStatus } from '@dreamdevops/contracts/tenancy/services';
 
 export interface Company {
   readonly id: string;

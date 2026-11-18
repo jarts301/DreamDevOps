@@ -62,6 +62,15 @@ Every route must declare who can call it, with one of these decorators. A route 
 
 Each request runs in the signed-in user's company, which comes only from the server-side session. Use `TenantDatabase` for company data, and row-level security limits it to that company. If a user with no company calls such a route, the answer is 403.
 
+A route answers with a type from its context's `http.ts` in the [contracts](../../packages/contracts/README.md), never a bare `object`, so the dashboard and the API agree on every answer. Type its body as `Unchecked<Request>`, with the request's type from the same file: every field may be missing or wrong until the route's service checks it, and the names stay the ones the dashboard sends.
+
+```ts
+@Post('applications')
+register(@Req() request: ApiRequest, @Body() body: Unchecked<RegisterApplication> | undefined): Promise<ApplicationView> {
+  return this.#catalog.register(request.principal!, body ?? {});
+}
+```
+
 ## Security controls
 
 - **Sessions:** the browser holds a random ID in an `HttpOnly`, `SameSite=Lax` cookie, which is `Secure` unless `SECURE_COOKIES=false`. The database stores only its hash, and the application role can reach sessions only through functions that need that hash.

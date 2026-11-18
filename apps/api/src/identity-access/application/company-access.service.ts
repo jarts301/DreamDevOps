@@ -1,11 +1,19 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { createDomainEvent, currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { InvitationRevoked, MemberRemoved, RoleGranted, UserInvited } from '@dreamdevops/contracts/identity-access/events';
+import { currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { Pool } from 'pg';
-import type { Principal } from '../domain/access.ts';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type {
+  AcceptedInvitation,
+  CreatedInvitation,
+  InvitationView,
+  MemberView,
+  RoleView,
+} from '@dreamdevops/contracts/identity-access/http';
+import type { FirstAdminInvitations } from '@dreamdevops/contracts/identity-access/services';
 import { normalizeEmail } from '../domain/email.ts';
 import { AccessError } from '../domain/errors.ts';
-import type { MemberRemovedPayload } from '../domain/events.ts';
 
 const COMPANY_ADMIN = 'company-admin';
 const INVITATION_LIFETIME_DAYS = 7;
@@ -13,21 +21,12 @@ const INVITATION_LIFETIME_DAYS = 7;
 /** One message for every unusable token, so failures reveal nothing about invitations. */
 const invalidInvitation = () => new AccessError('not-found', 'This invitation is not valid.');
 
-export interface CreatedInvitation {
-  readonly id: string;
-  readonly email: string;
-  readonly role: string;
-  /** Shown once. Only its hash is stored. */
-  readonly token: string;
-  readonly expiresAt: string;
-}
-
 export interface CompanyAccessOptions {
   readonly requireVerifiedEmail: boolean;
 }
 
 /** Manages who belongs to a company and with which role. Every change publishes an event. */
-export class CompanyAccessService {
+export class CompanyAccessService implements FirstAdminInvitations {
   readonly #database: TenantDatabase;
   readonly #pool: Pool;
   readonly #options: CompanyAccessOptions;
@@ -38,9 +37,9 @@ export class CompanyAccessService {
     this.#options = options;
   }
 
-  listRoles(): Promise<object[]> {
+  listRoles(): Promise<RoleView[]> {
     return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query(
+      const { rows } = await tx.query<RoleView>(
         `SELECT r.key, r.name, coalesce(array_agg(p.permission ORDER BY p.permission), '{}') AS permissions
          FROM identity.roles r
          JOIN identity.role_permissions p ON p.role_key = r.key
@@ -52,13 +51,18 @@ export class CompanyAccessService {
     });
   }
 
-  listMembers(): Promise<object[]> {
+  listMembers(): Promise<MemberView[]> {
     return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query(
-        `SELECT user_id AS "userId", email, display_name AS "displayName", role_key AS role, joined_at AS "joinedAt"
-         FROM identity.company_members()`,
+      const { rows } = await tx.query<{ user_id: string; email: string; display_name: string; role_key: string; joined_at: Date }>(
+        'SELECT user_id, email, display_name, role_key, joined_at FROM identity.company_members()',
       );
-      return rows;
+      return rows.map((row) => ({
+        userId: row.user_id,
+        email: row.email,
+        displayName: row.display_name,
+        role: row.role_key,
+        joinedAt: row.joined_at.toISOString(),
+      }));
     });
   }
 
@@ -75,8 +79,7 @@ export class CompanyAccessService {
       }
       await tx.query('UPDATE identity.memberships SET role_key = $2 WHERE user_id = $1', [userId, role]);
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'RoleGranted',
+        RoleGranted.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { userId, role, previousRole: currentRole, grantedBy: actor.userId },
@@ -94,8 +97,7 @@ export class CompanyAccessService {
       }
       await tx.query('DELETE FROM identity.memberships WHERE user_id = $1', [userId]);
       await appendToOutbox(tx, [
-        createDomainEvent<'MemberRemoved', MemberRemovedPayload>({
-          eventType: 'MemberRemoved',
+        MemberRemoved.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { userId, role: currentRole, removedBy: actor.userId },
@@ -116,15 +118,21 @@ export class CompanyAccessService {
     });
   }
 
-  listInvitations(): Promise<object[]> {
+  listInvitations(): Promise<InvitationView[]> {
     return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query(
-        `SELECT id, email, role_key AS role, created_at AS "createdAt", expires_at AS "expiresAt"
+      const { rows } = await tx.query<{ id: string; email: string; role_key: string; created_at: Date; expires_at: Date }>(
+        `SELECT id, email, role_key, created_at, expires_at
          FROM identity.invitations
          WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
          ORDER BY created_at, id`,
       );
-      return rows;
+      return rows.map((row) => ({
+        id: row.id,
+        email: row.email,
+        role: row.role_key,
+        createdAt: row.created_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+      }));
     });
   }
 
@@ -139,8 +147,7 @@ export class CompanyAccessService {
         throw new AccessError('not-found', 'This invitation does not exist.');
       }
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'InvitationRevoked',
+        InvitationRevoked.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { invitationId: id, revokedBy: actor.userId },
@@ -150,21 +157,22 @@ export class CompanyAccessService {
   }
 
   /**
-   * Invites a company's first admin, inside the Tenancy module's transaction and in that
-   * company's context. It only works while the company has no members, so it can't
-   * become a way into company data.
+   * Invites a company's first admin, in that company's context, once Tenancy has made it.
+   * It only works while the company has no members, so it can't become a way into company data.
    */
-  async inviteFirstAdminIn(tx: TenantTransaction, actor: Principal, emailValue: unknown): Promise<CreatedInvitation> {
+  inviteFirstAdmin(actor: Principal, emailValue: string): Promise<CreatedInvitation> {
     const email = normalizeEmail(emailValue);
-    const { rows } = await tx.query('SELECT 1 FROM identity.memberships LIMIT 1');
-    if (rows.length > 0) {
-      throw new AccessError('conflict', 'This company already has members.');
-    }
-    return createInvitation(tx, email, COMPANY_ADMIN, actor.userId);
+    return this.#database.transaction(async (tx) => {
+      const { rows } = await tx.query('SELECT 1 FROM identity.memberships LIMIT 1');
+      if (rows.length > 0) {
+        throw new AccessError('conflict', 'This company already has members.');
+      }
+      return createInvitation(tx, email, COMPANY_ADMIN, actor.userId);
+    });
   }
 
   /** Requires both the secret token and a matching signed-in email address. */
-  async acceptInvitation(principal: Principal, tokenValue: unknown): Promise<{ companyId: string; role: string }> {
+  async acceptInvitation(principal: Principal, tokenValue: unknown): Promise<AcceptedInvitation> {
     if (typeof tokenValue !== 'string' || tokenValue === '') {
       throw invalidInvitation();
     }
@@ -209,8 +217,7 @@ export class CompanyAccessService {
           principal.userId,
         ]);
         await appendToOutbox(tx, [
-          createDomainEvent({
-            eventType: 'RoleGranted',
+          RoleGranted.create({
             companyId: currentCompanyId(),
             actorId: principal.userId,
             payload: { userId: principal.userId, role: invitation.role_key, invitationId: invitation.id },
@@ -295,8 +302,7 @@ async function createInvitation(
   );
   const invitation = rows[0]!;
   await appendToOutbox(tx, [
-    createDomainEvent({
-      eventType: 'UserInvited',
+    UserInvited.create({
       companyId: currentCompanyId(),
       actorId: invitedBy,
       payload: { invitationId: invitation.id, role, invitedBy },

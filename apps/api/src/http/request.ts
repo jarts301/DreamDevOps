@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import type { Principal } from '../identity-access/domain/access.ts';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { SessionData } from '../session/session-store.ts';
 
 export const SESSION_COOKIE = 'dd_session';

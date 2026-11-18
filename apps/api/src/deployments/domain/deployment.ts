@@ -1,17 +1,10 @@
-import { PROGRESSIVE_STRATEGIES, STANDARD_STRATEGIES, type Strategy } from './manifests.ts';
+import type { SyncReport, WorkloadReport as ProtocolWorkloadReport } from '@dreamdevops/contracts/agent/protocol';
+import type { DeploymentProgress, DeploymentStatus, Strategy } from '@dreamdevops/contracts/deployments/http';
+import { PROGRESSIVE_STRATEGIES, STANDARD_STRATEGIES } from './manifests.ts';
 import { DeploymentError } from './errors.ts';
 
-export type DeploymentStatus =
-  | 'awaiting-approval'
-  | 'rejected'
-  | 'queued'
-  | 'committed'
-  | 'progressing'
-  | 'paused'
-  | 'succeeded'
-  | 'failed'
-  | 'aborted'
-  | 'superseded';
+// A deployment's status and progress are Deployments' published language, kept in its contracts.
+export type { DeploymentStatus } from '@dreamdevops/contracts/deployments/http';
 
 /** Still running: nothing else may deploy the same application to the same environment. */
 export const ACTIVE_STATUSES: readonly DeploymentStatus[] = ['awaiting-approval', 'queued', 'committed', 'progressing', 'paused'];
@@ -48,34 +41,14 @@ export function assertAccepts(
   }
 }
 
-/** What the agent saw of the deployment's workload in the cluster. */
-export interface WorkloadReport {
-  readonly deploymentId: string;
-  readonly phase: 'Progressing' | 'Paused' | 'Healthy' | 'Degraded' | 'Aborted';
-  readonly desired: number;
-  readonly updated: number;
-  readonly ready: number;
-  readonly available: number;
-  readonly message: string | null;
-}
+/** How one deployed workload is doing, as the agent reports it, with what the rollout needs of it. */
+export type WorkloadReport = Omit<ProtocolWorkloadReport, 'namespace' | 'name' | 'kind'>;
 
-export interface SyncReport {
-  readonly revision: string | null;
-  readonly ready: boolean;
-  readonly message: string | null;
-}
+// Whether Flux applied the environment's repository is the agent protocol, kept in the contracts.
+export type { SyncReport } from '@dreamdevops/contracts/agent/protocol';
 
-export interface Progress {
-  /** Flux applied the commit with this deployment. */
-  readonly applied: boolean;
-  readonly desired?: number;
-  readonly updated?: number;
-  readonly ready?: number;
-  readonly available?: number;
-  /** On This machine: where people reach it, and the port it has there. */
-  readonly address?: string | null;
-  readonly port?: number | null;
-}
+/** How far a rollout has come, as the target reports it. */
+export type Progress = DeploymentProgress;
 
 /**
  * Where a deployment stands after a report from its target. A workload with its ID means

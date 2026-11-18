@@ -1,4 +1,5 @@
-import { payloadOf } from '@dreamdevops/shared-kernel';
+import { BuildFailed, BuildRequested, BuildSucceeded } from '@dreamdevops/contracts/builds/events';
+import { BranchDeleted, PullRequestUpdated } from '@dreamdevops/contracts/webhooks/events';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
 import type { Builds } from '../application/builds.ts';
@@ -29,54 +30,42 @@ export class BuildsSubscriptions implements BackgroundSubscriber {
       retryLimit: this.#config.provisioningMaxAttempts + 2,
       retryDelaySeconds: this.#config.provisioningRetrySeconds,
     };
-    await bus.subscribe('BuildRequested', 'builds', (event) => this.#builds.start(payloadOf(event).text('buildId')), {
+    await bus.subscribe(BuildRequested, 'builds', (event) => this.#builds.start(event.payload.buildId), {
       retryLimit: 3,
       retryDelaySeconds: 10,
     });
     await bus.subscribe(
-      'BranchDeleted',
+      BranchDeleted,
       'builds-cleanup',
-      async (event) => {
-        const payload = payloadOf(event);
-        const branch = payload.text('branch');
-        if (branch.startsWith('feature/')) {
-          await this.#builds.removeFeatureImages(payload.text('applicationId'), branch);
+      async ({ payload }) => {
+        if (payload.branch.startsWith('feature/')) {
+          await this.#builds.removeFeatureImages(payload.applicationId, payload.branch);
         }
       },
       retries,
     );
     await bus.subscribe(
-      'PullRequestUpdated',
+      PullRequestUpdated,
       'pull-request-checks',
-      (event) => {
-        const payload = payloadOf(event);
-        return this.#builds.requestCheck(payload.text('applicationId'), payload.text('head'), payload.text('headCommit'));
-      },
+      ({ payload }) => this.#builds.requestCheck(payload.applicationId, payload.head, payload.headCommit),
       retries,
     );
-    for (const [eventType, succeeded] of [
-      ['BuildSucceeded', true],
-      ['BuildFailed', false],
-    ] as const) {
-      await bus.subscribe(
-        eventType,
-        'pull-request-checks',
-        (event) => {
-          const payload = payloadOf(event);
-          const reason = payload.optionalText('reason');
-          return this.#builds.reportCheck(
-            {
-              kind: payload.text('kind'),
-              applicationId: payload.text('applicationId'),
-              commit: payload.text('commit'),
-              reason: reason ?? undefined,
-            },
-            succeeded,
-          );
-        },
-        retries,
-      );
-    }
+    await bus.subscribe(
+      BuildSucceeded,
+      'pull-request-checks',
+      ({ payload }) => this.#builds.reportCheck({ kind: payload.kind, applicationId: payload.applicationId, commit: payload.commit }, true),
+      retries,
+    );
+    await bus.subscribe(
+      BuildFailed,
+      'pull-request-checks',
+      ({ payload }) =>
+        this.#builds.reportCheck(
+          { kind: payload.kind, applicationId: payload.applicationId, commit: payload.commit, reason: payload.reason ?? undefined },
+          false,
+        ),
+      retries,
+    );
     await queue.createQueue(EXPIRE_QUEUE, { retryLimit: 0, exclusive: true, expireInSeconds: 600 });
     await queue.work(EXPIRE_QUEUE, () => this.#builds.expireStale());
     await queue.schedule(EXPIRE_QUEUE, EXPIRE_SCHEDULE);

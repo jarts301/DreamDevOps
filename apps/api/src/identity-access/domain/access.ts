@@ -1,3 +1,5 @@
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+
 export interface CompanyMembership {
   readonly companyId: string;
   readonly companyName: string;
@@ -16,18 +18,8 @@ export interface UserAccess {
   readonly memberships: readonly CompanyMembership[];
 }
 
-/** The signed-in user for one request, acting for at most one company. */
-export interface Principal {
-  readonly userId: string;
-  readonly email: string;
-  readonly emailVerified: boolean;
-  readonly displayName: string;
-  readonly companyId: string | null;
-  readonly companyName: string | null;
-  readonly role: string | null;
-  readonly permissions: readonly string[];
-  readonly memberships: readonly { readonly companyId: string; readonly companyName: string; readonly role: string }[];
-}
+// Who is acting, and what they may do, are Identity and access's published language, kept in its contracts.
+export { hasPermissions, type Principal } from '@dreamdevops/contracts/identity-access/access';
 
 /**
  * Works out what a user can do right now. The chosen company applies only while the
@@ -57,14 +49,4 @@ const MFA_ROLES = new Set(['company-admin', 'tech-lead']);
 /** Platform admins, Company Admins and Tech Leads must use a second factor. */
 export function requiresMfa(access: UserAccess): boolean {
   return access.platformPermissions.length > 0 || access.memberships.some((membership) => MFA_ROLES.has(membership.role));
-}
-
-/**
- * Permissions are written as "subject:action", such as "releases:start", and each one
- * grants exactly what it names. None stands for others: "alerts:manage" doesn't include a
- * future "alerts:read", which has to be granted on its own.
- */
-export function hasPermissions(principal: Principal, required: readonly string[]): boolean {
-  const granted = new Set(principal.permissions);
-  return required.every((permission) => granted.has(permission));
 }

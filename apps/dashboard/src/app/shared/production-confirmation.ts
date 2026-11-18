@@ -1,10 +1,12 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import {
+  MAX_REASON_LENGTH,
+  MIN_REASON_LENGTH,
+  type ProductionConfirmation as Confirmation,
+} from '@dreamdevops/contracts/environments/http';
 
-/** What a change to production carries: its name, typed to confirm, and why. */
-export interface ProductionConfirmation {
-  readonly confirmation: string;
-  readonly reason?: string;
-}
+/** What a change to production carries: its name, typed to confirm, and why. The panel always has the name. */
+export type ProductionConfirmation = Required<Pick<Confirmation, 'confirmation'>> & Pick<Confirmation, 'reason'>;
 
 /** A change waiting for its confirmation, for pages that hold one at a time. */
 export interface PendingProductionChange {
@@ -18,10 +20,6 @@ export interface PendingProductionChange {
   readonly reasonRequired: boolean;
   readonly run: (confirmation: ProductionConfirmation) => Promise<void>;
 }
-
-/** The shortest and longest reason the API accepts for a change to production. */
-const MIN_REASON_LENGTH = 10;
-const MAX_REASON_LENGTH = 500;
 
 /**
  * Asks for what a change to production needs: its name typed exactly, and a reason,

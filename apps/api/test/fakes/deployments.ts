@@ -1,12 +1,12 @@
-import type {
-  ContainerRequest,
-  Health,
-  HostRuntime,
-  HostTarget,
-  LogEntry,
-  StartedContainer,
+import {
+  type ContainerRequest,
+  type Health,
+  type HostRuntime,
+  type HostTarget,
+  type LogEntry,
+  PermanentDeploymentError,
+  type StartedContainer,
 } from '../../src/deployments/application/ports.ts';
-import { PermanentDeploymentError } from '../../src/deployments/application/ports.ts';
 
 interface FakeContainer {
   readonly request: ContainerRequest;

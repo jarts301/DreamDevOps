@@ -26,7 +26,7 @@ It fetches its configuration again every 30 minutes, and before the secrets toke
 |---|---|
 | `src/main.ts` | The loop |
 | `src/identity.ts` | Keys, assertions and the SSH deploy key |
-| `src/platform.ts` | Calls to the platform |
+| `src/platform.ts` | Calls to the platform, in the agent protocol, whose types are in the [contracts](../../packages/contracts/README.md)' `agent/protocol.ts`. It imports them as types only, so the image needs nothing but the agent's own code. |
 | `src/kubernetes.ts` | A small Kubernetes client with server-side apply. It manages only the kinds it lists. |
 | `src/cluster.ts` | The objects that set up the cluster |
 | `src/components.ts` | The tools Flux installs, and their versions |

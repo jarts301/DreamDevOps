@@ -1,22 +1,9 @@
-import { type CanActivate, type ExecutionContext, Inject, Injectable, SetMetadata } from '@nestjs/common';
+import { type CanActivate, type ExecutionContext, Inject, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { FEATURE_METADATA } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { Entitlements } from '../application/entitlements.ts';
 import { EditionError } from '../domain/errors.ts';
-import { isFeatureKey } from '../domain/features.ts';
-
-const FEATURE_METADATA = 'dreamdevops:feature';
-
-/**
- * Only companies that have this feature may call the route. Use it alongside an
- * access rule, which still decides who in the company may call it.
- */
-export const RequireFeature = (key: string) => {
-  if (!isFeatureKey(key)) {
-    throw new Error(`Unknown feature "${key}". Add it to the feature catalog first.`);
-  }
-  return SetMetadata(FEATURE_METADATA, key);
-};
 
 /** Runs after the access check, so only signed-in users with permission reach the database here. */
 @Injectable()

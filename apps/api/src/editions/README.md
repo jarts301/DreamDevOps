@@ -35,7 +35,7 @@ A provider answers two questions:
 
 ## Protecting a route
 
-Add `@RequireFeature('feature-key')` next to the route's access rule. The access rule still decides who in the company may call it. The feature check runs after it, and refuses with `403` and a message when the company's edition doesn't include the feature. A key that isn't in the catalog fails when the app starts.
+Add `@RequireFeature('feature-key')`, from the platform's `http/access.decorators.ts`, next to the route's access rule. The access rule still decides who in the company may call it. The feature check runs after it, and refuses with `403` and a message when the company's edition doesn't include the feature. A key that isn't in the catalog fails when the app starts.
 
 The dashboard hides what a company can't use, for convenience only. The API checks every request.
 

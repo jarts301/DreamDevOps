@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { payloadOf } from '@dreamdevops/shared-kernel';
+import { TargetRevoked } from '@dreamdevops/contracts/environments/events';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
 import type { SecretStore } from '../application/ports.ts';
@@ -38,15 +38,13 @@ export class EnvironmentsSubscriptions implements BackgroundSubscriber {
 
   async subscribe({ bus, queue }: BackgroundWork): Promise<void> {
     await bus.subscribe(
-      'TargetRevoked',
+      TargetRevoked,
       'target-deploy-keys',
-      (event) => {
-        const payload = payloadOf(event);
+      ({ payload }) =>
         // This machine has no agent, so it has no deploy key.
-        return payload.optionalFlag('wasConnected') && payload.optionalText('provider') !== 'local'
-          ? this.#configurations.removeDeployKey(payload.text('environmentId'), payload.text('targetId'))
-          : Promise.resolve();
-      },
+        payload.wasConnected && payload.provider !== 'local'
+          ? this.#configurations.removeDeployKey(payload.environmentId, payload.targetId)
+          : Promise.resolve(),
       {
         retryLimit: this.#config.provisioningMaxAttempts + 2,
         retryDelaySeconds: this.#config.provisioningRetrySeconds,

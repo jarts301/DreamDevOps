@@ -1,19 +1,11 @@
+import type { EnvironmentRepository, FileChange } from '@dreamdevops/contracts/environments/services';
+
 export const ENVIRONMENT_REPOSITORIES = Symbol('ENVIRONMENT_REPOSITORIES');
 export const PULL_ACCOUNTS = Symbol('PULL_ACCOUNTS');
 export const SECRET_STORE = Symbol('SECRET_STORE');
 
-export interface EnvironmentRepository {
-  readonly organization: string;
-  readonly name: string;
-  /** Recorded in the repository, so an existing one is proven to be ours. */
-  readonly environmentId: string;
-}
-
-/** A file to write, or to delete when its content is null. */
-export interface FileChange {
-  readonly path: string;
-  readonly content: string | null;
-}
+// An environment's repository, and changes to it, are this context's published language, kept in its contracts.
+export type { EnvironmentRepository, FileChange } from '@dreamdevops/contracts/environments/services';
 
 /**
  * Each environment's Git repository, which its target's Flux applies. Only the platform

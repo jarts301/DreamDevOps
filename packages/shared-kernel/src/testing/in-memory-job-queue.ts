@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { deadLetterQueueName, UnrecoverableJobError } from '../application/ports.ts';
-import type { Job, JobHandler, JobQueue, QueueOptions, WorkOptions } from '../application/ports.ts';
+import {
+  deadLetterQueueName,
+  type Job,
+  type JobHandler,
+  type JobQueue,
+  type QueueOptions,
+  UnrecoverableJobError,
+  type WorkOptions,
+} from '../application/ports.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

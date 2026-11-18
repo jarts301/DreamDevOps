@@ -13,8 +13,8 @@ export class TenancySubscriptions implements BackgroundSubscriber {
   }
 
   async subscribe({ bus }: BackgroundWork): Promise<void> {
-    for (const eventType of PROVISIONING_TRIGGERS) {
-      await bus.subscribe(eventType, 'tenancy-provisioning', () => this.#saga.reconcile(), {
+    for (const trigger of PROVISIONING_TRIGGERS) {
+      await bus.subscribe(trigger, 'tenancy-provisioning', () => this.#saga.reconcile(), {
         retryLimit: this.#config.provisioningMaxAttempts + 2,
         retryDelaySeconds: this.#config.provisioningRetrySeconds,
       });

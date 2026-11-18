@@ -1,11 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId, describeError, type DomainEvent } from '@dreamdevops/shared-kernel';
+import { AlertCreated, AlertDeleted, type AlertPayload, AlertUpdated } from '@dreamdevops/contracts/alerts/events';
+import { currentCompanyId, describeError, type DomainEvent } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { CompanyMember, CompanyMembers } from '../../identity-access/application/company-members.ts';
-import type { Principal } from '../../identity-access/domain/access.ts';
-import type { LatestMetrics } from '../../monitoring/application/latest-metrics.ts';
-import { type MetricDefinition, type MetricKey, METRICS } from '../../monitoring/domain/metrics.ts';
-import type { AlertEmails } from '../../notifications/application/alert-emails.ts';
+import type { CompanyMember, CompanyMembers } from '@dreamdevops/contracts/identity-access/services';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type {
+  AlertsOverview,
+  AlertTestResult,
+  AlertView,
+  CreateAlert,
+  IncidentView,
+  Recipient,
+  UpdateAlert,
+} from '@dreamdevops/contracts/alerts/http';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { LatestMetrics } from '@dreamdevops/contracts/monitoring/services';
+import { type MetricKey, METRICS } from '@dreamdevops/contracts/monitoring/metrics';
+import type { AlertMailer } from '@dreamdevops/contracts/notifications/services';
 import {
   type AlertCondition,
   type Comparator,
@@ -23,87 +34,8 @@ import {
 } from '../domain/alert.ts';
 import { AlertError } from '../domain/errors.ts';
 import type { AlertState } from '../domain/evaluation.ts';
-import type { AlertCreatedPayload, AlertPayload, AlertUpdatedPayload } from '../domain/events.ts';
-import { placeId } from '../../environments/domain/telemetry.ts';
+import { placeId } from '@dreamdevops/contracts/environments/telemetry';
 import type { Place, Places } from './places.ts';
-
-/** An alert, as the dashboard shows it. */
-export interface AlertView {
-  readonly id: string;
-  readonly name: string;
-  /** What it watches: one application in one environment. */
-  readonly placeId: string;
-  readonly environmentId: string;
-  /** Null if the company no longer has the environment. */
-  readonly environmentName: string | null;
-  readonly applicationId: string;
-  readonly applicationName: string | null;
-  readonly production: boolean;
-  readonly metric: MetricKey;
-  readonly comparator: Comparator;
-  /** In the metric's own unit: percent, bytes, requests each second, or seconds. */
-  readonly threshold: number;
-  readonly forMinutes: number;
-  /** The condition in words, such as "CPU above 80% for 5 minutes". */
-  readonly condition: string;
-  /**
-   * The members it emails, or null for those who can't manage alerts. Only people who are
-   * still members count: anyone removed from the company is left out, and never emailed.
-   */
-  readonly recipients: readonly Recipient[] | null;
-  readonly recipientCount: number;
-  readonly enabled: boolean;
-  readonly state: AlertState;
-  readonly pendingSince: string | null;
-  /** When it started firing, while it fires. */
-  readonly firingSince: string | null;
-  /** The metric's value at the last check, or null when there was none. */
-  readonly lastValue: number | null;
-  readonly lastCheckedAt: string | null;
-  /** Why the last check couldn't read the metric, if it couldn't. */
-  readonly checkProblem: string | null;
-  readonly lastNotifiedAt: string | null;
-  readonly lastNotificationError: string | null;
-  readonly createdAt: string;
-}
-
-/** A member an alert emails. */
-export interface Recipient {
-  readonly userId: string;
-  readonly displayName: string;
-  readonly email: string;
-}
-
-export interface AlertsOverview {
-  /** Whether this server keeps metrics. Without them, alerts can't check anything. */
-  readonly metricsEnabled: boolean;
-  readonly metrics: readonly MetricDefinition[];
-  readonly alerts: readonly AlertView[];
-}
-
-/** One time an alert fired. */
-export interface IncidentView {
-  readonly id: string;
-  readonly alertId: string;
-  readonly alertName: string;
-  readonly environmentName: string | null;
-  readonly applicationName: string | null;
-  readonly production: boolean;
-  readonly condition: string;
-  readonly startedAt: string;
-  /** The value that made it fire, in words. */
-  readonly startValue: string;
-  /** Null while it still fires. */
-  readonly resolvedAt: string | null;
-  readonly endValue: string | null;
-  readonly endedBy: 'recovered' | 'turned-off' | null;
-}
-
-export interface TestResult {
-  readonly delivered: boolean;
-  readonly sent: number;
-  readonly error: string | null;
-}
 
 interface AlertRow {
   id: string;
@@ -163,7 +95,7 @@ export class AlertRules {
   readonly #database: TenantDatabase;
   readonly #places: Places;
   readonly #metrics: LatestMetrics;
-  readonly #emails: AlertEmails;
+  readonly #emails: AlertMailer;
   readonly #members: CompanyMembers;
   readonly #now: () => Date;
 
@@ -171,7 +103,7 @@ export class AlertRules {
     database: TenantDatabase,
     places: Places,
     metrics: LatestMetrics,
-    emails: AlertEmails,
+    emails: AlertMailer,
     members: CompanyMembers,
     now: () => Date = () => new Date(),
   ) {
@@ -258,16 +190,7 @@ export class AlertRules {
 
   async create(
     actor: Principal,
-    input: {
-      name?: unknown;
-      environmentId?: unknown;
-      applicationId?: unknown;
-      metric?: unknown;
-      comparator?: unknown;
-      threshold?: unknown;
-      forMinutes?: unknown;
-      recipients?: unknown;
-    },
+    input: Unchecked<CreateAlert>,
   ): Promise<AlertView> {
     const name = parseAlertName(input.name);
     const environmentId = parseEnvironmentId(input.environmentId);
@@ -309,8 +232,7 @@ export class AlertRules {
         ],
       );
       await appendToOutbox(tx, [
-        createDomainEvent<'AlertCreated', AlertCreatedPayload>({
-          eventType: 'AlertCreated',
+        AlertCreated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { ...payloadOf(id, name, condition, place), recipients: recipients.length },
@@ -330,7 +252,7 @@ export class AlertRules {
   async update(
     actor: Principal,
     idValue: unknown,
-    input: { name?: unknown; threshold?: unknown; forMinutes?: unknown; recipients?: unknown; enabled?: unknown },
+    input: Unchecked<UpdateAlert>,
   ): Promise<AlertView> {
     const id = parseAlertId(idValue);
     for (const fixed of ['environmentId', 'applicationId', 'metric', 'comparator'] as const) {
@@ -392,8 +314,7 @@ export class AlertRules {
       }
       const condition = { ...conditionOf(current), threshold: next.threshold, forMinutes: next.forMinutes };
       await appendToOutbox(tx, [
-        createDomainEvent<'AlertUpdated', AlertUpdatedPayload>({
-          eventType: 'AlertUpdated',
+        AlertUpdated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: {
@@ -417,8 +338,7 @@ export class AlertRules {
       const current = await lockAlert(tx, id);
       await tx.query('DELETE FROM alerts.alerts WHERE id = $1', [id]);
       const events: DomainEvent[] = [
-        createDomainEvent<'AlertDeleted', AlertPayload>({
-          eventType: 'AlertDeleted',
+        AlertDeleted.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: payloadOf(id, current.name, conditionOf(current), place ?? unknownPlace(current.environment_id, current.application_id)),
@@ -432,7 +352,7 @@ export class AlertRules {
    * Emails every member the alert names straight away, saying it's a test, so whoever
    * set it up can check the emails arrive. Returns whether they all went.
    */
-  async test(actor: Principal, idValue: unknown): Promise<TestResult> {
+  async test(actor: Principal, idValue: unknown): Promise<AlertTestResult> {
     const id = parseAlertId(idValue);
     const alert = await this.#database.transaction((tx) => findAlert(tx, id));
     if (alert === null) {

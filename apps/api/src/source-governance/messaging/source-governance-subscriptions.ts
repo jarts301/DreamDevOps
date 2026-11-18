@@ -1,9 +1,11 @@
 import { Logger } from '@nestjs/common';
-import { describeError, deterministicJobId, parseCompanyId, payloadOf, runWithCompany } from '@dreamdevops/shared-kernel';
+import { ApplicationArchived, ApplicationRegistered, ApplicationRestored } from '@dreamdevops/contracts/catalog/events';
+import { RepositoryRequested } from '@dreamdevops/contracts/source-governance/events';
+import { describeError, deterministicJobId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import type { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { BackgroundSubscriber, BackgroundWork } from '../../background/background-subscriber.ts';
 import type { AppConfig } from '../../config/app-config.ts';
-import { POLICY_VERSION, REPOSITORY_TRIGGERS, type Repositories } from '../application/repositories.ts';
+import { POLICY_VERSION, type Repositories } from '../application/repositories.ts';
 import { ACCESS_TRIGGERS, type SourceAccess } from '../application/source-access.ts';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
@@ -34,27 +36,13 @@ export class SourceGovernanceSubscriptions implements BackgroundSubscriber {
       retryLimit: this.#config.provisioningMaxAttempts + 2,
       retryDelaySeconds: this.#config.provisioningRetrySeconds,
     };
-    for (const eventType of REPOSITORY_TRIGGERS) {
-      await bus.subscribe(
-        eventType,
-        'source-repositories',
-        (event) => this.#repositories.provision(payloadOf(event).text('applicationId')),
-        retries,
-      );
-    }
-    for (const [eventType, archived] of [
-      ['ApplicationArchived', true],
-      ['ApplicationRestored', false],
-    ] as const) {
-      await bus.subscribe(
-        eventType,
-        'source-archiving',
-        (event) => this.#repositories.syncArchived(payloadOf(event).text('applicationId'), archived),
-        retries,
-      );
-    }
-    for (const eventType of ACCESS_TRIGGERS) {
-      await bus.subscribe(eventType, 'source-access', () => this.#access.syncCompany(), retries);
+    // A new application needs its repository, as does one whose creation someone asked for again.
+    await bus.subscribe(ApplicationRegistered, 'source-repositories', ({ payload }) => this.#repositories.provision(payload.applicationId), retries);
+    await bus.subscribe(RepositoryRequested, 'source-repositories', ({ payload }) => this.#repositories.provision(payload.applicationId), retries);
+    await bus.subscribe(ApplicationArchived, 'source-archiving', ({ payload }) => this.#repositories.syncArchived(payload.applicationId, true), retries);
+    await bus.subscribe(ApplicationRestored, 'source-archiving', ({ payload }) => this.#repositories.syncArchived(payload.applicationId, false), retries);
+    for (const trigger of ACCESS_TRIGGERS) {
+      await bus.subscribe(trigger, 'source-access', () => this.#access.syncCompany(), retries);
     }
     // A job rather than work at every start: its ID names the rules' version, so however
     // many API processes start, repositories are brought up to date once per version, and

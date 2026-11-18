@@ -1,15 +1,10 @@
+import type { EditionProviderStatus } from '@dreamdevops/contracts/editions/http';
 import type { Edition } from '../domain/features.ts';
 
 export const ENTITLEMENT_PROVIDER = Symbol('ENTITLEMENT_PROVIDER');
 
-export interface ProviderStatus {
-  /** Shown to platform admins, such as "Community". */
-  readonly name: string;
-  /** Whether commercial features are installed and licensed on this server. */
-  readonly commercialAvailable: boolean;
-  /** More detail for platform admins, such as when a license ends. */
-  readonly detail: string | null;
-}
+/** What the provider says of itself, which platform admins see. */
+export type ProviderStatus = EditionProviderStatus;
 
 /**
  * The extension point for the Commercial Edition. This repository includes only the

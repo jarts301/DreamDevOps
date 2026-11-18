@@ -1,5 +1,5 @@
 import type { MetricValues } from '../domain/metrics.ts';
-import type { LatestMetrics, LatestMetricsAnswer } from './latest-metrics.ts';
+import type { LatestMetrics, LatestMetricsAnswer } from '@dreamdevops/contracts/monitoring/services';
 import { type MetricsStore, MetricsUnavailableError } from './ports.ts';
 import type { RunningPlaces } from './running-places.ts';
 

@@ -1,10 +1,10 @@
+import { normalizedEmail } from '@dreamdevops/contracts/identity-access/access';
 import { AccessError } from './errors.ts';
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
+/** An email address as this context keeps it, or a refusal people can read. The rule itself is published in its contracts. */
 export function normalizeEmail(value: unknown): string {
-  const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
+  const email = normalizedEmail(value);
+  if (email === null) {
     throw new AccessError('invalid', 'Enter a valid email address.');
   }
   return email;

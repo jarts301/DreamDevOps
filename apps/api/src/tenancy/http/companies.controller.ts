@@ -1,7 +1,9 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Req } from '@nestjs/common';
 import { RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { InvitationEmails } from '../../notifications/application/invitation-emails.ts';
+import type { SentInvitation } from '@dreamdevops/contracts/identity-access/http';
+import type { CompanySummary, CreatedCompany } from '@dreamdevops/contracts/tenancy/http';
+import { INVITATION_MAILER, type InvitationMailer } from '@dreamdevops/contracts/notifications/services';
 import { CompaniesService } from '../application/companies.service.ts';
 
 const MANAGE_COMPANIES = 'companies:manage';
@@ -11,18 +13,18 @@ const MANAGE_COMPANIES = 'companies:manage';
 @RequirePermissions(MANAGE_COMPANIES)
 export class CompaniesController {
   readonly #service: CompaniesService;
-  readonly #emails: InvitationEmails;
+  readonly #emails: InvitationMailer;
 
   constructor(
     @Inject(CompaniesService) service: CompaniesService,
-    @Inject(InvitationEmails) emails: InvitationEmails,
+    @Inject(INVITATION_MAILER) emails: InvitationMailer,
   ) {
     this.#service = service;
     this.#emails = emails;
   }
 
   @Get()
-  list(): Promise<object[]> {
+  list(): Promise<CompanySummary[]> {
     return this.#service.list();
   }
 
@@ -30,14 +32,15 @@ export class CompaniesController {
   async create(
     @Req() request: ApiRequest,
     @Body() body: { name?: unknown; firstAdminEmail?: unknown },
-  ): Promise<object> {
+  ): Promise<CreatedCompany> {
     const { company, invitation } = await this.#service.create(request.principal!, body?.name, body?.firstAdminEmail);
     const emailSent = await this.#emails.send({
       to: invitation.email,
       companyName: company.name,
       role: invitation.role,
       invitedBy: request.principal!.displayName,
-      invitation,
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
     });
     return { company, invitation: { ...invitation, emailSent } };
   }
@@ -71,14 +74,15 @@ export class CompaniesController {
     @Req() request: ApiRequest,
     @Param('id') id: string,
     @Body() body: { email?: unknown },
-  ): Promise<object> {
+  ): Promise<SentInvitation> {
     const { invitation, companyName } = await this.#service.inviteFirstAdmin(request.principal!, id, body?.email);
     const emailSent = await this.#emails.send({
       to: invitation.email,
       companyName,
       role: invitation.role,
       invitedBy: request.principal!.displayName,
-      invitation,
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
     });
     return { ...invitation, emailSent };
   }

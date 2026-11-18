@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
-import { platformVariables } from '../../environments/domain/variables.ts';
+import type { Strategy } from '@dreamdevops/contracts/deployments/http';
+import { platformVariables } from '@dreamdevops/contracts/environments/variables';
 
-export type Strategy = 'recreate' | 'rolling' | 'blue-green' | 'canary' | 'a-b';
+// The strategies are Deployments' published language, kept in its contracts.
+export type { Strategy } from '@dreamdevops/contracts/deployments/http';
 
 /** Strategies every edition has. Canary and A/B are progressive, a Commercial feature. */
 export const STANDARD_STRATEGIES: readonly Strategy[] = ['recreate', 'rolling', 'blue-green'];

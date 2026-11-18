@@ -2,7 +2,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { settle } from '../../testing';
 import { CompanyEdition } from './company-edition';
 import { PlatformEditions } from './platform-editions';
@@ -34,12 +33,6 @@ describe('editions', () => {
     await settle();
     await fixture.whenStable();
   };
-
-  it('describes an edition change', () => {
-    expect(describeEvent('CompanyEditionChanged', { edition: 'commercial', previousEdition: 'community' })).toBe(
-      'Moved the company from the Community to the Commercial Edition',
-    );
-  });
 
   describe('CompanyEdition', () => {
     const open = async (body: object) => {

@@ -22,7 +22,7 @@ import {
   suggestVersions,
 } from '../src/releases/domain/version.ts';
 import { repositoryOf, translate } from '../src/webhooks/domain/forgejo-events.ts';
-import { isValidSignature, webhookSecret } from '../src/webhooks/domain/signature.ts';
+import { isValidSignature, webhookSecret } from '@dreamdevops/contracts/webhooks/signature';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);

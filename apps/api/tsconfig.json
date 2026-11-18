@@ -2,9 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     // NestJS's decorators, such as @Inject on constructor parameters.
-    "experimentalDecorators": true,
-    // Type checks and tests read the shared kernel's sources, so they need no build of it first.
-    "customConditions": ["@dreamdevops/source"]
+    "experimentalDecorators": true
   },
   "include": ["src", "test", "scripts", "vitest.config.ts"]
 }

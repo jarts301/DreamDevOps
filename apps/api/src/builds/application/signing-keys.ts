@@ -1,12 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import type { PublicSigningKey } from '@dreamdevops/contracts/builds/http';
+import type { ImageSigningKeys } from '@dreamdevops/contracts/builds/services';
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
-import type { TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
+import type { TenantDatabase, TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { SigningPurpose } from '../domain/build.ts';
 
-export interface PublicKey {
-  readonly purpose: SigningPurpose;
-  readonly publicKey: string;
-}
+/** A company's public signing key, which targets check images with. */
+export type PublicKey = PublicSigningKey;
 
 /**
  * Each company's Cosign keys. They're made the first time they're needed. Private keys
@@ -77,5 +77,24 @@ export class SigningKeys {
     const decipher = createDecipheriv('aes-256-gcm', this.#key, Buffer.from(iv, 'base64'));
     decipher.setAuthTag(Buffer.from(tag, 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64')), decipher.final()]).toString('utf8');
+  }
+}
+
+/**
+ * The current company's public keys, for other contexts, such as Environments, which gives
+ * targets the key to check images with. Each call reads in a transaction of its own, so
+ * no other context's transaction ever reaches this context's tables.
+ */
+export class CompanySigningKeys implements ImageSigningKeys {
+  readonly #database: TenantDatabase;
+  readonly #keys: SigningKeys;
+
+  constructor(database: TenantDatabase, keys: SigningKeys) {
+    this.#database = database;
+    this.#keys = keys;
+  }
+
+  publicKey(purpose: SigningPurpose): Promise<string> {
+    return this.#database.transaction((tx) => this.#keys.publicKey(tx, purpose));
   }
 }

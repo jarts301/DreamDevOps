@@ -1,10 +1,11 @@
+import type { Comparator } from '@dreamdevops/contracts/alerts/http';
 import { isUuid } from '@dreamdevops/shared-kernel';
-import { formatMetricValue, isMetricKey, type MetricKey, METRIC_KEYS, metricOf } from '../../monitoring/domain/metrics.ts';
+import { formatMetricValue, isMetricKey, type MetricKey, METRIC_KEYS, metricOf } from '@dreamdevops/contracts/monitoring/metrics';
 import { normalizeName } from '../../shared/names.ts';
 import { AlertError } from './errors.ts';
 
-/** Whether an alert fires when the metric goes above its threshold, or below it. */
-export type Comparator = 'above' | 'below';
+// Whether an alert fires above its threshold or below it is Alerts' published language, kept in its contracts.
+export type { Comparator } from '@dreamdevops/contracts/alerts/http';
 
 /** What an alert watches for: a metric past a threshold, for long enough. */
 export interface AlertCondition {

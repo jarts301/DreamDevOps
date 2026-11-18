@@ -2,7 +2,7 @@ import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type pg from 'pg';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { COMPANY_DIRECTORY, type CompanyDirectory } from '../tenancy/application/company-directory.ts';
+import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
 import { DATABASE_POOL } from '../tokens.ts';
 import { AuditLog } from './application/audit-log.ts';

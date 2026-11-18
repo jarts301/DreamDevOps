@@ -1,6 +1,7 @@
+import type { EnvironmentTraces, TraceView } from '@dreamdevops/contracts/monitoring/http';
 import { MonitoringError } from '../domain/errors.ts';
-import { parseRange, type TimeRangeKey } from '../domain/metrics.ts';
-import { MAX_TRACES, parseTraceId, summarize, type TraceSummary } from '../domain/traces.ts';
+import { parseRange } from '../domain/metrics.ts';
+import { MAX_TRACES, parseTraceId, summarize } from '../domain/traces.ts';
 import { type TraceStore, TracesUnavailableError } from './ports.ts';
 import type { RunningPlace, RunningPlaces } from './running-places.ts';
 
@@ -8,45 +9,6 @@ const NOT_SET_UP = 'This server doesn’t keep applications’ traces. An admini
 
 /** Traces that only some spans of belong to the environment take more room in the store's answer. */
 const SEARCH_MARGIN = 5;
-
-export interface EnvironmentTraces {
-  /** Whether this server keeps traces at all. */
-  readonly enabled: boolean;
-  /** The service name its traces are found by: the application's short name, unless it sends another. */
-  readonly serviceName: string;
-  readonly range: { readonly key: TimeRangeKey; readonly start: string; readonly end: string };
-  /** Newest first, MAX_TRACES at most, each summed up from this environment's spans. */
-  readonly traces: readonly TraceSummary[];
-}
-
-export interface SpanView {
-  readonly spanId: string;
-  readonly parentSpanId: string | null;
-  readonly name: string;
-  readonly serviceName: string;
-  readonly placeId: string;
-  readonly environmentId: string;
-  readonly environmentName: string;
-  readonly applicationName: string;
-  readonly production: boolean;
-  readonly start: string;
-  /** Milliseconds from the start of the trace. */
-  readonly offsetMs: number;
-  readonly durationMs: number;
-  readonly kind: string | null;
-  readonly error: boolean;
-  readonly attributes: Readonly<Record<string, string | number | boolean>>;
-}
-
-export interface TraceView {
-  readonly traceId: string;
-  readonly start: string;
-  readonly durationMs: number;
-  /** The company's own spans, in the order they started. */
-  readonly spans: readonly SpanView[];
-  /** Spans from elsewhere, such as another company's service this trace passed through, which aren't shown. */
-  readonly hiddenSpans: number;
-}
 
 /**
  * The traces of what runs in the company's environments: each request as it passes through

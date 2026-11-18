@@ -12,12 +12,13 @@ const resolve = {
 export default defineConfig({
   test: {
     // npm run test:coverage measures the unit tests. The thresholds are today's levels, so
-    // coverage can only go up.
+    // coverage can only go up. They were lowered once, when events' wording and checks moved
+    // to the contracts package, whose own tests cover them with thresholds of their own.
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
       reporter: ['text-summary', 'json-summary', 'html'],
-      thresholds: { lines: 39, branches: 35, functions: 36, statements: 39 },
+      thresholds: { lines: 38, branches: 33, functions: 35, statements: 37 },
     },
     projects: [
       {

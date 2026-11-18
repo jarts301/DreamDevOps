@@ -1,7 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, type OnInit, signal } from '@angular/core';
 import { PageActivity } from '../../core/page-activity';
-import { type CompanyEditionRow, type Edition, EDITION_NAMES, EditionsApi, type EditionsOverview } from './editions.api';
+import { type CompanyEditionRow, type Edition, editionName as nameOfEdition, EditionsApi, type EditionsOverview } from './editions.api';
 
 /** Each company's edition. Platform admins see names and editions, never company data. */
 @Component({
@@ -100,7 +100,7 @@ export class PlatformEditions implements OnInit {
   }
 
   protected editionName(edition: Edition): string {
-    return EDITION_NAMES[edition];
+    return nameOfEdition(edition);
   }
 
   protected async choose(company: CompanyEditionRow, event: Event): Promise<void> {
@@ -109,7 +109,7 @@ export class PlatformEditions implements OnInit {
     await this.#activity.run(async () => {
       try {
         await this.#api.setEdition(company.companyId, edition);
-        this.notice.set(`${company.companyName} now uses the ${EDITION_NAMES[edition]} Edition.`);
+        this.notice.set(`${company.companyName} now uses the ${nameOfEdition(edition)} Edition.`);
       } catch (error) {
         // The list's data doesn't change after a refusal, so the choice is put back here.
         select.value = company.edition;

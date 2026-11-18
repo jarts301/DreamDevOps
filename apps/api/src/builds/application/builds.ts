@@ -4,18 +4,19 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { Logger } from '@nestjs/common';
+import { BuildFailed, BuildRequested, BuildSucceeded, FeatureImageDeleted } from '@dreamdevops/contracts/builds/events';
+import type { BuildView, PublicSigningKey, SbomDocument } from '@dreamdevops/contracts/builds/http';
+import type { BuildRequest, BuildRequests, DeployableImages } from '@dreamdevops/contracts/builds/services';
 import {
   type CompanyId,
-  createDomainEvent,
   currentCompanyId,
   parseCompanyId,
   runWithCompany,
 } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
-import type { Principal } from '../../identity-access/domain/access.ts';
-import type { SourceHost } from '../../source-governance/application/ports.ts';
-import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
+import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import { type RepositoryGit, type RepositoryLookup, TESTS_CHECK } from '@dreamdevops/contracts/source-governance/services';
 import {
   type BuildKind,
   buildProgress,
@@ -24,7 +25,6 @@ import {
   countComponents,
   evaluate,
   featureTag,
-  type JobProgress,
   PIPELINE_JOBS,
   type PipelineJob,
   type Reports,
@@ -35,8 +35,7 @@ import {
 import { signaturePayload, signatureTag, signPayload, verifyPayload } from '../domain/cosign.ts';
 import { BuildError } from '../domain/errors.ts';
 import { checkImage, checkRepositoryFiles, checkStoredSignature, failedChecksReason, type PlatformChecks } from '../domain/image-rules.ts';
-import { failed } from '../../shared/progress.ts';
-import { TESTS_CHECK } from '../../source-governance/domain/git-flow.ts';
+import { failed } from '../domain/checks.ts';
 import type { ImageRegistry, PipelineHost } from './ports.ts';
 import type { SigningKeys } from './signing-keys.ts';
 
@@ -75,37 +74,8 @@ const DEFAULT_JOB_ADVICE = "It stopped before it reported, such as when a tool c
 
 export type ReportKind = 'secrets' | 'tests' | 'scan' | 'sbom' | 'failure' | 'build-log';
 
-export interface BuildView {
-  readonly id: string;
-  readonly applicationId: string;
-  readonly kind: BuildKind;
-  readonly branch: string | null;
-  readonly commit: string;
-  readonly tag: string;
-  readonly version: string | null;
-  readonly releaseId: string | null;
-  readonly status: BuildStatus;
-  readonly failureReason: string | null;
-  readonly reports: Reports;
-  /** Where each pipeline job stands. */
-  readonly progress: readonly JobProgress[];
-  readonly imageRef: string | null;
-  readonly digest: string | null;
-  readonly signedWith: 'test' | 'release' | null;
-  readonly createdAt: string;
-  readonly finishedAt: string | null;
-}
-
-export interface BuildRequest {
-  readonly applicationId: string;
-  readonly kind: BuildKind;
-  readonly branch: string | null;
-  readonly commit: string;
-  readonly tag: string;
-  readonly version: string | null;
-  readonly releaseId: string | null;
-  readonly actorId: string | null;
-}
+// What a build is asked for is Builds' published language, kept in its contracts.
+export type { BuildRequest } from '@dreamdevops/contracts/builds/services';
 
 interface BuildRow {
   id: string;
@@ -142,12 +112,12 @@ export interface BuildsOptions {
  * not the pipeline, pushes and signs images, and decides from the jobs' reports whether a
  * build passed.
  */
-export class Builds {
+export class Builds implements BuildRequests, DeployableImages {
   readonly #logger = new Logger(Builds.name);
   readonly #database: TenantDatabase;
-  readonly #catalog: ApplicationCatalog;
+  readonly #catalog: ApplicationDirectory;
   readonly #repositories: RepositoryLookup;
-  readonly #source: SourceHost;
+  readonly #source: RepositoryGit;
   readonly #registry: ImageRegistry;
   readonly #pipelines: PipelineHost;
   readonly #keys: SigningKeys;
@@ -155,9 +125,9 @@ export class Builds {
 
   constructor(
     database: TenantDatabase,
-    catalog: ApplicationCatalog,
+    catalog: ApplicationDirectory,
     repositories: RepositoryLookup,
-    source: SourceHost,
+    source: RepositoryGit,
     registry: ImageRegistry,
     pipelines: PipelineHost,
     keys: SigningKeys,
@@ -290,8 +260,7 @@ export class Builds {
         ],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'BuildRequested',
+        BuildRequested.create({
           companyId: currentCompanyId(),
           actorId: input.actorId,
           payload: {
@@ -451,10 +420,10 @@ export class Builds {
     return toView(build);
   }
 
-  async sbom(buildIdValue: unknown): Promise<object> {
+  async sbom(buildIdValue: unknown): Promise<SbomDocument> {
     const buildId = parseId(buildIdValue, 'build');
     return this.#database.transaction(async (tx) => {
-      const { rows } = await tx.query<{ document: object }>('SELECT document FROM builds.sboms WHERE build_id = $1', [
+      const { rows } = await tx.query<{ document: SbomDocument }>('SELECT document FROM builds.sboms WHERE build_id = $1', [
         buildId,
       ]);
       if (rows[0] === undefined) {
@@ -464,7 +433,7 @@ export class Builds {
     });
   }
 
-  publicKeys(): Promise<object[]> {
+  publicKeys(): Promise<PublicSigningKey[]> {
     return this.#database.transaction((tx) => this.#keys.publicKeys(tx));
   }
 
@@ -745,8 +714,7 @@ export class Builds {
       await this.#database.transaction(async (tx) => {
         await tx.query("UPDATE builds.builds SET status = 'deleted', updated_at = now() WHERE id = $1", [build.id]);
         await appendToOutbox(tx, [
-          createDomainEvent({
-            eventType: 'FeatureImageDeleted',
+          FeatureImageDeleted.create({
             companyId: currentCompanyId(),
             payload: { buildId: build.id, applicationId, branch, tag: build.image_tag },
           }),
@@ -875,24 +843,23 @@ export class Builds {
       [build.id, status, reason],
     );
     const finished = rows[0]!;
+    const built = {
+      buildId: build.id,
+      applicationId: build.application_id,
+      kind: build.kind,
+      branch: build.branch,
+      commit: build.commit_sha,
+      tag: build.image_tag,
+      version: build.version,
+      releaseId: build.release_id,
+    };
     await appendToOutbox(tx, [
-      createDomainEvent({
-        eventType: status === 'succeeded' ? 'BuildSucceeded' : 'BuildFailed',
-        companyId: currentCompanyId(),
-        payload: {
-          buildId: build.id,
-          applicationId: build.application_id,
-          kind: build.kind,
-          branch: build.branch,
-          commit: build.commit_sha,
-          tag: build.image_tag,
-          version: build.version,
-          releaseId: build.release_id,
-          ...(status === 'succeeded'
-            ? { imageRef: finished.image_ref, digest: finished.digest, signedWith: finished.signing_key }
-            : { reason }),
-        },
-      }),
+      status === 'succeeded'
+        ? BuildSucceeded.create({
+            companyId: currentCompanyId(),
+            payload: { ...built, imageRef: finished.image_ref, digest: finished.digest, signedWith: finished.signing_key },
+          })
+        : BuildFailed.create({ companyId: currentCompanyId(), payload: { ...built, reason } }),
     ]);
     await this.#removeUploads(build.id);
   }

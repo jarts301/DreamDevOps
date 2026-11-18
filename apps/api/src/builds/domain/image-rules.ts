@@ -1,11 +1,8 @@
-import { type Check, type Fact, failed, failures, passed, warning } from '../../shared/progress.ts';
+import type { PlatformChecks } from '@dreamdevops/contracts/builds/http';
+import { type Check, failed, failures, passed, warning } from './checks.ts';
 import { checkDockerfile } from './dockerfile-policy.ts';
 
-/** What the platform checked itself, with what it found. */
-export interface PlatformChecks {
-  readonly checks: readonly Check[];
-  readonly facts: readonly Fact[];
-}
+export type { PlatformChecks } from '@dreamdevops/contracts/builds/http';
 
 /** A built image's settings, as its OCI configuration states them. */
 export interface ImageDetails {

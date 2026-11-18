@@ -11,89 +11,33 @@ import { describe, expect, it } from 'vitest';
 
 const SRC = fileURLToPath(new URL('../src', import.meta.url));
 const MIGRATIONS = fileURLToPath(new URL('../migrations', import.meta.url));
-const DASHBOARD_EVENTS = fileURLToPath(new URL('../../dashboard/src/app/core/events.ts', import.meta.url));
 
 interface Context {
   /** The database schemas only this context may read or write. */
   readonly schemas: readonly string[];
-  /** The files other contexts may import: its published language and services. */
-  readonly published: readonly string[];
+  /**
+   * Its Nest modules, which other contexts' modules import to wire it in. Everything else a
+   * context offers others is in the contracts package, @dreamdevops/contracts.
+   */
+  readonly modules: readonly string[];
 }
 
 const CONTEXTS: Readonly<Record<string, Context>> = {
-  'identity-access': {
-    schemas: ['identity'],
-    published: [
-      'domain/access.ts',
-      'domain/email.ts',
-      'domain/events.ts',
-      'application/ports.ts',
-      'application/company-access.service.ts',
-      'application/company-members.ts',
-      'identity-access.module.ts',
-    ],
-  },
-  tenancy: {
-    schemas: ['tenancy'],
-    published: ['application/company-directory.ts', 'company-directory.module.ts', 'tenancy.module.ts'],
-  },
-  audit: { schemas: ['audit'], published: ['audit.module.ts'] },
-  notifications: {
-    schemas: ['notification'],
-    published: ['application/alert-emails.ts', 'application/invitation-emails.ts', 'notifications.module.ts'],
-  },
-  editions: {
-    schemas: ['editions'],
-    published: ['application/ports.ts', 'application/entitlements.ts', 'http/feature.guard.ts', 'editions.module.ts'],
-  },
-  blueprints: {
-    schemas: [],
-    published: ['application/blueprint-catalog.ts', 'domain/blueprint.ts', 'blueprints.module.ts'],
-  },
-  catalog: {
-    schemas: ['catalog'],
-    published: ['application/application-catalog.ts', 'domain/events.ts', 'catalog.module.ts'],
-  },
-  'source-governance': {
-    schemas: ['source'],
-    published: [
-      'application/ports.ts',
-      'application/repository-lookup.ts',
-      'domain/events.ts',
-      'domain/git-flow.ts',
-      'source-governance.module.ts',
-    ],
-  },
-  webhooks: { schemas: ['webhooks'], published: ['domain/signature.ts', 'webhooks.module.ts'] },
-  builds: {
-    schemas: ['builds'],
-    published: ['application/builds.ts', 'application/signing-keys.ts', 'builds.module.ts'],
-  },
-  releases: { schemas: ['releases'], published: ['releases.module.ts'] },
-  environments: {
-    schemas: ['environments'],
-    published: [
-      'application/environments.ts',
-      'application/environment-config.ts',
-      'application/ports.ts',
-      'application/target-agents.ts',
-      'application/target-configuration.ts',
-      'domain/hosting-providers.ts',
-      'domain/protection.ts',
-      'domain/telemetry.ts',
-      'domain/variables.ts',
-      'environments.module.ts',
-    ],
-  },
-  deployments: {
-    schemas: ['deployments'],
-    published: ['application/deployments.ts', 'deployments.module.ts'],
-  },
-  alerts: { schemas: ['alerts'], published: ['domain/events.ts', 'alerts.module.ts'] },
-  monitoring: {
-    schemas: [],
-    published: ['application/latest-metrics.ts', 'application/running-places.ts', 'domain/metrics.ts', 'monitoring.module.ts'],
-  },
+  'identity-access': { schemas: ['identity'], modules: ['identity-access.module.ts'] },
+  tenancy: { schemas: ['tenancy'], modules: ['company-directory.module.ts', 'tenancy.module.ts'] },
+  audit: { schemas: ['audit'], modules: ['audit.module.ts'] },
+  notifications: { schemas: ['notification'], modules: ['notifications.module.ts'] },
+  editions: { schemas: ['editions'], modules: ['editions.module.ts'] },
+  blueprints: { schemas: [], modules: ['blueprints.module.ts'] },
+  catalog: { schemas: ['catalog'], modules: ['catalog.module.ts'] },
+  'source-governance': { schemas: ['source'], modules: ['source-governance.module.ts'] },
+  webhooks: { schemas: ['webhooks'], modules: ['webhooks.module.ts'] },
+  builds: { schemas: ['builds'], modules: ['builds.module.ts'] },
+  releases: { schemas: ['releases'], modules: ['releases.module.ts'] },
+  environments: { schemas: ['environments'], modules: ['environments.module.ts'] },
+  deployments: { schemas: ['deployments'], modules: ['deployments.module.ts'] },
+  alerts: { schemas: ['alerts'], modules: ['alerts.module.ts'] },
+  monitoring: { schemas: [], modules: ['monitoring.module.ts'] },
 };
 
 /** Schemas every context may use: the shared kernel's outbox. */
@@ -115,7 +59,6 @@ const PLATFORM_API = [
   'platform/module-settings.ts',
   'shared/forgejo/forgejo-api.ts',
   'shared/names.ts',
-  'shared/progress.ts',
   'shared/run-command.ts',
   'shared/sealed-box.ts',
   'shared/slug.ts',
@@ -124,6 +67,15 @@ const PLATFORM_API = [
 
 /** The platform files that put contexts together, and so may import any context's module. */
 const COMPOSITION = ['app.module.ts', 'background/background.module.ts', 'demo/'];
+
+/**
+ * Where the application starts, and the files others start from outside it, each with why.
+ * Every other file in src must be reached from one of these, or it's left over.
+ */
+const ENTRY_POINTS: Readonly<Record<string, string>> = {
+  'main.ts': 'The API',
+  'database/migrate.ts': 'Tests migrate their throwaway databases with it',
+};
 
 /** The schema each migration belongs to, by its number. Every new migration needs an entry. */
 const MIGRATION_OWNERS: Readonly<Record<string, string>> = {
@@ -173,15 +125,15 @@ const EXCEPTIONS = {
   librariesInApplication: ['yaml'],
   /** Application code that names the database driver's types, rather than going through a port. */
   databaseInApplication: ['audit/application/audit-log.ts', 'identity-access/application/company-access.service.ts'],
-  /** Events created but never saved, so the audit log never shows them. */
-  unrecordedEvents: ['NotificationTest'],
   /**
-   * Contexts that depend on each other, in a circle, so none of them can move on its own.
-   * Each group is one cycle's members. The plan is to break them, so the list must only shrink.
+   * Contexts that call each other, in a circle, through the services they publish, so none
+   * of them can run without the others. Each group is one cycle's members. Identity and
+   * access emails invitations through Notifications, which names companies in chat messages
+   * through Tenancy, which has Identity and access invite a new company's first admin.
    */
-  contextCycles: [['identity-access', 'notifications', 'tenancy']],
-  /** Platform code that reaches into a context. The guards and the request belong to Identity and access. */
-  platformIntoContexts: ['http/guards.ts -> identity-access', 'http/request.ts -> identity-access'],
+  callCycles: [['identity-access', 'notifications', 'tenancy']] as string[][],
+  /** Platform code that reaches into a context. The guards belong to Identity and access. */
+  platformIntoContexts: ['http/guards.ts -> identity-access'],
   /**
    * Migrations that use another context's schema, such as a foreign key to its table or a
    * function that reads it. Each has to go before its context can have its own database.
@@ -244,6 +196,21 @@ const imports = files.flatMap(({ path, text }) =>
 );
 
 describe('the architecture', () => {
+  it('has no files the application never uses, such as one left over after a move', () => {
+    const reached = new Set<string>();
+    const stack = Object.keys(ENTRY_POINTS);
+    while (stack.length > 0) {
+      const path = stack.pop()!;
+      if (!reached.has(path)) {
+        reached.add(path);
+        stack.push(...imports.filter(({ from, relative: isRelative }) => from === path && isRelative).map(({ target }) => target));
+      }
+    }
+    const unused = files.map(({ path }) => path).filter((path) => !reached.has(path));
+
+    expect(unused, 'Delete these, or import them from where they belong').toEqual([]);
+  });
+
   it('knows every context in the source', () => {
     const folders = readdirSync(SRC).filter((name) => statSync(join(SRC, name)).isDirectory());
     expect(folders.filter((folder) => !PLATFORM_FOLDERS.includes(folder)).sort()).toEqual(Object.keys(CONTEXTS).sort());
@@ -255,14 +222,15 @@ describe('the architecture', () => {
     }
   });
 
-  it('lets contexts use each other only through what they publish', () => {
+  it('lets contexts reach each other only through the contracts, and only their Nest modules wire them together', () => {
     const violations = imports.flatMap(({ from, target, relative: isRelative }) => {
       const source = locate(from);
       const destination = isRelative ? locate(target) : null;
       if (source === null || destination === null || source.context === destination.context) {
         return [];
       }
-      return CONTEXTS[destination.context]!.published.includes(destination.rest) ? [] : [`${from} -> ${target}`];
+      const wiring = source.layer === 'module' && CONTEXTS[destination.context]!.modules.includes(destination.rest);
+      return wiring ? [] : [`${from} -> ${target}`];
     });
     expect(violations).toEqual([]);
   });
@@ -277,6 +245,7 @@ describe('the architecture', () => {
         const allowed =
           target.startsWith('node:') ||
           target === '@dreamdevops/shared-kernel' ||
+          target.startsWith('@dreamdevops/contracts/') ||
           EXCEPTIONS.librariesInDomain.includes(target);
         return allowed ? [] : [`${from} -> ${target}`];
       }
@@ -298,6 +267,7 @@ describe('the architecture', () => {
         const allowed =
           target.startsWith('node:') ||
           target.startsWith('@dreamdevops/shared-kernel') ||
+          target.startsWith('@dreamdevops/contracts/') ||
           EXCEPTIONS.librariesInApplication.includes(target) ||
           (target === '@nestjs/common' && EXCEPTIONS.frameworkInApplication.includes(from)) ||
           (target === 'pg' && EXCEPTIONS.databaseInApplication.includes(from));
@@ -336,19 +306,21 @@ describe('the architecture', () => {
     expect(violations).toEqual([]);
   });
 
-  it('has no cycles between contexts, other than the known ones', () => {
-    // The contexts each context imports, then the groups of contexts that reach each other.
-    const uses = new Map<string, Set<string>>(Object.keys(CONTEXTS).map((context) => [context, new Set<string>()]));
-    for (const { from, target, relative: isRelative } of imports) {
+  it('has no cycles of calls between contexts, other than the known ones', () => {
+    // A context calls another when it uses a service the other publishes in its contracts.
+    // Events don't count: a context that only hears another's events runs without it.
+    const SERVICES = /^@dreamdevops\/contracts\/([a-z-]+)\/services$/;
+    const calls = new Map<string, Set<string>>(Object.keys(CONTEXTS).map((context) => [context, new Set<string>()]));
+    for (const { from, target } of imports) {
       const source = locate(from);
-      const destination = isRelative ? locate(target) : null;
-      if (source !== null && destination !== null && source.context !== destination.context) {
-        uses.get(source.context)!.add(destination.context);
+      const callee = SERVICES.exec(target)?.[1];
+      if (source !== null && callee !== undefined && callee !== source.context) {
+        calls.get(source.context)!.add(callee);
       }
     }
     const reaches = (start: string, goal: string): boolean => {
       const seen = new Set<string>();
-      const stack = [...uses.get(start)!];
+      const stack = [...calls.get(start)!];
       while (stack.length > 0) {
         const next = stack.pop()!;
         if (next === goal) {
@@ -356,7 +328,7 @@ describe('the architecture', () => {
         }
         if (!seen.has(next)) {
           seen.add(next);
-          stack.push(...uses.get(next)!);
+          stack.push(...(calls.get(next) ?? []));
         }
       }
       return false;
@@ -371,7 +343,8 @@ describe('the architecture', () => {
       }
     }
 
-    expect([...cycles.values()]).toEqual(EXCEPTIONS.contextCycles);
+    expect([...calls.values()].some((callees) => callees.size > 0)).toBe(true);
+    expect([...cycles.values()]).toEqual(EXCEPTIONS.callCycles);
   });
 
   it('lets contexts use only what the platform publishes', () => {
@@ -418,27 +391,26 @@ describe('the architecture', () => {
 });
 
 describe('events', () => {
-  /** The event types the API saves, from createDomainEvent calls and the saga's status changes. */
-  const published = new Set(
-    files.flatMap(({ text }) => [
-      ...[...text.matchAll(/eventType:\s*([^,\n]+(?:\n[^,\n]+)?)/g)].flatMap((match) =>
-        [...match[1]!.matchAll(/'([A-Z][A-Za-z]+)'/g)].map((name) => name[1]!),
-      ),
-      ...[...text.matchAll(/setStatus\([^;]*?'([A-Z][A-Za-z]+)'/gs)].map((match) => match[1]!),
-    ]),
-  );
+  it('are only ever made through their contracts, so none is published without one', () => {
+    const bypassing = files.filter(({ text }) => /\bcreateDomainEvent\b/.test(text)).map(({ path }) => path);
 
-  it('are all described on the dashboard, so the audit log never shows a raw event name', () => {
-    const described = new Set([...readFileSync(DASHBOARD_EVENTS, 'utf8').matchAll(/case '([A-Z][A-Za-z]+)':/g)].map((match) => match[1]!));
-    const missing = [...published].filter((type) => !described.has(type) && !EXCEPTIONS.unrecordedEvents.includes(type));
-
-    expect(published.size).toBeGreaterThan(20);
-    expect(missing.sort()).toEqual([]);
+    expect(bypassing).toEqual([]);
   });
 
-  it('that people can be notified about all exist', async () => {
+  it('that people can be notified about all have contracts, which word them', async () => {
     const { NOTIFIABLE_EVENTS } = await import('../src/notifications/domain/event-catalog.ts');
+    const { EVENT_CATALOG } = await import('@dreamdevops/contracts/events');
 
-    expect(Object.keys(NOTIFIABLE_EVENTS).filter((type) => !published.has(type))).toEqual([]);
+    expect(Object.keys(NOTIFIABLE_EVENTS).filter((type) => !EVENT_CATALOG.has(type))).toEqual([]);
+  });
+});
+
+describe('the HTTP API', () => {
+  it('answers with the types its contexts publish in their contracts, never a bare object', () => {
+    const untyped = files
+      .filter(({ path }) => /\/http\/[^/]+\.controller\.ts$/.test(path))
+      .flatMap(({ path, text }) => [...text.matchAll(/\)\s*:\s*(?:Promise<)?object\b/g)].map(() => path));
+
+    expect(untyped).toEqual([]);
   });
 });

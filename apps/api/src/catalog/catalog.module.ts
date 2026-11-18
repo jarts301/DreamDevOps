@@ -1,8 +1,9 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import { BLUEPRINT_CATALOG, type BlueprintCatalog } from '../blueprints/application/blueprint-catalog.ts';
+import { BLUEPRINT_CATALOG, type BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
 import { BlueprintsModule } from '../blueprints/blueprints.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
+import { APPLICATION_DIRECTORY } from '@dreamdevops/contracts/catalog/services';
 import { ApplicationCatalog } from './application/application-catalog.ts';
 import { ApplicationsController } from './http/applications.controller.ts';
 
@@ -21,10 +22,13 @@ export class CatalogModule {
             useFactory: (database: TenantDatabase, blueprints: BlueprintCatalog) => new ApplicationCatalog(database, blueprints),
             inject: [TenantDatabase, BLUEPRINT_CATALOG],
           },
+          // What other contexts ask about applications through.
+          { provide: APPLICATION_DIRECTORY, useExisting: ApplicationCatalog },
         ],
         settings.overrides,
       ),
-      exports: [ApplicationCatalog],
+      // ApplicationCatalog is for the local demo's setup only; contexts use APPLICATION_DIRECTORY.
+      exports: [APPLICATION_DIRECTORY, ApplicationCatalog],
     }));
   }
 }

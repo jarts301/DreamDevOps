@@ -1,48 +1,30 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
+import {
+  EnvironmentSecretRemoved,
+  EnvironmentSecretSet,
+  EnvironmentVariableRemoved,
+  EnvironmentVariableSet,
+} from '@dreamdevops/contracts/environments/events';
+import { currentCompanyId } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
-import type { Principal } from '../../identity-access/domain/access.ts';
+import type { ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import type {
+  ConfigScope,
+  EnvironmentConfigView,
+  ProductionConfirmation,
+  SetValue,
+} from '@dreamdevops/contracts/environments/http';
+import { authorizeChange } from '@dreamdevops/contracts/environments/protection';
+import type { EnvironmentValues, ResolvedConfig } from '@dreamdevops/contracts/environments/services';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { EnvironmentKind } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
-import { authorizeChange } from '../domain/protection.ts';
 import { assertWithinLimits, parseVariableName, parseVariableValue } from '../domain/variables.ts';
 import type { SecretStore } from './ports.ts';
 import { secretsPath } from './target-configuration.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export type ConfigScope = 'environment' | 'application';
-
-export interface VariableView {
-  readonly name: string;
-  readonly value: string;
-  readonly scope: ConfigScope;
-  readonly updatedAt: string;
-  readonly updatedBy: string | null;
-}
-
-/** A secret shows only its name. Its value can be replaced or deleted, never read. */
-export interface SecretView {
-  readonly name: string;
-  readonly scope: ConfigScope;
-  readonly updatedAt: string;
-  readonly updatedBy: string | null;
-}
-
-export interface EnvironmentConfigView {
-  readonly variables: readonly VariableView[];
-  readonly secrets: readonly SecretView[];
-}
-
-/** What an application gets in an environment: its own values over the environment's. */
-export interface ResolvedConfig {
-  readonly variables: Readonly<Record<string, string>>;
-  /** Where its secrets are in the store: the environment's shared ones, then its own. */
-  readonly secretPaths: { readonly shared: string; readonly application: string };
-  readonly hasSharedSecrets: boolean;
-  readonly hasApplicationSecrets: boolean;
-}
 
 interface Row {
   name: string;
@@ -57,12 +39,12 @@ interface Row {
  * values go straight to the secret store; the database keeps only their names. Changes
  * apply at the next deployment.
  */
-export class EnvironmentConfig {
+export class EnvironmentConfig implements EnvironmentValues {
   readonly #database: TenantDatabase;
   readonly #secrets: SecretStore;
-  readonly #applications: ApplicationCatalog;
+  readonly #applications: ApplicationDirectory;
 
-  constructor(database: TenantDatabase, secrets: SecretStore, applications: ApplicationCatalog) {
+  constructor(database: TenantDatabase, secrets: SecretStore, applications: ApplicationDirectory) {
     this.#database = database;
     this.#applications = applications;
     this.#secrets = secrets;
@@ -105,7 +87,7 @@ export class EnvironmentConfig {
     });
   }
 
-  async setVariable(actor: Principal, environmentValue: unknown, nameValue: unknown, input: { value?: unknown; application?: unknown; confirmation?: unknown; reason?: unknown }): Promise<void> {
+  async setVariable(actor: Principal, environmentValue: unknown, nameValue: unknown, input: Unchecked<SetValue>): Promise<void> {
     const name = parseVariableName(nameValue);
     const value = parseVariableValue(input.value, { secret: false });
     await this.#change(actor, environmentValue, input.application, input, async (tx, environmentId, applicationId) => {
@@ -119,7 +101,7 @@ export class EnvironmentConfig {
         [randomUUID(), currentCompanyId(), environmentId, applicationId, name, value, actor.userId],
       );
       await assertScopeWithinLimits(tx, environmentId, applicationId);
-      return { eventType: 'EnvironmentVariableSet', name };
+      return { event: EnvironmentVariableSet, name };
     });
   }
 
@@ -128,7 +110,7 @@ export class EnvironmentConfig {
     environmentValue: unknown,
     nameValue: unknown,
     applicationValue: unknown,
-    request: { confirmation?: unknown; reason?: unknown } = {},
+    request: Unchecked<ProductionConfirmation> = {},
   ): Promise<void> {
     const name = parseVariableName(nameValue);
     await this.#change(actor, environmentValue, applicationValue, request, async (tx, environmentId, applicationId) => {
@@ -140,12 +122,12 @@ export class EnvironmentConfig {
       if (rowCount === 0) {
         throw new EnvironmentError('not-found', 'There is no such variable.');
       }
-      return { eventType: 'EnvironmentVariableRemoved', name };
+      return { event: EnvironmentVariableRemoved, name };
     });
   }
 
   /** Saves the value in the secret store, and only the name here. */
-  async setSecret(actor: Principal, environmentValue: unknown, nameValue: unknown, input: { value?: unknown; application?: unknown; confirmation?: unknown; reason?: unknown }): Promise<void> {
+  async setSecret(actor: Principal, environmentValue: unknown, nameValue: unknown, input: Unchecked<SetValue>): Promise<void> {
     const name = parseVariableName(nameValue);
     const value = parseVariableValue(input.value, { secret: true });
     await this.#change(actor, environmentValue, input.application, input, async (tx, environmentId, applicationId, application) => {
@@ -161,7 +143,7 @@ export class EnvironmentConfig {
       await assertScopeWithinLimits(tx, environmentId, applicationId);
       // Written last, inside the transaction: if the store refuses, the name isn't kept.
       await this.#secrets.write(secretPathOf(environmentId, application), { [name]: value });
-      return { eventType: 'EnvironmentSecretSet', name };
+      return { event: EnvironmentSecretSet, name };
     });
   }
 
@@ -170,7 +152,7 @@ export class EnvironmentConfig {
     environmentValue: unknown,
     nameValue: unknown,
     applicationValue: unknown,
-    request: { confirmation?: unknown; reason?: unknown } = {},
+    request: Unchecked<ProductionConfirmation> = {},
   ): Promise<void> {
     const name = parseVariableName(nameValue);
     await this.#change(actor, environmentValue, applicationValue, request, async (tx, environmentId, applicationId, application) => {
@@ -183,7 +165,7 @@ export class EnvironmentConfig {
         throw new EnvironmentError('not-found', 'There is no such secret.');
       }
       await this.#secrets.remove(secretPathOf(environmentId, application), [name]);
-      return { eventType: 'EnvironmentSecretRemoved', name };
+      return { event: EnvironmentSecretRemoved, name };
     });
   }
 
@@ -205,59 +187,40 @@ export class EnvironmentConfig {
    * A fingerprint of the values an application gets in an environment. It changes whenever
    * one of them is set or removed, so deployments can tell when what runs has older ones.
    */
-  async fingerprint(tx: TenantTransaction, environmentId: string, applicationId: string): Promise<string> {
-    const scope = 'environment_id = $1 AND (application_id IS NULL OR application_id = $2) ORDER BY application_id NULLS FIRST, name';
-    const { rows: variables } = await tx.query(`SELECT name, value, application_id FROM environments.variables WHERE ${scope}`, [
-      environmentId,
-      applicationId,
-    ]);
-    // Secret values aren't here, but every change to one is: it's saved again.
-    const { rows: secrets } = await tx.query(
-      `SELECT name, application_id, value_bytes, updated_at FROM environments.secrets WHERE ${scope}`,
-      [environmentId, applicationId],
-    );
-    return createHash('sha256').update(JSON.stringify([variables, secrets])).digest('hex');
+  fingerprint(environmentId: string, applicationId: string): Promise<string> {
+    return this.#database.transaction((tx) => fingerprintIn(tx, environmentId, applicationId));
+  }
+
+  /** The fingerprints of several applications' values, in the order asked, in one transaction. */
+  fingerprints(places: readonly { readonly environmentId: string; readonly applicationId: string }[]): Promise<string[]> {
+    if (places.length === 0) {
+      return Promise.resolve([]);
+    }
+    return this.#database.transaction(async (tx) => {
+      const hashes: string[] = [];
+      for (const place of places) {
+        hashes.push(await fingerprintIn(tx, place.environmentId, place.applicationId));
+      }
+      return hashes;
+    });
   }
 
   /** The variables an application gets in an environment, and where its secrets are. */
-  async resolve(tx: TenantTransaction, environmentId: string, application: { id: string; slug: string }): Promise<ResolvedConfig> {
-    const { rows } = await tx.query<{ name: string; value: string; application_id: string | null }>(
-      `SELECT name, value, application_id FROM environments.variables
-       WHERE environment_id = $1 AND (application_id IS NULL OR application_id = $2)
-       ORDER BY application_id NULLS FIRST`,
-      [environmentId, application.id],
-    );
-    const variables: Record<string, string> = {};
-    for (const row of rows) {
-      variables[row.name] = row.value;
-    }
-    const { rows: secrets } = await tx.query<{ application_id: string | null }>(
-      `SELECT DISTINCT application_id FROM environments.secrets
-       WHERE environment_id = $1 AND (application_id IS NULL OR application_id = $2)`,
-      [environmentId, application.id],
-    );
-    return {
-      variables,
-      secretPaths: {
-        shared: secretPathOf(environmentId, null),
-        application: secretPathOf(environmentId, application.slug),
-      },
-      hasSharedSecrets: secrets.some((row) => row.application_id === null),
-      hasApplicationSecrets: secrets.some((row) => row.application_id !== null),
-    };
+  resolve(environmentId: string, application: { readonly id: string; readonly slug: string }): Promise<ResolvedConfig> {
+    return this.#database.transaction((tx) => resolveIn(tx, environmentId, application));
   }
 
   async #change(
     actor: Principal,
     environmentValue: unknown,
     applicationValue: unknown,
-    request: { confirmation?: unknown; reason?: unknown },
+    request: Unchecked<ProductionConfirmation>,
     work: (
       tx: TenantTransaction,
       environmentId: string,
       applicationId: string | null,
       applicationSlug: string | null,
-    ) => Promise<{ eventType: string; name: string }>,
+    ) => Promise<{ event: ValueEvent; name: string }>,
   ): Promise<void> {
     const environmentId = parseId(environmentValue, 'environment');
     const applicationId = applicationValue === undefined || applicationValue === null || applicationValue === '' ? null : parseId(applicationValue, 'application');
@@ -270,11 +233,10 @@ export class EnvironmentConfig {
         confirmation: request.confirmation,
         reason: request.reason,
       });
-      const { eventType, name } = await work(tx, environmentId, applicationId, application?.slug ?? null);
+      const { event, name } = await work(tx, environmentId, applicationId, application?.slug ?? null);
       // Only names: values never enter the history.
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType,
+        event.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { environmentId, environmentName: environment.name, applicationId, name, ...(reason !== null && { reason }) },
@@ -283,6 +245,59 @@ export class EnvironmentConfig {
     });
   }
 }
+
+/**
+ * A fingerprint of the values an application gets in an environment. It changes whenever
+ * one of them is set or removed, so deployments can tell when what runs has older ones.
+ */
+async function fingerprintIn(tx: TenantTransaction, environmentId: string, applicationId: string): Promise<string> {
+  const scope = 'environment_id = $1 AND (application_id IS NULL OR application_id = $2) ORDER BY application_id NULLS FIRST, name';
+  const { rows: variables } = await tx.query(`SELECT name, value, application_id FROM environments.variables WHERE ${scope}`, [
+    environmentId,
+    applicationId,
+  ]);
+  // Secret values aren't here, but every change to one is: it's saved again.
+  const { rows: secrets } = await tx.query(
+    `SELECT name, application_id, value_bytes, updated_at FROM environments.secrets WHERE ${scope}`,
+    [environmentId, applicationId],
+  );
+  return createHash('sha256').update(JSON.stringify([variables, secrets])).digest('hex');
+}
+
+/** The variables an application gets in an environment, and where its secrets are. */
+async function resolveIn(
+  tx: TenantTransaction,
+  environmentId: string,
+  application: { readonly id: string; readonly slug: string },
+): Promise<ResolvedConfig> {
+  const { rows } = await tx.query<{ name: string; value: string; application_id: string | null }>(
+    `SELECT name, value, application_id FROM environments.variables
+     WHERE environment_id = $1 AND (application_id IS NULL OR application_id = $2)
+     ORDER BY application_id NULLS FIRST`,
+    [environmentId, application.id],
+  );
+  const variables: Record<string, string> = {};
+  for (const row of rows) {
+    variables[row.name] = row.value;
+  }
+  const { rows: secrets } = await tx.query<{ application_id: string | null }>(
+    `SELECT DISTINCT application_id FROM environments.secrets
+     WHERE environment_id = $1 AND (application_id IS NULL OR application_id = $2)`,
+    [environmentId, application.id],
+  );
+  return {
+    variables,
+    secretPaths: {
+      shared: secretPathOf(environmentId, null),
+      application: secretPathOf(environmentId, application.slug),
+    },
+    hasSharedSecrets: secrets.some((row) => row.application_id === null),
+    hasApplicationSecrets: secrets.some((row) => row.application_id !== null),
+  };
+}
+
+/** What changed about a variable or secret. Only its name is in the event, never its value. */
+type ValueEvent = typeof EnvironmentVariableSet | typeof EnvironmentVariableRemoved | typeof EnvironmentSecretSet | typeof EnvironmentSecretRemoved;
 
 /** Production's values belong to the people who run it; Company Admins manage test ones. */
 export function assertMayManage(actor: Principal, kind: EnvironmentKind): void {

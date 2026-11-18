@@ -1,6 +1,6 @@
 import { isUuid } from '@dreamdevops/shared-kernel';
-import type { Deployments, RunningVersion } from '../../deployments/application/deployments.ts';
-import { placeId } from '../../environments/domain/telemetry.ts';
+import type { RunningVersions, RunningVersion } from '@dreamdevops/contracts/deployments/services';
+import { placeId } from '@dreamdevops/contracts/environments/telemetry';
 
 /** One application running in one environment: what Monitoring shows, and what its telemetry is labelled by. */
 export interface RunningPlace {
@@ -22,13 +22,13 @@ export interface RunningPlace {
 }
 
 /**
- * What runs in the current company's environments, as places. Deployments knows what
+ * What runs in the current company's environments, as places. RunningVersions knows what
  * runs; this only names each one by its place, so the stores can be asked about it.
  */
 export class RunningPlaces {
-  readonly #deployments: Deployments;
+  readonly #deployments: RunningVersions;
 
-  constructor(deployments: Deployments) {
+  constructor(deployments: RunningVersions) {
     this.#deployments = deployments;
   }
 

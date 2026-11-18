@@ -1,3 +1,4 @@
+import type { LogEntry } from '@dreamdevops/contracts/deployments/services';
 /** Runs applications on targets the platform drives itself, such as This machine. */
 export const HOST_RUNTIME = Symbol('HOST_RUNTIME');
 
@@ -45,12 +46,8 @@ export interface Health {
   readonly detail: string;
 }
 
-/** One line a container wrote, with when it was received. */
-export interface LogEntry {
-  readonly at: Date;
-  readonly stream: 'stdout' | 'stderr';
-  readonly text: string;
-}
+// A line an application wrote is this context's published language, kept in its contracts.
+export type { LogEntry } from '@dreamdevops/contracts/deployments/services';
 
 /**
  * Runs images on one kind of target. Every method is safe to repeat, because a deployment

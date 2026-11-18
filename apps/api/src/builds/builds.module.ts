@@ -1,14 +1,19 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
+import { APPLICATION_DIRECTORY, type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import { CatalogModule } from '../catalog/catalog.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { SOURCE_HOST, type SourceHost } from '../source-governance/application/ports.ts';
-import { REPOSITORY_LOOKUP, type RepositoryLookup } from '../source-governance/application/repository-lookup.ts';
+import {
+  REPOSITORY_GIT,
+  REPOSITORY_LOOKUP,
+  type RepositoryGit,
+  type RepositoryLookup,
+} from '@dreamdevops/contracts/source-governance/services';
 import { SourceGovernanceModule } from '../source-governance/source-governance.module.ts';
 import { Builds } from './application/builds.ts';
 import { IMAGE_REGISTRY, type ImageRegistry, PIPELINE_HOST, type PipelineHost } from './application/ports.ts';
-import { SigningKeys } from './application/signing-keys.ts';
+import { BUILD_REQUESTS, DEPLOYABLE_IMAGES, IMAGE_SIGNING_KEYS } from '@dreamdevops/contracts/builds/services';
+import { CompanySigningKeys, SigningKeys } from './application/signing-keys.ts';
 import { BuildsController } from './http/builds.controller.ts';
 import { PipelineController } from './http/pipeline.controller.ts';
 import { ForgejoPipelineHost } from './infrastructure/forgejo-pipeline-host.ts';
@@ -39,9 +44,9 @@ export class BuildsModule {
               provide: Builds,
               useFactory: (
                 database: TenantDatabase,
-                catalog: ApplicationCatalog,
+                catalog: ApplicationDirectory,
                 repositories: RepositoryLookup,
-                host: SourceHost,
+                host: RepositoryGit,
                 registry: ImageRegistry,
                 pipelines: PipelineHost,
                 keys: SigningKeys,
@@ -53,7 +58,16 @@ export class BuildsModule {
                   // Read once at startup, so every build in a run uses the same pipeline.
                   pipelines: loadPipelines(config.pipelinesDir, config.imageRunnerLabel),
                 }),
-              inject: [TenantDatabase, ApplicationCatalog, REPOSITORY_LOOKUP, SOURCE_HOST, IMAGE_REGISTRY, PIPELINE_HOST, SigningKeys],
+              inject: [TenantDatabase, APPLICATION_DIRECTORY, REPOSITORY_LOOKUP, REPOSITORY_GIT, IMAGE_REGISTRY, PIPELINE_HOST, SigningKeys],
+            },
+            // What other contexts ask Builds for: releases' images, the images deployments run,
+            // and the public keys targets check them with.
+            { provide: BUILD_REQUESTS, useExisting: Builds },
+            { provide: DEPLOYABLE_IMAGES, useExisting: Builds },
+            {
+              provide: IMAGE_SIGNING_KEYS,
+              useFactory: (database: TenantDatabase, keys: SigningKeys) => new CompanySigningKeys(database, keys),
+              inject: [TenantDatabase, SigningKeys],
             },
             {
               provide: BuildsSubscriptions,
@@ -64,7 +78,7 @@ export class BuildsModule {
           settings.overrides,
         ),
         // Releases and deployments ask about builds; targets check images with the company's keys.
-        exports: [Builds, SigningKeys, BuildsSubscriptions],
+        exports: [BUILD_REQUESTS, DEPLOYABLE_IMAGES, IMAGE_SIGNING_KEYS, BuildsSubscriptions],
       };
     });
   }

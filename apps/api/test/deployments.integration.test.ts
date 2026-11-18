@@ -11,7 +11,7 @@ import { SigningKeys } from '../src/builds/application/signing-keys.ts';
 import { signaturePayload, signPayload } from '../src/builds/domain/cosign.ts';
 import { HOST_RUNTIME } from '../src/deployments/application/ports.ts';
 import { ENVIRONMENT_REPOSITORIES, SECRET_STORE } from '../src/environments/application/ports.ts';
-import { placeId } from '../src/environments/domain/telemetry.ts';
+import { placeId } from '@dreamdevops/contracts/environments/telemetry';
 import { TELEMETRY_SINK } from '../src/monitoring/application/ports.ts';
 import { AlertChecks } from '../src/alerts/application/alert-checks.ts';
 import { MAILER } from '../src/notifications/application/ports.ts';

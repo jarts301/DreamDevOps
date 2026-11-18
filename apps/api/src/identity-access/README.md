@@ -74,4 +74,6 @@ Right after registering, Keycloak hasn't recorded the password level, so a new C
 
 ## Events
 
-Changes publish `UserInvited`, `RoleGranted`, `MemberRemoved` and `InvitationRevoked` through the outbox. Their payloads hold IDs and roles, not email addresses or tokens.
+Changes publish `UserInvited`, `RoleGranted`, `MemberRemoved` and `InvitationRevoked` through the outbox, with contracts in `identity-access/events.ts` in the [contracts](../../../../packages/contracts/README.md). Their payloads hold IDs and roles, not email addresses or tokens.
+
+Other contexts use `Principal` and `hasPermissions`, in `identity-access/access.ts`, the role names in `identity-access/roles.ts`, and `CompanyMembers` and `FirstAdminInvitations`, in `identity-access/services.ts`.

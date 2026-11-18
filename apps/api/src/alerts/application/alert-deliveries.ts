@@ -1,10 +1,10 @@
 import { describeError, deterministicJobId, type JobQueue, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import type { CompanyMembers } from '../../identity-access/application/company-members.ts';
-import type { AlertEmails } from '../../notifications/application/alert-emails.ts';
-import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
+import type { CompanyMembers } from '@dreamdevops/contracts/identity-access/services';
+import type { AlertMailer } from '@dreamdevops/contracts/notifications/services';
+import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { describeCondition } from '../domain/alert.ts';
-import type { AlertResolved, AlertTriggered } from '../domain/events.ts';
+import type { AlertResolved, AlertTriggered } from '@dreamdevops/contracts/alerts/events';
 
 export const EMAIL_QUEUE = 'alerts.email';
 
@@ -25,10 +25,10 @@ export interface EmailJob {
 export class AlertDeliveries {
   readonly #database: TenantDatabase;
   readonly #companies: CompanyDirectory;
-  readonly #emails: AlertEmails;
+  readonly #emails: AlertMailer;
   readonly #members: CompanyMembers;
 
-  constructor(database: TenantDatabase, companies: CompanyDirectory, emails: AlertEmails, members: CompanyMembers) {
+  constructor(database: TenantDatabase, companies: CompanyDirectory, emails: AlertMailer, members: CompanyMembers) {
     this.#database = database;
     this.#companies = companies;
     this.#emails = emails;

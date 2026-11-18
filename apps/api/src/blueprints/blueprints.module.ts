@@ -1,6 +1,6 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { BLUEPRINT_CATALOG } from './application/blueprint-catalog.ts';
+import { BLUEPRINT_CATALOG } from '@dreamdevops/contracts/blueprints/services';
 import { BlueprintsController } from './http/blueprints.controller.ts';
 import { BlueprintLibrary } from './infrastructure/blueprint-library.ts';
 

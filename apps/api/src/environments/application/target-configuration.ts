@@ -1,7 +1,8 @@
+import type { TargetConfiguration } from '@dreamdevops/contracts/agent/protocol';
 import { currentCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { SigningKeys } from '../../builds/application/signing-keys.ts';
-import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
+import type { ImageSigningKeys } from '@dreamdevops/contracts/builds/services';
+import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import type { SealedBox } from '../../shared/sealed-box.ts';
 import { acceptedImageKinds, type EnvironmentKind } from '../domain/environment.ts';
 import { EnvironmentError } from '../domain/errors.ts';
@@ -18,26 +19,8 @@ export interface TargetConfigurationOptions {
   readonly agentApiUrl: string;
 }
 
-/** Everything a target needs to run its environment, as the agent fetches it. */
-export interface TargetConfiguration {
-  readonly environment: {
-    readonly id: string;
-    readonly name: string;
-    readonly slug: string;
-    readonly kind: EnvironmentKind;
-    readonly acceptedImages: readonly string[];
-  };
-  /** The company's images, and its read-only account for pulling them. */
-  readonly registry: { readonly host: string; readonly organization: string; readonly username: string; readonly token: string };
-  /** The only key whose signatures this environment accepts: the release key in production. */
-  readonly trustedKey: string;
-  /** The environment's repository, which Flux applies with the agent's deploy key. */
-  readonly git: { readonly url: string; readonly branch: string; readonly knownHosts: string };
-  /** A short-lived token that can only read this environment's secrets. */
-  readonly secrets: { readonly url: string; readonly mount: string; readonly path: string; readonly token: string; readonly expiresAt: string };
-  /** Where the target's collector sends its applications' metrics, traces and logs, and the token it sends them with. */
-  readonly telemetry: { readonly endpoint: string; readonly token: string; readonly expiresAt: string };
-}
+// What a target needs is the agent protocol, kept in the contracts.
+export type { TargetConfiguration } from '@dreamdevops/contracts/agent/protocol';
 
 interface EnvironmentRow {
   id: string;
@@ -72,7 +55,7 @@ export class TargetConfigurations {
   readonly #repositories: EnvironmentRepositories;
   readonly #pullAccounts: PullAccounts;
   readonly #secrets: SecretStore;
-  readonly #signingKeys: SigningKeys;
+  readonly #signingKeys: ImageSigningKeys;
   readonly #box: SealedBox;
   readonly #options: TargetConfigurationOptions;
 
@@ -83,7 +66,7 @@ export class TargetConfigurations {
     repositories: EnvironmentRepositories,
     pullAccounts: PullAccounts,
     secrets: SecretStore,
-    signingKeys: SigningKeys,
+    signingKeys: ImageSigningKeys,
     box: SealedBox,
     options: TargetConfigurationOptions,
   ) {
@@ -118,13 +101,9 @@ export class TargetConfigurations {
     const { companyId, environmentId, targetId } = await this.#agents.authenticate(accessToken);
     return runWithCompany(companyId, async () => {
       const repository = await this.repositoryOf(environmentId);
-      const { environment, trustedKey } = await this.#database.transaction(async (tx) => {
-        const row = await findEnvironment(tx, environmentId);
-        return {
-          environment: row,
-          trustedKey: await this.#signingKeys.publicKey(tx, row.kind === 'production' ? 'release' : 'test'),
-        };
-      });
+      const environment = await this.#database.transaction((tx) => findEnvironment(tx, environmentId));
+      // Builds' key, asked for once this context's transaction has ended.
+      const trustedKey = await this.#signingKeys.publicKey(environment.kind === 'production' ? 'release' : 'test');
       const pull = await this.#pullCredentials(repository.organization);
       const path = secretsPath(companyId, environmentId);
       const token = await this.#secrets.issueReadToken(`target-${environmentId}`, path);

@@ -1,7 +1,9 @@
 import { Body, Controller, Get, Header, Inject, Param, Post, Req } from '@nestjs/common';
+import type { BuildView, PublicSigningKey, RequestFeatureBuild, SbomDocument } from '@dreamdevops/contracts/builds/http';
+import type { Unchecked } from '@dreamdevops/contracts/http';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { REPOSITORY_LOOKUP, type RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
+import { REPOSITORY_LOOKUP, type RepositoryLookup } from '@dreamdevops/contracts/source-governance/services';
 import { Builds } from '../application/builds.ts';
 
 /** Every member can see builds and versions. Users without a company are refused. */
@@ -17,14 +19,14 @@ export class BuildsController {
 
   @Authenticated()
   @Get('applications/:id/builds')
-  list(@Param('id') id: string): Promise<object[]> {
+  list(@Param('id') id: string): Promise<BuildView[]> {
     return this.#builds.list(id);
   }
 
   /** The version list: signed images that passed every check. */
   @Authenticated()
   @Get('applications/:id/versions')
-  versions(@Param('id') id: string): Promise<object[]> {
+  versions(@Param('id') id: string): Promise<BuildView[]> {
     return this.#builds.versions(id);
   }
 
@@ -36,27 +38,31 @@ export class BuildsController {
 
   @RequirePermissions('feature-images:build')
   @Post('applications/:id/feature-builds')
-  featureBuild(@Req() request: ApiRequest, @Param('id') id: string, @Body() body: { branch?: unknown }): Promise<object> {
+  featureBuild(
+    @Req() request: ApiRequest,
+    @Param('id') id: string,
+    @Body() body: Unchecked<RequestFeatureBuild> | undefined,
+  ): Promise<BuildView> {
     return this.#builds.requestFeatureBuild(request.principal!, id, body?.branch);
   }
 
   @Authenticated()
   @Get('builds/:id')
-  get(@Param('id') id: string): Promise<object> {
+  get(@Param('id') id: string): Promise<BuildView> {
     return this.#builds.get(id);
   }
 
   @Authenticated()
   @Get('builds/:id/sbom')
   @Header('Content-Disposition', 'attachment; filename="sbom.cdx.json"')
-  sbom(@Param('id') id: string): Promise<object> {
+  sbom(@Param('id') id: string): Promise<SbomDocument> {
     return this.#builds.sbom(id);
   }
 
   /** The keys targets use to check images: test for feature and RC images, release for final ones. */
   @Authenticated()
   @Get('signing-keys')
-  signingKeys(): Promise<object[]> {
+  signingKeys(): Promise<PublicSigningKey[]> {
     return this.#builds.publicKeys();
   }
 }

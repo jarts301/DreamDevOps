@@ -1,35 +1,19 @@
 import { Logger } from '@nestjs/common';
-import { type CompanyId, createDomainEvent, currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { CompanyEditionChanged } from '@dreamdevops/contracts/editions/events';
+import type { CompanyEntitlements, EditionsOverview } from '@dreamdevops/contracts/editions/http';
+import type { FeatureAccess } from '@dreamdevops/contracts/editions/services';
+import { type CompanyId, currentCompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { Principal } from '../../identity-access/domain/access.ts';
-import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { EditionError } from '../domain/errors.ts';
 import { type Edition, FEATURES, parseEdition, resolveFeatures } from '../domain/features.ts';
 import type { EntitlementProvider, ProviderStatus } from './ports.ts';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 
-export interface FeatureView {
-  readonly key: string;
-  readonly name: string;
-  readonly edition: Edition;
-  readonly enabled: boolean;
-}
-
-export interface CompanyEntitlements {
-  readonly edition: Edition;
-  readonly features: readonly FeatureView[];
-}
-
-export interface CompanyEditionView {
-  readonly companyId: string;
-  readonly companyName: string;
-  readonly edition: Edition;
-  readonly changedAt: string | null;
-}
-
 /** Says which features each company has, and lets platform admins set each company's edition. */
-export class Entitlements {
+export class Entitlements implements FeatureAccess {
   readonly #logger = new Logger(Entitlements.name);
   readonly #database: TenantDatabase;
   readonly #companies: CompanyDirectory;
@@ -61,7 +45,7 @@ export class Entitlements {
   }
 
   /** Every company's edition, for platform admins. It reveals no company data. */
-  async listCompanies(): Promise<{ provider: ProviderStatus; companies: CompanyEditionView[] }> {
+  async listCompanies(): Promise<EditionsOverview> {
     const all = await this.#companies.all();
     const editions = await runWithCompany(NO_COMPANY, () =>
       this.#database.transaction(async (tx) => {
@@ -113,8 +97,7 @@ export class Entitlements {
           [companyId, edition, actor.userId],
         );
         await appendToOutbox(tx, [
-          createDomainEvent({
-            eventType: 'CompanyEditionChanged',
+          CompanyEditionChanged.create({
             companyId,
             actorId: actor.userId,
             payload: { edition, previousEdition: previous, changedBy: actor.userId },

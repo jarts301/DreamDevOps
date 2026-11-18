@@ -1,10 +1,34 @@
-import { type Check, failed, failures, passed, warning } from '../../shared/progress.ts';
-import { failedChecksReason, type PlatformChecks } from './image-rules.ts';
+import {
+  BUILD_STEPS,
+  type BuildKind,
+  type BuildStatus,
+  type BuildStep,
+  type JobProgress,
+  type JobState,
+  type Reports,
+  type ScanReport,
+  type SecretsReport,
+  type SigningPurpose,
+} from '@dreamdevops/contracts/builds/http';
+import { type Check, failed, failures, passed, warning } from './checks.ts';
+import { failedChecksReason } from './image-rules.ts';
 
-/** Images, plus checks: the platform's tests and secret scan for a pull request, with no image. */
-export type BuildKind = 'feature' | 'rc' | 'final' | 'check';
-export type BuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted';
-export type SigningPurpose = 'test' | 'release';
+// A build's kinds, status, steps and reports are Builds' published language, kept in its
+// contracts, where the dashboard reads them too.
+export type {
+  BuildKind,
+  BuildStatus,
+  BuildStep,
+  JobProgress,
+  JobState,
+  PipelineJob,
+  Reports,
+  ScanReport,
+  SecretsReport,
+  SigningPurpose,
+  TestsReport,
+} from '@dreamdevops/contracts/builds/http';
+export { BUILD_STEPS, PIPELINE_JOBS } from '@dreamdevops/contracts/builds/http';
 
 /**
  * Feature and RC images are signed with the test key, which production doesn't trust.
@@ -31,68 +55,8 @@ export function featureTag(branch: string, commit: string): string {
   return `feature-${name || 'branch'}-${commit.slice(0, 7)}`;
 }
 
-export interface SecretsReport {
-  readonly found: number;
-  /** Where each finding is, never the secret itself. */
-  readonly findings: readonly { readonly rule: string; readonly file: string; readonly line: number }[];
-}
-
-export interface TestsReport {
-  readonly passed: boolean;
-  /** The end of the test output. */
-  readonly log: string;
-}
-
-export interface ScanReport {
-  readonly critical: number;
-  readonly high: number;
-  readonly medium: number;
-  readonly low: number;
-  readonly unknown: number;
-}
-
-export interface Reports {
-  readonly secrets?: SecretsReport;
-  readonly tests?: TestsReport;
-  /** The end of a failed image build's output. */
-  readonly buildLog?: string;
-  readonly image?: { readonly digest: string; readonly size: number };
-  readonly scan?: ScanReport;
-  readonly sbom?: { readonly components: number };
-  /** When each pipeline job started, as the jobs report it. */
-  readonly started?: Readonly<Partial<Record<PipelineJob, string>>>;
-  /** The jobs the pipeline said failed or were cancelled. */
-  readonly failedJobs?: readonly string[];
-  /** The platform's own checks: the Dockerfile before the pipeline starts, */
-  readonly dockerfile?: PlatformChecks;
-  /** the image's settings when it arrives, before it's stored, */
-  readonly inspection?: PlatformChecks;
-  /** and the signature, read back from the registry once it's signed. */
-  readonly verification?: PlatformChecks;
-}
-
-/** The pipeline's jobs, in the order they run. Checks run only the first two. */
-export const PIPELINE_JOBS = ['secrets', 'test', 'image', 'scan', 'sbom'] as const;
-export type PipelineJob = (typeof PIPELINE_JOBS)[number];
-
-/**
- * Every step of a build, in order: the pipeline's jobs, and the checks the platform runs
- * itself, on the Dockerfile, the image it received, and the signature it stored.
- */
-export const BUILD_STEPS = ['dockerfile', 'secrets', 'test', 'image', 'inspect', 'scan', 'sbom', 'verify'] as const;
-export type BuildStep = (typeof BUILD_STEPS)[number];
 /** A pull request check builds no image, so it has only these. */
 const CHECK_STEPS: readonly BuildStep[] = ['dockerfile', 'secrets', 'test'];
-
-export type JobState = 'waiting' | 'running' | 'passed' | 'failed' | 'skipped';
-
-export interface JobProgress {
-  readonly job: BuildStep;
-  readonly state: JobState;
-  readonly startedAt: string | null;
-  /** What the step checked, with why each failed and how to fix it. */
-  readonly checks: readonly Check[];
-}
 
 const STEP_REPORT: Readonly<Record<BuildStep, keyof Reports>> = {
   dockerfile: 'dockerfile',
@@ -112,7 +76,7 @@ const STEP_REPORT: Readonly<Record<BuildStep, keyof Reports>> = {
  */
 export function buildProgress(
   kind: BuildKind,
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted',
+  status: BuildStatus,
   reports: Reports,
 ): JobProgress[] {
   const steps = kind === 'check' ? CHECK_STEPS : BUILD_STEPS;

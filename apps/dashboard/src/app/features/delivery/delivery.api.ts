@@ -1,150 +1,27 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { BuildView } from '@dreamdevops/contracts/builds/http';
+import type { ChangeRunning, DeploymentView, RequestDeployment, RunningVersion } from '@dreamdevops/contracts/deployments/http';
+import type { ReleaseKind, ReleasesOverview, ReleasesSynced, StartRelease } from '@dreamdevops/contracts/releases/http';
 import type { ProductionConfirmation } from '../../shared/production-confirmation';
 
-export type BuildKind = 'feature' | 'rc' | 'final' | 'check';
-export type BuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'deleted';
+// The API's answers are Builds', Releases' and Deployments' HTTP contracts, under the names the pages use.
+export type {
+  BuildKind,
+  BuildStatus,
+  Check as BuildCheck,
+  JobState,
+  /** A build's steps: the pipeline's jobs, and the platform's own checks of the Dockerfile, the image and its signature. */
+  BuildStep as PipelineJob,
+} from '@dreamdevops/contracts/builds/http';
+export type { DeploymentStatus, ResourceLimits, RunningVersion, Strategy } from '@dreamdevops/contracts/deployments/http';
+export type { ReleaseKind, ReleaseView as Release } from '@dreamdevops/contracts/releases/http';
+export type Build = BuildView;
+export type Releases = ReleasesOverview;
+export type Deployment = DeploymentView;
 
-/** A build's steps: the pipeline's jobs, and the platform's own checks of the Dockerfile, the image and its signature. */
-export type PipelineJob = 'dockerfile' | 'secrets' | 'test' | 'image' | 'inspect' | 'scan' | 'sbom' | 'verify';
-export type JobState = 'waiting' | 'running' | 'passed' | 'failed' | 'skipped';
-
-/** One rule a step checked. A warning is shown but doesn't stop the build. */
-export interface BuildCheck {
-  readonly name: string;
-  readonly outcome: 'passed' | 'failed' | 'warning';
-  readonly detail: string | null;
-}
-
-export interface Build {
-  readonly id: string;
-  readonly applicationId: string;
-  readonly kind: BuildKind;
-  readonly branch: string | null;
-  readonly commit: string;
-  readonly tag: string;
-  readonly version: string | null;
-  readonly releaseId: string | null;
-  readonly status: BuildStatus;
-  readonly failureReason: string | null;
-  readonly reports: {
-    readonly secrets?: { readonly found: number };
-    readonly tests?: { readonly passed: boolean; readonly log: string };
-    /** The end of a failed image build's output. */
-    readonly buildLog?: string;
-    readonly image?: { readonly digest: string; readonly size: number };
-    readonly scan?: {
-      readonly critical: number;
-      readonly high: number;
-      readonly medium: number;
-      readonly low: number;
-      readonly unknown: number;
-    };
-    readonly sbom?: { readonly components: number };
-  };
-  readonly progress: readonly {
-    readonly job: PipelineJob;
-    readonly state: JobState;
-    readonly startedAt: string | null;
-    readonly checks: readonly BuildCheck[];
-  }[];
-  readonly imageRef: string | null;
-  readonly digest: string | null;
-  readonly signedWith: 'test' | 'release' | null;
-  readonly createdAt: string;
-  readonly finishedAt: string | null;
-}
-
-export type ReleaseKind = 'release' | 'hotfix';
-
-export interface Release {
-  readonly id: string;
-  readonly kind: ReleaseKind;
-  readonly version: string;
-  readonly branch: string;
-  readonly status: 'open' | 'merged' | 'published';
-  readonly candidates: readonly {
-    readonly number: number;
-    readonly commit: string;
-    readonly tag: string;
-    readonly buildId: string | null;
-    readonly buildStatus: BuildStatus | null;
-  }[];
-  readonly mergeBackPullRequest: number | null;
-  readonly finalBuildId: string | null;
-  readonly finalBuildStatus: BuildStatus | null;
-  readonly createdAt: string;
-  readonly mergedAt: string | null;
-  readonly publishedAt: string | null;
-}
-
-export interface Releases {
-  readonly releases: readonly Release[];
-  readonly suggestions: Readonly<Record<ReleaseKind, string>>;
-}
-
-export type Strategy = 'recreate' | 'rolling' | 'blue-green';
-
-export type DeploymentStatus =
-  | 'awaiting-approval'
-  | 'rejected'
-  | 'queued'
-  | 'committed'
-  | 'progressing'
-  | 'paused'
-  | 'succeeded'
-  | 'failed'
-  | 'aborted'
-  | 'superseded';
-
-export interface Deployment {
-  readonly id: string;
-  readonly application: { readonly id: string; readonly name: string; readonly slug: string };
-  readonly environment: { readonly id: string; readonly name: string; readonly kind: 'test' | 'production' };
-  readonly version: { readonly buildId: string; readonly kind: string; readonly tag: string; readonly version: string | null };
-  readonly strategy: Strategy;
-  readonly status: DeploymentStatus;
-  readonly message: string | null;
-  readonly progress: {
-    readonly applied?: boolean;
-    readonly desired?: number;
-    readonly updated?: number;
-    readonly ready?: number;
-    readonly available?: number;
-  };
-  readonly rollbackOf: string | null;
-  readonly commit: string | null;
-  readonly requestedBy: { readonly userId: string; readonly displayName: string | null } | null;
-  readonly approvedBy: { readonly userId: string; readonly displayName: string | null } | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly finishedAt: string | null;
-  /** What it does: run a version, remove what runs, or run it again with the environment's values as they are now. */
-  readonly action: 'deploy' | 'stop' | 'apply';
-  readonly reason: string | null;
-  /** The CPU and memory it runs with, once committed. */
-  readonly limits: ResourceLimits | null;
-}
-
-export interface ResourceLimits {
-  readonly cpu: string;
-  readonly memory: string;
-}
-
-/** A version that runs in an environment now. */
-export interface RunningVersion {
-  readonly deploymentId: string;
-  readonly application: { readonly id: string; readonly name: string; readonly slug: string };
-  readonly environment: { readonly id: string; readonly name: string; readonly kind: 'test' | 'production' };
-  readonly version: { readonly buildId: string; readonly kind: string; readonly tag: string; readonly version: string | null };
-  readonly strategy: Strategy;
-  readonly limits: ResourceLimits | null;
-  readonly since: string | null;
-  /** The environment's values changed since it started. */
-  readonly settingsChanged: boolean;
-}
-
+/** What people can do to a deployment, each a route of its own. */
 export type DeploymentAction = 'approve' | 'reject' | 'promote' | 'abort' | 'rollback';
 
 @Injectable({ providedIn: 'root' })
@@ -172,12 +49,13 @@ export class DeliveryApi {
   }
 
   /** Asks the platform to catch up on merges and pushes to release branches it missed. */
-  syncReleases(applicationId: string): Promise<{ moved: number }> {
-    return firstValueFrom(this.#http.post<{ moved: number }>(`${applicationPath(applicationId)}/releases/sync`, {}));
+  syncReleases(applicationId: string): Promise<ReleasesSynced> {
+    return firstValueFrom(this.#http.post<ReleasesSynced>(`${applicationPath(applicationId)}/releases/sync`, {}));
   }
 
   startRelease(applicationId: string, kind: ReleaseKind, version: string): Promise<unknown> {
-    return firstValueFrom(this.#http.post(`${applicationPath(applicationId)}/releases`, { kind, version }));
+    const body: StartRelease = { kind, version };
+    return firstValueFrom(this.#http.post(`${applicationPath(applicationId)}/releases`, body));
   }
 
   deployments(filter: { application?: string; environment?: string }): Promise<Deployment[]> {
@@ -194,10 +72,11 @@ export class DeliveryApi {
   /** Production needs its name typed to confirm. */
   deploy(
     applicationId: string,
-    input: { environment: string; version: string; strategy: Strategy },
+    input: Pick<RequestDeployment, 'environment' | 'version' | 'strategy'>,
     confirmation?: ProductionConfirmation,
   ): Promise<Deployment> {
-    return firstValueFrom(this.#http.post<Deployment>(`${applicationPath(applicationId)}/deployments`, { ...input, ...confirmation }));
+    const body: RequestDeployment = { ...input, ...confirmation };
+    return firstValueFrom(this.#http.post<Deployment>(`${applicationPath(applicationId)}/deployments`, body));
   }
 
   running(filter: { application?: string; environment?: string }): Promise<RunningVersion[]> {
@@ -210,12 +89,8 @@ export class DeliveryApi {
     change: 'stop' | 'apply',
     confirmation?: ProductionConfirmation,
   ): Promise<Deployment> {
-    return firstValueFrom(
-      this.#http.post<Deployment>(`${applicationPath(running.application.id)}/${change}`, {
-        environment: running.environment.id,
-        ...confirmation,
-      }),
-    );
+    const body: ChangeRunning = { environment: running.environment.id, ...confirmation };
+    return firstValueFrom(this.#http.post<Deployment>(`${applicationPath(running.application.id)}/${change}`, body));
   }
 
   act(deploymentId: string, action: DeploymentAction, confirmation?: ProductionConfirmation): Promise<unknown> {

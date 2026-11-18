@@ -1,12 +1,16 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import { Builds } from '../builds/application/builds.ts';
+import { BUILD_REQUESTS, type BuildRequests } from '@dreamdevops/contracts/builds/services';
 import { BuildsModule } from '../builds/builds.module.ts';
-import { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
+import { APPLICATION_DIRECTORY, type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import { CatalogModule } from '../catalog/catalog.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { SOURCE_HOST, type SourceHost } from '../source-governance/application/ports.ts';
-import { REPOSITORY_LOOKUP, type RepositoryLookup } from '../source-governance/application/repository-lookup.ts';
+import {
+  REPOSITORY_GIT,
+  REPOSITORY_LOOKUP,
+  type RepositoryGit,
+  type RepositoryLookup,
+} from '@dreamdevops/contracts/source-governance/services';
 import { SourceGovernanceModule } from '../source-governance/source-governance.module.ts';
 import { Releases } from './application/releases.ts';
 import { ReleasesController } from './http/releases.controller.ts';
@@ -26,12 +30,12 @@ export class ReleasesModule {
             provide: Releases,
             useFactory: (
               database: TenantDatabase,
-              catalog: ApplicationCatalog,
+              catalog: ApplicationDirectory,
               repositories: RepositoryLookup,
-              host: SourceHost,
-              builds: Builds,
+              host: RepositoryGit,
+              builds: BuildRequests,
             ) => new Releases(database, catalog, repositories, host, builds),
-            inject: [TenantDatabase, ApplicationCatalog, REPOSITORY_LOOKUP, SOURCE_HOST, Builds],
+            inject: [TenantDatabase, APPLICATION_DIRECTORY, REPOSITORY_LOOKUP, REPOSITORY_GIT, BUILD_REQUESTS],
           },
           {
             provide: ReleasesSubscriptions,

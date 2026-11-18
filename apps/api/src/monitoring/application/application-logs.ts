@@ -1,20 +1,12 @@
-import type { Deployments } from '../../deployments/application/deployments.ts';
+import type { RunningVersions } from '@dreamdevops/contracts/deployments/services';
+import type { EnvironmentLogView } from '@dreamdevops/contracts/monitoring/http';
 import { MonitoringError } from '../domain/errors.ts';
-import { type LogLine, MAX_LOG_LINES, parseLogLine } from '../domain/logs.ts';
-import { parseRange, type TimeRangeKey } from '../domain/metrics.ts';
+import { MAX_LOG_LINES, parseLogLine } from '../domain/logs.ts';
+import { parseRange } from '../domain/metrics.ts';
 import { type LogEntry, type LogStore, LogsUnavailableError } from './ports.ts';
 import type { RunningPlaces } from './running-places.ts';
 
 const NOT_SET_UP = 'This server doesn’t keep the logs of applications in clusters. An administrator can set it up with LOKI_URL.';
-
-export interface EnvironmentLogView {
-  readonly placeId: string;
-  /** Whether a version runs there. When none does, there's nothing to read. */
-  readonly running: boolean;
-  readonly range: { readonly key: TimeRangeKey; readonly start: string; readonly end: string };
-  /** Oldest first, the latest MAX_LOG_LINES at most. */
-  readonly lines: readonly LogLine[];
-}
 
 /**
  * What applications in the company's environments write: every line of their output, with
@@ -24,11 +16,11 @@ export interface EnvironmentLogView {
  */
 export class ApplicationLogs {
   readonly #places: RunningPlaces;
-  readonly #deployments: Deployments;
+  readonly #deployments: RunningVersions;
   readonly #store: LogStore | null;
   readonly #now: () => Date;
 
-  constructor(places: RunningPlaces, deployments: Deployments, store: LogStore | null, now: () => Date = () => new Date()) {
+  constructor(places: RunningPlaces, deployments: RunningVersions, store: LogStore | null, now: () => Date = () => new Date()) {
     this.#places = places;
     this.#deployments = deployments;
     this.#store = store;

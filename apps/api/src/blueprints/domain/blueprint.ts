@@ -1,36 +1,8 @@
 import { createHash } from 'node:crypto';
+import type { BlueprintFile, BlueprintManifest, ScaffoldValues } from '@dreamdevops/contracts/blueprints/services';
 
-/** What a blueprint version defines, read from its blueprint.json. */
-export interface BlueprintManifest {
-  readonly key: string;
-  readonly version: string;
-  readonly applicationType: string;
-  readonly name: string;
-  readonly description: string;
-  readonly language: string;
-  readonly framework: string;
-  readonly runtime: {
-    readonly port: number;
-    readonly livenessPath: string;
-    readonly readinessPath: string;
-    readonly resources: { readonly cpu: string; readonly memory: string };
-    readonly configuration: string;
-  };
-  readonly telemetry: string;
-  readonly pipeline: string;
-  readonly strategies: readonly string[];
-}
-
-export interface BlueprintFile {
-  readonly path: string;
-  readonly content: Buffer;
-}
-
-/** The values a scaffold is filled in with. */
-export interface ScaffoldValues {
-  readonly name: string;
-  readonly slug: string;
-}
+// The blueprints' shapes are Blueprints' published language, kept in its contracts.
+export type { BlueprintFile, BlueprintManifest, ScaffoldValues } from '@dreamdevops/contracts/blueprints/services';
 
 const KEY_PATTERN = /^[a-z][a-z0-9-]{1,39}$/;
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;

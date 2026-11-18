@@ -3,23 +3,12 @@ import { HttpClient } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, type OnInit, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
+import type { CreateRule, NotifiableEventType, RuleKind, RuleTestResult, RuleView, UpdateRule } from '@dreamdevops/contracts/notifications/http';
 import { PageActivity } from '../../core/page-activity';
 
-export interface NotificationRule {
-  readonly id: string;
-  readonly name: string;
-  readonly kind: 'slack' | 'generic';
-  readonly destination: string;
-  readonly eventTypes: readonly string[];
-  readonly enabled: boolean;
-  readonly lastDeliveryAt: string | null;
-  readonly lastError: string | null;
-}
-
-interface EventType {
-  readonly type: string;
-  readonly description: string;
-}
+// The API's answers are Notifications' HTTP contract, under the names the page uses.
+export type NotificationRule = RuleView;
+type EventType = NotifiableEventType;
 
 const BASE = '/api/v1/company/notification-rules';
 
@@ -161,7 +150,7 @@ export class Notifications implements OnInit {
 
   protected readonly form = this.#forms.group({
     name: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(80)]],
-    kind: ['slack' as 'slack' | 'generic', Validators.required],
+    kind: ['slack' as RuleKind, Validators.required],
     url: ['', [Validators.required, Validators.pattern(/^https?:\/\/.+/)]],
   });
 
@@ -184,7 +173,8 @@ export class Notifications implements OnInit {
 
   protected async create(): Promise<void> {
     await this.#activity.run(async () => {
-      await firstValueFrom(this.#http.post(BASE, { ...this.form.getRawValue(), eventTypes: [...this.chosen()] }));
+      const rule: CreateRule = { ...this.form.getRawValue(), eventTypes: [...this.chosen()] };
+      await firstValueFrom(this.#http.post<NotificationRule>(BASE, rule));
       this.form.reset();
       this.chosen.set(new Set());
       this.notice.set('Rule created.');
@@ -194,9 +184,7 @@ export class Notifications implements OnInit {
 
   protected async test(rule: NotificationRule): Promise<void> {
     await this.#activity.run(async () => {
-      const result = await firstValueFrom(
-        this.#http.post<{ delivered: boolean; error: string | null }>(`${BASE}/${rule.id}/test`, {}),
-      );
+      const result = await firstValueFrom(this.#http.post<RuleTestResult>(`${BASE}/${rule.id}/test`, {}));
       if (result.delivered) {
         this.notice.set(`A test message was sent to ${rule.destination}.`);
       } else {
@@ -208,7 +196,8 @@ export class Notifications implements OnInit {
 
   protected async toggle(rule: NotificationRule): Promise<void> {
     await this.#activity.run(async () => {
-      await firstValueFrom(this.#http.patch(`${BASE}/${rule.id}`, { enabled: !rule.enabled }));
+      const changes: UpdateRule = { enabled: !rule.enabled };
+      await firstValueFrom(this.#http.patch<NotificationRule>(`${BASE}/${rule.id}`, changes));
       await this.#refresh();
     });
   }

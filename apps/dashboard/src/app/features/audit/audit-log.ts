@@ -1,7 +1,6 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, type OnInit, signal } from '@angular/core';
 import { errorMessage } from '../../core/api-error';
-import { describeEvent } from '../../core/events';
 import { type AuditEntry, AuditApi, type IntegrityCheck } from './audit.api';
 
 @Component({
@@ -57,7 +56,7 @@ import { type AuditEntry, AuditApi, type IntegrityCheck } from './audit.api';
                   <td>{{ entry.sequence }}</td>
                   <td>{{ entry.occurredAt | date: 'medium' }}</td>
                   <td>{{ actorName(entry) }}</td>
-                  <td>{{ describe(entry) }}</td>
+                  <td>{{ entry.description }}</td>
                 </tr>
               }
             </tbody>
@@ -88,10 +87,6 @@ export class AuditLog implements OnInit {
 
   protected actorName(entry: AuditEntry): string {
     return entry.actor === null ? 'DreamDevOps' : (entry.actor.displayName ?? 'A former user');
-  }
-
-  protected describe(entry: AuditEntry): string {
-    return describeEvent(entry.eventType, entry.payload);
   }
 
   protected async loadMore(): Promise<void> {

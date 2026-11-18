@@ -1,4 +1,5 @@
-import { createDomainEvent, parseCompanyId } from '@dreamdevops/shared-kernel';
+import { ApplicationArchived, ApplicationRegistered, ApplicationRestored, ApplicationUpdated } from '@dreamdevops/contracts/catalog/events';
+import { parseCompanyId } from '@dreamdevops/shared-kernel';
 import { describe, expect, it } from 'vitest';
 import { applicationSlug, normalizeApplicationName, normalizeDescription } from '../src/catalog/domain/application.ts';
 import { summarize } from '../src/notifications/domain/event-catalog.ts';
@@ -47,23 +48,26 @@ describe('application short names', () => {
 });
 
 describe('application notifications', () => {
-  const event = (eventType: string, payload: object) =>
-    createDomainEvent({ eventType, companyId: parseCompanyId(COMPANY_A), payload });
+  const companyId = parseCompanyId(COMPANY_A);
+  const applicationId = '00000000-0000-4000-8000-0000000000a1';
 
   it('describe each change', () => {
-    expect(summarize(event('ApplicationRegistered', { name: 'Billing' }), 'Acme')).toBe(
-      'Acme: The application "Billing" was registered.',
-    );
-    expect(summarize(event('ApplicationUpdated', { name: 'Payments', previousName: 'Billing' }), 'Acme')).toBe(
-      'Acme: The application "Billing" was renamed to "Payments".',
-    );
-    expect(summarize(event('ApplicationUpdated', { descriptionChanged: true }), 'Acme')).toBe(
+    expect(
+      summarize(ApplicationRegistered.create({ companyId, payload: { applicationId, name: 'Billing', slug: 'billing', type: 'restful-service' } }), 'Acme'),
+    ).toBe('Acme: The application "Billing" was registered.');
+    expect(
+      summarize(
+        ApplicationUpdated.create({ companyId, payload: { applicationId, name: 'Payments', previousName: 'Billing', descriptionChanged: false } }),
+        'Acme',
+      ),
+    ).toBe('Acme: The application "Billing" was renamed to "Payments".');
+    expect(summarize(ApplicationUpdated.create({ companyId, payload: { applicationId, descriptionChanged: true } }), 'Acme')).toBe(
       "Acme: An application's description changed.",
     );
-    expect(summarize(event('ApplicationArchived', { name: 'Billing' }), 'Acme')).toBe(
+    expect(summarize(ApplicationArchived.create({ companyId, payload: { applicationId, name: 'Billing' } }), 'Acme')).toBe(
       'Acme: The application "Billing" was archived.',
     );
-    expect(summarize(event('ApplicationRestored', { name: 'Billing' }), 'Acme')).toBe(
+    expect(summarize(ApplicationRestored.create({ companyId, payload: { applicationId, name: 'Billing' } }), 'Acme')).toBe(
       'Acme: The application "Billing" was restored.',
     );
   });

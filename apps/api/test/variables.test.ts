@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ENVIRONMENT_ATTRIBUTE, placeId, withTelemetry } from '../src/environments/domain/telemetry.ts';
+import { ENVIRONMENT_ATTRIBUTE, placeId, withTelemetry } from '@dreamdevops/contracts/environments/telemetry';
 import {
   assertWithinLimits,
   MAX_TOTAL_BYTES,

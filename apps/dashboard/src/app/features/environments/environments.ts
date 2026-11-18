@@ -26,6 +26,7 @@ const TARGET_LABELS: Readonly<Record<TargetStatus, string>> = {
   pending: 'Waiting for the agent',
   connected: 'Connected',
   lost: 'Not reporting',
+  revoked: 'Disconnected',
 };
 
 const IMAGE_LABELS: Readonly<Record<string, string>> = { feature: 'feature', rc: 'RC', final: 'final' };

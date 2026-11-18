@@ -6,7 +6,7 @@ Keeps the register of companies and sets up the resources each one needs. Only p
 
 | Action | Route | Effect |
 |---|---|---|
-| Create | `POST /platform/companies` | Creates the company and invites its first admin in one step, then sets up its resources in the background |
+| Create | `POST /platform/companies` | Creates the company, then invites its first admin, and sets up its resources in the background |
 | Rename | `PATCH /platform/companies/:id` | Changes the name everywhere, including the Git organization's display name. The short name stays fixed. |
 | Suspend | `POST /platform/companies/:id/suspend` | Blocks every member on their next request, and stops invitations from being accepted. Nothing is deleted. |
 | Reactivate | `POST /platform/companies/:id/reactivate` | Restores access, then checks the company's resources again |
@@ -47,4 +47,6 @@ Changes publish `CompanyCreated`, `CompanyRenamed`, `CompanySuspended`, `Company
 
 ## For other modules
 
-Other modules read companies through `CompanyDirectory`, in `application/company-directory.ts`, which finds a company by ID or slug, or lists them all. It's in a Nest module of its own, `CompanyDirectoryModule`, so using it doesn't depend on the rest of Tenancy. No other module reads Tenancy's tables. See the [architecture guide](../../../../ARCHITECTURE.md).
+Other contexts read companies through `CompanyDirectory`, injected with the `COMPANY_DIRECTORY` token, in `tenancy/services.ts` in the [contracts](../../../../packages/contracts/README.md). It finds a company by ID or slug, or lists them all. It's provided by a Nest module of its own, `CompanyDirectoryModule`, so using it doesn't depend on the rest of Tenancy. No other context reads Tenancy's tables.
+
+Creating a company asks Identity and access, through `FIRST_ADMIN_INVITATIONS`, to invite its first admin once the company is made. The two are separate steps, each in its own context's data, so if the invitation fails, the company stays and a platform admin invites its first admin again with `POST /platform/companies/:id/first-admin-invitation`. The first admin's address is checked before the company is made. See the [architecture guide](../../../../ARCHITECTURE.md).

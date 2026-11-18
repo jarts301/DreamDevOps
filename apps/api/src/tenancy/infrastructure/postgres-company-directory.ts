@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { CompanyDirectory, CompanyRecord } from '../application/company-directory.ts';
+import type { CompanyDirectory, CompanyRecord } from '@dreamdevops/contracts/tenancy/services';
 
 const SELECT_COMPANIES = 'SELECT id, name, slug, status FROM tenancy.companies';
 

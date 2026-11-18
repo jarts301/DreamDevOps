@@ -18,7 +18,7 @@ Each repository's webhook is set up by Source Governance with its own secret, de
 | Push to a branch | `CodePushed`, with the branch, the new commit and the pusher's Git username |
 | Push that deletes a branch, or a `delete` event | `BranchDeleted` |
 | `create` of a branch | `BranchCreated` |
-| Pull request opened | `PullRequestOpened` |
+| Pull request opened, reopened or pushed to | `PullRequestUpdated`, with its newest commit |
 | Pull request merged | `PullRequestMerged`, with the merge commit |
 
 Tag pushes are ignored, because only the platform makes version tags. So is any event nothing reacts to. Payloads hold branch names, commits and Git usernames, which are Keycloak user IDs, never names or emails.

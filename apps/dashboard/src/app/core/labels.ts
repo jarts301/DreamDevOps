@@ -1,10 +1,4 @@
-const ROLE_NAMES: Readonly<Record<string, string>> = {
-  'company-admin': 'Company Admin',
-  'tech-lead': 'Tech Lead',
-  developer: 'Developer',
-  operator: 'Operator',
-  viewer: 'Viewer',
-};
+import { roleName as contractRoleName } from '@dreamdevops/contracts/identity-access/roles';
 
 const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'companies:manage': 'Start new companies',
@@ -29,8 +23,9 @@ const PERMISSION_DESCRIPTIONS: Readonly<Record<string, string>> = {
   'alerts:manage': 'Manage alerts on metrics, and whom they email',
 };
 
+/** A role's name, such as "Tech Lead", as Identity and access's contracts name it. */
 export function roleName(role: string | null): string {
-  return role === null ? 'No role' : (ROLE_NAMES[role] ?? role);
+  return role === null ? 'No role' : contractRoleName(role);
 }
 
 export function permissionDescription(permission: string): string {

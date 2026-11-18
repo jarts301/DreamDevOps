@@ -41,6 +41,8 @@ const STRATEGY_LABELS: Readonly<Record<Strategy, string>> = {
   recreate: 'Recreate',
   rolling: 'Rolling',
   'blue-green': 'Blue/green',
+  canary: 'Canary',
+  'a-b': 'A/B',
 };
 
 const ACTION_LABELS: Readonly<Record<DeploymentAction, string>> = {

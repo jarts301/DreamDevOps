@@ -1,7 +1,7 @@
 import { DomainError } from '@dreamdevops/shared-kernel';
-import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
-import type { Environments } from '../../environments/application/environments.ts';
-import { placeId } from '../../environments/domain/telemetry.ts';
+import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import type { EnvironmentDirectory } from '@dreamdevops/contracts/environments/services';
+import { placeId } from '@dreamdevops/contracts/environments/telemetry';
 
 /** What an alert watches: one application in one environment, named as people know it. */
 export interface Place {
@@ -20,15 +20,15 @@ export interface PlaceRow {
 }
 
 /**
- * Names the places alerts watch, through what Environments and the catalog publish. Both
+ * Names the places alerts watch, through what EnvironmentDirectory and the catalog publish. Both
  * answer in the current company only, so another company's are never found. A place is
  * named whether or not something runs there now.
  */
 export class Places {
-  readonly #environments: Pick<Environments, 'get'>;
-  readonly #catalog: Pick<ApplicationCatalog, 'get'>;
+  readonly #environments: Pick<EnvironmentDirectory, 'get'>;
+  readonly #catalog: Pick<ApplicationDirectory, 'get'>;
 
-  constructor(environments: Pick<Environments, 'get'>, catalog: Pick<ApplicationCatalog, 'get'>) {
+  constructor(environments: Pick<EnvironmentDirectory, 'get'>, catalog: Pick<ApplicationDirectory, 'get'>) {
     this.#environments = environments;
     this.#catalog = catalog;
   }

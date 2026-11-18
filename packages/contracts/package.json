@@ -1,0 +1,32 @@
+{
+  "name": "@dreamdevops/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "What each bounded context publishes to the others, to the dashboard and to the agent: its events, the queries and commands it answers, its HTTP shapes and the agent protocol.",
+  "exports": {
+    "./*": {
+      "@dreamdevops/source": "./src/*.ts",
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "npm run build -w @dreamdevops/shared-kernel",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@dreamdevops/shared-kernel": "*",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

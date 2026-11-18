@@ -1,5 +1,6 @@
 import { parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import type { ApplicationCatalog, ApplicationType, BlueprintChoice } from '../catalog/application/application-catalog.ts';
+import type { ApplicationType, BlueprintChoice } from '@dreamdevops/contracts/catalog/http';
+import type { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
 import type { Environments } from '../environments/application/environments.ts';
 import { LOCAL_PROVIDER } from '../environments/domain/hosting-providers.ts';
 import type { Principal } from '../identity-access/domain/access.ts';

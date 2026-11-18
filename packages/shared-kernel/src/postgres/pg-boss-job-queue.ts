@@ -1,6 +1,12 @@
 import { PgBoss } from 'pg-boss';
-import { deadLetterQueueName, UnrecoverableJobError } from '../application/ports.ts';
-import type { JobHandler, JobQueue, QueueOptions, WorkOptions } from '../application/ports.ts';
+import {
+  deadLetterQueueName,
+  type JobHandler,
+  type JobQueue,
+  type QueueOptions,
+  UnrecoverableJobError,
+  type WorkOptions,
+} from '../application/ports.ts';
 
 export interface PgBossJobQueueOptions {
   /** Connection string for the dreamdevops_jobs role. */

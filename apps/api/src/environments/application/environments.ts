@@ -1,7 +1,30 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId } from '@dreamdevops/shared-kernel';
+import {
+  EnvironmentArchived,
+  EnvironmentCreated,
+  EnvironmentRestored,
+  EnvironmentUpdated,
+  TargetConnected,
+  TargetRegistrationStarted,
+  TargetRevoked,
+} from '@dreamdevops/contracts/environments/events';
+import type {
+  Connection,
+  ConnectTarget,
+  CreateEnvironment,
+  EnvironmentView,
+  ProductionConfirmation,
+  ProviderView,
+  TargetStatus,
+  TargetView,
+  UpdateEnvironment,
+} from '@dreamdevops/contracts/environments/http';
+import { authorizeChange, type ProtectedChange } from '@dreamdevops/contracts/environments/protection';
+import type { EnvironmentDirectory } from '@dreamdevops/contracts/environments/services';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import { currentCompanyId } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { Principal } from '../../identity-access/domain/access.ts';
 import { keyFingerprint, newToken, REGISTRATION_MINUTES } from '../domain/agent-identity.ts';
 import {
   acceptedImageKinds,
@@ -17,64 +40,14 @@ import {
   findProvider,
   HOSTING_PROVIDERS,
   type HostingProvider,
+  type HostingProviderKey,
   type HostingSettings,
   KUBERNETES_PROVIDER,
   LOCAL_PROVIDER,
   parseSettings,
 } from '../domain/hosting-providers.ts';
-import { authorizeChange, type ProtectedChange } from '../domain/protection.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export type TargetStatus = 'pending' | 'connected' | 'lost' | 'revoked';
-
-export interface TargetView {
-  readonly id: string;
-  /** What runs the environment: a Kubernetes cluster with the agent, or This machine. */
-  readonly provider: string;
-  /** The provider's settings, such as the host name people reach This machine by. */
-  readonly settings: HostingSettings;
-  readonly status: TargetStatus;
-  readonly registrationExpiresAt: string | null;
-  readonly keyFingerprint: string | null;
-  readonly agentVersion: string | null;
-  readonly kubernetesVersion: string | null;
-  readonly registeredAt: string | null;
-  readonly lastSeenAt: string | null;
-  readonly createdAt: string;
-}
-
-export interface EnvironmentView {
-  readonly id: string;
-  readonly name: string;
-  readonly slug: string;
-  readonly kind: EnvironmentKind;
-  readonly acceptsFeatureImages: boolean;
-  readonly acceptedImages: readonly string[];
-  /** Production only: a second person approves each deployment. */
-  readonly requiresApproval: boolean;
-  readonly status: EnvironmentStatus;
-  readonly createdAt: string;
-  readonly archivedAt: string | null;
-  /** The target that runs it, unless none is connected or being connected. */
-  readonly target: TargetView | null;
-}
-
-export interface Connection {
-  readonly targetId: string;
-  readonly provider: string;
-  /** For a cluster: shown once. Only its hash is stored. Null for This machine, which needs no agent. */
-  readonly registrationToken: string | null;
-  readonly expiresAt: string | null;
-  /** For a cluster: the command to run against it. */
-  readonly command: string | null;
-}
-
-/** A place environments can run, and whether it can be chosen on this server. */
-export interface ProviderView extends HostingProvider {
-  /** Why it can't be chosen, or null when it can. */
-  readonly unavailableReason: string | null;
-}
 
 export interface EnvironmentsOptions {
   /** Where agents reach the API. */
@@ -100,7 +73,7 @@ interface EnvironmentRow {
 interface TargetRow {
   id: string;
   environment_id: string;
-  provider: string;
+  provider: HostingProviderKey;
   settings: HostingSettings;
   status: TargetStatus;
   registration_expires_at: Date | null;
@@ -116,7 +89,7 @@ const TARGET_COLUMNS = `id, environment_id, provider, settings, status, registra
   kubernetes_version, registered_at, last_seen_at, created_at`;
 
 /** Each company's environments and the targets that run them. Every query runs in the current company. */
-export class Environments {
+export class Environments implements EnvironmentDirectory {
   readonly #database: TenantDatabase;
   readonly #options: EnvironmentsOptions;
 
@@ -154,7 +127,7 @@ export class Environments {
 
   async create(
     actor: Principal,
-    input: { name?: unknown; kind?: unknown; acceptsFeatureImages?: unknown; reason?: unknown },
+    input: Unchecked<CreateEnvironment>,
   ): Promise<EnvironmentView> {
     const name = normalizeEnvironmentName(input.name);
     const kind = parseKind(input.kind);
@@ -175,8 +148,7 @@ export class Environments {
         [id, companyId, name, slug, kind, featureImages, actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'EnvironmentCreated',
+        EnvironmentCreated.create({
           companyId,
           actorId: actor.userId,
           payload: { environmentId: id, name, slug, kind, acceptsFeatureImages: featureImages, ...(reason !== null && { reason }) },
@@ -193,7 +165,7 @@ export class Environments {
   update(
     actor: Principal,
     idValue: unknown,
-    input: { name?: unknown; acceptsFeatureImages?: unknown; requiresApproval?: unknown; confirmation?: unknown; reason?: unknown },
+    input: Unchecked<UpdateEnvironment>,
   ): Promise<void> {
     const id = parseId(idValue, 'environment');
     const name = input.name === undefined ? undefined : normalizeEnvironmentName(input.name);
@@ -213,7 +185,13 @@ export class Environments {
       if (requiresApproval && current.kind !== 'production') {
         throw new EnvironmentError('invalid', 'Only production deployments can need approval.');
       }
-      const changes: Record<string, unknown> = {};
+      const changes: {
+        requiresApproval?: boolean;
+        name?: string;
+        previousName?: string;
+        acceptsFeatureImages?: boolean;
+        reason?: string;
+      } = {};
       if (requiresApproval !== current.requires_approval) {
         changes.requiresApproval = requiresApproval;
       }
@@ -240,8 +218,7 @@ export class Environments {
         [id, name ?? current.name, featureImages, requiresApproval],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'EnvironmentUpdated',
+        EnvironmentUpdated.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { environmentId: id, ...changes },
@@ -251,7 +228,7 @@ export class Environments {
   }
 
   /** Hides the environment. It must have no target, so nothing keeps running unseen. */
-  archive(actor: Principal, idValue: unknown, request: { confirmation?: unknown; reason?: unknown } = {}): Promise<void> {
+  archive(actor: Principal, idValue: unknown, request: Unchecked<ProductionConfirmation> = {}): Promise<void> {
     return this.#setStatus(actor, idValue, 'archived', request);
   }
 
@@ -263,7 +240,7 @@ export class Environments {
     actor: Principal,
     idValue: unknown,
     status: EnvironmentStatus,
-    request: { confirmation?: unknown; reason?: unknown },
+    request: Unchecked<ProductionConfirmation>,
   ): Promise<void> {
     const id = parseId(idValue, 'environment');
     return this.#database.transaction(async (tx) => {
@@ -282,8 +259,7 @@ export class Environments {
         [id, status],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: status === 'archived' ? 'EnvironmentArchived' : 'EnvironmentRestored',
+        (status === 'archived' ? EnvironmentArchived : EnvironmentRestored).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { environmentId: id, name: current.name, ...(reason !== null && { reason }) },
@@ -301,7 +277,7 @@ export class Environments {
     return HOSTING_PROVIDERS.map((provider) => ({ ...provider, unavailableReason: this.#unavailable(provider) }));
   }
 
-  connect(actor: Principal, idValue: unknown, input: { provider?: unknown; settings?: unknown } = {}): Promise<Connection> {
+  connect(actor: Principal, idValue: unknown, input: Unchecked<ConnectTarget> = {}): Promise<Connection> {
     const id = parseId(idValue, 'environment');
     const companyId = currentCompanyId();
     const provider = findProvider(input.provider ?? KUBERNETES_PROVIDER);
@@ -344,8 +320,7 @@ export class Environments {
         [targetId, companyId, id, hash, REGISTRATION_MINUTES, actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'TargetRegistrationStarted',
+        TargetRegistrationStarted.create({
           companyId,
           actorId: actor.userId,
           payload: { environmentId: id, environmentName: environment.name, targetId },
@@ -389,8 +364,7 @@ export class Environments {
         [targetId, companyId, id, LOCAL_PROVIDER, JSON.stringify(settings), actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'TargetConnected',
+        TargetConnected.create({
           companyId,
           actorId: actor.userId,
           payload: { environmentId: id, environmentName: environment.name, targetId, provider: LOCAL_PROVIDER },
@@ -411,7 +385,7 @@ export class Environments {
   }
 
   /** Cuts the target off: its key and tokens stop working at once, and a new one can connect. */
-  disconnect(actor: Principal, idValue: unknown, request: { confirmation?: unknown; reason?: unknown } = {}): Promise<void> {
+  disconnect(actor: Principal, idValue: unknown, request: Unchecked<ProductionConfirmation> = {}): Promise<void> {
     const id = parseId(idValue, 'environment');
     return this.#database.transaction(async (tx) => {
       const environment = await findOrFail(tx, id, { lock: true });
@@ -428,8 +402,7 @@ export class Environments {
         [target.id, actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'TargetRevoked',
+        TargetRevoked.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: {
@@ -550,7 +523,7 @@ function authorize(
   actor: Principal,
   environment: { readonly name: string; readonly kind: EnvironmentKind },
   change: ProtectedChange,
-  request: { confirmation?: unknown; reason?: unknown },
+  request: Unchecked<ProductionConfirmation>,
 ): string | null {
   return authorizeChange({ name: environment.name, production: environment.kind === 'production' }, change, {
     canManageProduction: actor.permissions.includes('environments-production:manage'),

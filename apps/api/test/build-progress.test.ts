@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildProgress } from '../src/builds/domain/build.ts';
-import { failed, passed, warning } from '../src/shared/progress.ts';
+import { failed, passed, warning } from '../src/builds/domain/checks.ts';
 
 const states = (progress: ReturnType<typeof buildProgress>) => progress.map((step) => step.state);
 const dockerfile = { checks: [passed('The repository has a Dockerfile')], facts: [] };

@@ -2,7 +2,7 @@ import { type DynamicModule, Module } from '@nestjs/common';
 import type pg from 'pg';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { DATABASE_POOL } from '../tokens.ts';
-import { COMPANY_DIRECTORY } from './application/company-directory.ts';
+import { COMPANY_DIRECTORY } from '@dreamdevops/contracts/tenancy/services';
 import { PostgresCompanyDirectory } from './infrastructure/postgres-company-directory.ts';
 
 /**

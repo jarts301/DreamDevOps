@@ -1,4 +1,12 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Req } from '@nestjs/common';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type {
+  CreateRule,
+  NotifiableEventType,
+  RuleTestResult,
+  RuleView,
+  UpdateRule,
+} from '@dreamdevops/contracts/notifications/http';
 import { RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { NotificationRules } from '../application/notification-rules.ts';
@@ -13,22 +21,22 @@ export class NotificationRulesController {
   }
 
   @Get('event-types')
-  eventTypes(): object[] {
+  eventTypes(): NotifiableEventType[] {
     return this.#rules.eventTypes();
   }
 
   @Get()
-  list(): Promise<object[]> {
+  list(): Promise<RuleView[]> {
     return this.#rules.list();
   }
 
   @Post()
-  create(@Req() request: ApiRequest, @Body() body: Record<string, unknown> | undefined): Promise<object> {
+  create(@Req() request: ApiRequest, @Body() body: Unchecked<CreateRule> | undefined): Promise<RuleView> {
     return this.#rules.create(request.principal!, body ?? {});
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined): Promise<object> {
+  update(@Param('id') id: string, @Body() body: Unchecked<UpdateRule> | undefined): Promise<RuleView> {
     return this.#rules.update(id, body ?? {});
   }
 
@@ -40,7 +48,7 @@ export class NotificationRulesController {
 
   @Post(':id/test')
   @HttpCode(200)
-  test(@Req() request: ApiRequest, @Param('id') id: string): Promise<object> {
+  test(@Req() request: ApiRequest, @Param('id') id: string): Promise<RuleTestResult> {
     return this.#rules.test(request.principal!, id);
   }
 }

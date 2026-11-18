@@ -1,21 +1,50 @@
+import type { AgentCommand } from '@dreamdevops/contracts/agent/protocol';
 import { randomUUID } from 'node:crypto';
 import { parse } from 'yaml';
-import { type CompanyId, createDomainEvent, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import {
+  DeploymentAborted,
+  DeploymentAbortRequested,
+  DeploymentApproved,
+  DeploymentFailed,
+  DeploymentPromoted,
+  DeploymentQueued,
+  DeploymentRejected,
+  DeploymentRequested,
+  DeploymentStarted,
+  DeploymentSucceeded,
+} from '@dreamdevops/contracts/deployments/events';
+import { type CompanyId, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { BlueprintCatalog } from '../../blueprints/application/blueprint-catalog.ts';
-import type { Builds, BuildView } from '../../builds/application/builds.ts';
-import type { ApplicationCatalog, ApplicationView } from '../../catalog/application/application-catalog.ts';
-import type { Entitlements } from '../../editions/application/entitlements.ts';
-import type { EnvironmentConfig } from '../../environments/application/environment-config.ts';
-import type { Environments, EnvironmentView } from '../../environments/application/environments.ts';
-import { authorizeChange, type ProtectedChange } from '../../environments/domain/protection.ts';
-import { withTelemetry } from '../../environments/domain/telemetry.ts';
-import { LOCAL_PROVIDER } from '../../environments/domain/hosting-providers.ts';
-import { platformVariables } from '../../environments/domain/variables.ts';
-import type { EnvironmentRepositories, FileChange } from '../../environments/application/ports.ts';
-import type { TargetConfigurations } from '../../environments/application/target-configuration.ts';
-import type { Principal } from '../../identity-access/domain/access.ts';
-import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
+import type { BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
+import type { DeployableImage, DeployableImages } from '@dreamdevops/contracts/builds/services';
+import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import { type ApplicationView } from '@dreamdevops/contracts/catalog/http';
+import type { FeatureAccess } from '@dreamdevops/contracts/editions/services';
+import type { EnvironmentView, ProductionConfirmation } from '@dreamdevops/contracts/environments/http';
+import type {
+  EnvironmentDirectory,
+  EnvironmentGitOps,
+  EnvironmentRepository,
+  EnvironmentValues,
+  FileChange,
+  ResolvedConfig,
+} from '@dreamdevops/contracts/environments/services';
+import { authorizeChange, type ProtectedChange } from '@dreamdevops/contracts/environments/protection';
+import { withTelemetry } from '@dreamdevops/contracts/environments/telemetry';
+import { LOCAL_PROVIDER } from '@dreamdevops/contracts/environments/hosting';
+import { platformVariables } from '@dreamdevops/contracts/environments/variables';
+import type {
+  ChangeRunning,
+  DeploymentAction,
+  DeploymentView,
+  RequestDeployment,
+  ResourceLimits,
+  RunningVersion,
+} from '@dreamdevops/contracts/deployments/http';
+import type { RunningVersions } from '@dreamdevops/contracts/deployments/services';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type { RepositoryLookup } from '@dreamdevops/contracts/source-governance/services';
 import { type HostRuntime, type HostTarget, type LogEntry, PermanentDeploymentError } from './ports.ts';
 import {
   advance,
@@ -43,66 +72,6 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 /** A rollout that hasn't moved for this long has failed. */
 export const STALL_MINUTES = 15;
-
-export interface DeploymentView {
-  readonly id: string;
-  readonly application: { readonly id: string; readonly name: string; readonly slug: string };
-  readonly environment: { readonly id: string; readonly name: string; readonly kind: 'test' | 'production' };
-  readonly version: { readonly buildId: string; readonly kind: string; readonly tag: string; readonly version: string | null };
-  readonly strategy: Strategy;
-  readonly status: DeploymentStatus;
-  readonly message: string | null;
-  readonly progress: Progress;
-  readonly rollbackOf: string | null;
-  readonly commit: string | null;
-  readonly requestedBy: { readonly userId: string; readonly displayName: string | null } | null;
-  readonly approvedBy: { readonly userId: string; readonly displayName: string | null } | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly finishedAt: string | null;
-  /** What it does: run a version, remove what runs, or run it again with the values as they are now. */
-  readonly action: DeploymentAction;
-  /** Why it was asked for, as typed. */
-  readonly reason: string | null;
-  /** The CPU and memory the version runs with, once it's committed, such as { cpu: '250m', memory: '256Mi' }. */
-  readonly limits: ResourceLimits | null;
-}
-
-export type DeploymentAction = 'deploy' | 'stop' | 'apply';
-
-/** A version that runs in an environment now, with what it runs with. */
-export interface RunningVersion {
-  readonly deploymentId: string;
-  readonly application: { readonly id: string; readonly name: string; readonly slug: string };
-  readonly environment: { readonly id: string; readonly name: string; readonly kind: 'test' | 'production' };
-  readonly version: { readonly buildId: string; readonly kind: string; readonly tag: string; readonly version: string | null };
-  readonly strategy: Strategy;
-  readonly limits: ResourceLimits | null;
-  /** When it started running. */
-  readonly since: string | null;
-  /** What runs the environment, such as kubernetes or local for This machine. */
-  readonly provider: string | null;
-  /** Where people reach it, when the platform knows, such as on This machine. */
-  readonly address: string | null;
-  /** The environment's values changed since it started, so Apply now would start it with the new ones. */
-  readonly settingsChanged: boolean;
-}
-
-/**
- * The resources a version runs with: the CPU it's guaranteed, and the most memory it may
- * use, in Kubernetes' units.
- */
-export interface ResourceLimits {
-  readonly cpu: string;
-  readonly memory: string;
-}
-
-export interface AgentCommand {
-  readonly id: string;
-  readonly action: 'promote' | 'abort';
-  readonly namespace: string;
-  readonly name: string;
-}
 
 export interface DeploymentsOptions {
   /** How targets reach the registry, so images are named as targets pull them. */
@@ -181,31 +150,29 @@ const SELECT = 'SELECT d.* FROM deployments.deployments_view() d';
  * environment's repository; the target's Flux applies it, and its agent reports how the
  * rollout goes. Promote and abort reach the agent as commands with its next heartbeat.
  */
-export class Deployments {
+export class Deployments implements RunningVersions {
   readonly #database: TenantDatabase;
-  readonly #configurations: TargetConfigurations;
-  readonly #repositories: EnvironmentRepositories;
-  readonly #config: EnvironmentConfig;
-  readonly #environments: Environments;
-  readonly #applications: ApplicationCatalog;
-  readonly #builds: Builds;
+  readonly #gitOps: EnvironmentGitOps;
+  readonly #config: EnvironmentValues;
+  readonly #environments: EnvironmentDirectory;
+  readonly #applications: ApplicationDirectory;
+  readonly #builds: DeployableImages;
   readonly #sources: RepositoryLookup;
   readonly #blueprints: BlueprintCatalog;
-  readonly #entitlements: Entitlements;
+  readonly #entitlements: FeatureAccess;
   readonly #options: DeploymentsOptions;
   readonly #runtime: HostRuntime;
 
   constructor(
     database: TenantDatabase,
-    configurations: TargetConfigurations,
-    repositories: EnvironmentRepositories,
-    config: EnvironmentConfig,
-    environments: Environments,
-    applications: ApplicationCatalog,
-    builds: Builds,
+    gitOps: EnvironmentGitOps,
+    config: EnvironmentValues,
+    environments: EnvironmentDirectory,
+    applications: ApplicationDirectory,
+    builds: DeployableImages,
     sources: RepositoryLookup,
     blueprints: BlueprintCatalog,
-    entitlements: Entitlements,
+    entitlements: FeatureAccess,
     runtime: HostRuntime,
     options: DeploymentsOptions,
   ) {
@@ -215,8 +182,7 @@ export class Deployments {
     this.#applications = applications;
     this.#builds = builds;
     this.#sources = sources;
-    this.#configurations = configurations;
-    this.#repositories = repositories;
+    this.#gitOps = gitOps;
     this.#config = config;
     this.#blueprints = blueprints;
     this.#entitlements = entitlements;
@@ -250,7 +216,7 @@ export class Deployments {
   async request(
     actor: Principal,
     applicationValue: unknown,
-    input: { environment?: unknown; version?: unknown; strategy?: unknown } & Confirmed,
+    input: Unchecked<RequestDeployment>,
   ): Promise<DeploymentView> {
     const applicationId = parseId(applicationValue, 'application');
     const environmentId = parseId(input.environment, 'environment');
@@ -321,8 +287,7 @@ export class Deployments {
         throw error;
       }
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'DeploymentRequested',
+        DeploymentRequested.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: {
@@ -348,7 +313,7 @@ export class Deployments {
    * Removes what runs of an application in an environment. Its resources go when the
    * target applies the change. Production needs its name and a reason.
    */
-  async stop(actor: Principal, applicationValue: unknown, input: { environment?: unknown } & Confirmed): Promise<DeploymentView> {
+  async stop(actor: Principal, applicationValue: unknown, input: Unchecked<ChangeRunning>): Promise<DeploymentView> {
     const running = await this.#running(applicationValue, input.environment, 'stop');
     return this.#create(
       actor,
@@ -362,7 +327,7 @@ export class Deployments {
    * Runs what runs again, so it starts with the environment's values as they are now.
    * Values apply only when a version starts, so this is how a change reaches it.
    */
-  async apply(actor: Principal, applicationValue: unknown, input: { environment?: unknown } & Confirmed): Promise<DeploymentView> {
+  async apply(actor: Principal, applicationValue: unknown, input: Unchecked<ChangeRunning>): Promise<DeploymentView> {
     const running = await this.#running(applicationValue, input.environment, 'apply');
     return this.#create(
       actor,
@@ -384,11 +349,14 @@ export class Deployments {
       values.push(parseId(filter.environment, 'environment'));
       conditions.push(`d.environment_id = $${values.length}`);
     }
-    const { rows, hashes } = await this.#database.transaction(async (tx) => {
+    const rows = await this.#database.transaction(async (tx) => {
       const { rows } = await tx.query<DeploymentRow>(`${SELECT} WHERE ${conditions.join(' AND ')} ORDER BY d.finished_at DESC`, values);
-      const hashes = await Promise.all(rows.map((row) => this.#config.fingerprint(tx, row.environment_id, row.application_id)));
-      return { rows, hashes };
+      return rows;
     });
+    // The environments' values as they are now, which Environments keeps.
+    const hashes = await this.#config.fingerprints(
+      rows.map((row) => ({ environmentId: row.environment_id, applicationId: row.application_id })),
+    );
     return (await this.#enrich(rows)).map((row, index) => ({
       deploymentId: row.id,
       application: { id: row.application_id, name: row.application_name, slug: row.application_slug },
@@ -456,8 +424,7 @@ export class Deployments {
         [id, approved ? 'queued' : 'rejected', actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: approved ? 'DeploymentApproved' : 'DeploymentRejected',
+        (approved ? DeploymentApproved : DeploymentRejected).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { deploymentId: id, applicationId: deployment.application_id, environmentName: deployment.environment_name },
@@ -481,16 +448,16 @@ export class Deployments {
     if (deployment.status !== 'queued') {
       return;
     }
-    const repository = await this.#configurations.repositoryOf(deployment.environment_id);
+    const repository = await this.#gitOps.repositoryOf(deployment.environment_id);
     const version = deployment.build_version ?? deployment.image_tag;
     const runtime = deployment.action === 'stop' ? null : await this.#runtimeOf(deployment.application_id);
     const rendered =
       runtime === null
         ? { files: new Map<string, string>(), limits: null, configHash: null }
-        : await this.#database.transaction(async (tx) => ({
-            ...(await this.#render(tx, deployment, environment, runtime)),
-            configHash: await this.#config.fingerprint(tx, deployment.environment_id, deployment.application_id),
-          }));
+        : {
+            ...this.#render(deployment, environment, runtime, await this.#valuesOf(deployment)),
+            configHash: await this.#config.fingerprint(deployment.environment_id, deployment.application_id),
+          };
     const message =
       deployment.action === 'stop'
         ? `Stop ${deployment.application_slug}`
@@ -510,8 +477,7 @@ export class Deployments {
         return;
       }
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'DeploymentStarted',
+        DeploymentStarted.create({
           companyId: currentCompanyId(),
           actorId: null,
           payload: { deploymentId: deployment.id, applicationId: deployment.application_id, environmentName: deployment.environment_name, commit: sha },
@@ -529,7 +495,7 @@ export class Deployments {
       return;
     }
     const previousRow = await this.#database.transaction((tx) => this.#previousSuccess(tx, deployment, { otherVersion: false }));
-    const repository = await this.#configurations.repositoryOf(deployment.environment_id);
+    const repository = await this.#gitOps.repositoryOf(deployment.environment_id);
     if (previousRow === null) {
       // Nothing ran here before: the application's folder goes, and with it what was applied.
       await this.#write(repository, deployment, new Map(), `Remove ${deployment.application_slug}: its first deployment did not succeed`);
@@ -537,7 +503,7 @@ export class Deployments {
     }
     const previous = (await this.#enrich([previousRow]))[0]!;
     const runtime = await this.#runtimeOf(previous.application_id);
-    const { files } = await this.#database.transaction((tx) => this.#render(tx, previous, environment, runtime));
+    const { files } = this.#render(previous, environment, runtime, await this.#valuesOf(previous));
     await this.#write(repository, previous, files, `Restore ${previous.application_slug} ${previous.build_version ?? previous.image_tag}`);
   }
 
@@ -609,8 +575,7 @@ export class Deployments {
         [randomUUID(), currentCompanyId(), id, deployment.environment_id, action],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: action === 'promote' ? 'DeploymentPromoted' : 'DeploymentAbortRequested',
+        (action === 'promote' ? DeploymentPromoted : DeploymentAbortRequested).create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { deploymentId: id, applicationId: deployment.application_id, environmentName: deployment.environment_name },
@@ -816,12 +781,12 @@ export class Deployments {
       await step('Pulling the image.');
       await this.#runtime.pull(target, image);
       const runtime = await this.#runtimeOf(deployment.application_id);
-      const settings = await this.#database.transaction(async (tx) => ({
+      const settings = {
         runtime,
-        config: await this.#config.resolve(tx, deployment.environment_id, { id: deployment.application_id, slug: deployment.application_slug }),
-        configHash: await this.#config.fingerprint(tx, deployment.environment_id, deployment.application_id),
-        preferredPort: await this.#lastPort(tx, deployment),
-      }));
+        config: await this.#valuesOf(deployment),
+        configHash: await this.#config.fingerprint(deployment.environment_id, deployment.application_id),
+        preferredPort: await this.#database.transaction((tx) => this.#lastPort(tx, deployment)),
+      };
       const secrets = await this.#config.openSecrets(deployment.environment_id, deployment.application_slug);
       await step('Starting the new version.');
       const started = await this.#runtime.start(target, {
@@ -959,21 +924,21 @@ export class Deployments {
     return blueprint === null ? DEFAULT_RUNTIME : blueprint.runtime;
   }
 
+  /** The values a deployment's application gets in its environment, as Environments keeps them now. */
+  #valuesOf(deployment: Row): Promise<ResolvedConfig> {
+    return this.#config.resolve(deployment.environment_id, { id: deployment.application_id, slug: deployment.application_slug });
+  }
+
   /**
-   * Files for a deployment's version, with the environment's values as they are now. The
-   * environment and runtime come from other modules, so callers ask for them before the
-   * transaction, and only this module's tables are read inside it.
+   * Files for a deployment's version, with the environment's values as they are now. What
+   * other contexts know, the environment, the runtime and the values, is asked for first.
    */
-  async #render(
-    tx: TenantTransaction,
+  #render(
     deployment: Row,
     environment: Pick<EnvironmentView, 'slug' | 'kind'>,
     runtime: Runtime,
-  ): Promise<{ files: Map<string, string>; limits: ResourceLimits }> {
-    const config = await this.#config.resolve(tx, deployment.environment_id, {
-      id: deployment.application_id,
-      slug: deployment.application_slug,
-    });
+    config: ResolvedConfig,
+  ): { files: Map<string, string>; limits: ResourceLimits } {
     // Images are named as targets pull them, and by digest.
     const path = deployment.image_ref!.replace(/^[^/]+\//, '').replace(/:[^/:]+$/, '');
     const files = renderApplication({
@@ -1002,22 +967,22 @@ export class Deployments {
 
   /** Replaces an application's folder with these files, and updates the root list. */
   async #write(
-    repository: Awaited<ReturnType<TargetConfigurations['repositoryOf']>>,
+    repository: EnvironmentRepository,
     deployment: Row,
     files: Map<string, string>,
     message: string,
   ): Promise<string> {
     const folder = applicationFolder(deployment.application_slug);
-    const existing = await this.#repositories.readFolder(repository, folder);
+    const existing = await this.#gitOps.readFolder(repository, folder);
     // The applications the environment runs are the root's list, as it is in the repository.
-    const root = (await this.#repositories.readFolder(repository, ROOT_FILE)).get(ROOT_FILE);
+    const root = (await this.#gitOps.readFolder(repository, ROOT_FILE)).get(ROOT_FILE);
     const others = rootApplications(root).filter((slug) => slug !== deployment.application_slug);
     const changes: FileChange[] = [
       ...[...existing.keys()].filter((path) => !files.has(path)).map((path) => ({ path, content: null })),
       ...[...files].map(([path, content]) => ({ path, content })),
       { path: ROOT_FILE, content: renderRoot(files.size > 0 ? [...others, deployment.application_slug] : others) },
     ];
-    return this.#repositories.commit(repository, message, changes);
+    return this.#gitOps.commit(repository, message, changes);
   }
 
   /** The newest deployment of the same application and environment that ran well, before this one. */
@@ -1085,7 +1050,7 @@ export class Deployments {
     return rows.map((row) => {
       const application = applications.get(row.application_id)!;
       const environment = environments.get(row.environment_id)!;
-      const build: BuildView = builds.get(row.build_id)!;
+      const build: DeployableImage = builds.get(row.build_id)!;
       return {
         ...row,
         application_name: application.name,
@@ -1109,10 +1074,7 @@ export class Deployments {
 }
 
 /** What a change to production carries: its name, typed to confirm, and why. */
-export interface Confirmed {
-  readonly confirmation?: unknown;
-  readonly reason?: unknown;
-}
+export type Confirmed = Unchecked<ProductionConfirmation>;
 
 /**
  * Production's protection: its name typed exactly, and for rollbacks and stops, a reason.
@@ -1138,12 +1100,12 @@ function assertMayDeploy(actor: Principal, kind: 'test' | 'production'): void {
 }
 
 function queued(deploymentId: string, actorId: string) {
-  return createDomainEvent({ eventType: 'DeploymentQueued', companyId: currentCompanyId(), actorId, payload: { deploymentId } });
+  return DeploymentQueued.create({ companyId: currentCompanyId(), actorId, payload: { deploymentId } });
 }
 
 function finishedEvent(deployment: Row, status: DeploymentStatus, message: string | null) {
-  return createDomainEvent({
-    eventType: status === 'succeeded' ? 'DeploymentSucceeded' : status === 'aborted' ? 'DeploymentAborted' : 'DeploymentFailed',
+  const contract = status === 'succeeded' ? DeploymentSucceeded : status === 'aborted' ? DeploymentAborted : DeploymentFailed;
+  return contract.create({
     companyId: currentCompanyId(),
     actorId: null,
     payload: {

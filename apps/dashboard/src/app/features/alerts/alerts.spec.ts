@@ -2,7 +2,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { permissionDescription } from '../../core/labels';
 import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
@@ -401,28 +400,8 @@ describe('alert thresholds', () => {
   });
 });
 
-describe('alert events in the audit log', () => {
-  const place = { environmentName: 'Production', applicationName: 'Billing API', production: true };
-
-  it('read like sentences', () => {
-    expect(describeEvent('AlertCreated', { ...place, name: 'High CPU', condition: 'CPU above 80%' })).toBe(
-      'Created the alert "High CPU" on CPU above 80% for Billing API in the production environment "Production"',
-    );
-    expect(describeEvent('AlertUpdated', { ...place, name: 'High CPU', changes: ['threshold', 'recipients'], enabled: true })).toBe(
-      'Changed the alert "High CPU" for Billing API in the production environment "Production": its threshold and whom it emails',
-    );
-    expect(describeEvent('AlertUpdated', { ...place, name: 'High CPU', changes: ['enabled'], enabled: false })).toBe(
-      'Changed the alert "High CPU" for Billing API in the production environment "Production": turned it off',
-    );
-    expect(describeEvent('AlertTriggered', { ...place, name: 'High CPU', condition: 'CPU above 80%', value: '93%' })).toBe(
-      'The alert "High CPU" fired: CPU above 80% for Billing API in the production environment "Production", at 93%',
-    );
-    expect(describeEvent('AlertResolved', { ...place, name: 'High CPU', condition: 'CPU above 80%', value: '12%' })).toBe(
-      'The alert "High CPU" was resolved: CPU above 80% no longer holds for Billing API in the production environment "Production", at 12%',
-    );
-    expect(describeEvent('AlertDeleted', { ...place, name: 'High CPU' })).toBe(
-      'Deleted the alert "High CPU" for Billing API in the production environment "Production"',
-    );
+describe('alert permissions', () => {
+  it('are described for people', () => {
     expect(permissionDescription('alerts:manage')).toBe('Manage alerts on metrics, and whom they email');
   });
 });

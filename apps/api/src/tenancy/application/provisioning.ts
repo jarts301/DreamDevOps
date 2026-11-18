@@ -1,10 +1,17 @@
-import { createDomainEvent, currentCompanyId, describeError, withRenewal } from '@dreamdevops/shared-kernel';
+import {
+  CompanyCreated,
+  CompanyProvisioned,
+  CompanyProvisioningFailed,
+  CompanyProvisioningRequested,
+  CompanyRenamed,
+} from '@dreamdevops/contracts/tenancy/events';
+import { currentCompanyId, describeError, type DomainEvent, type EventContract, withRenewal } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
 import type { CompanyStatus } from '../domain/company.ts';
 import { type GitProvider, PermanentProvisioningError } from './ports.ts';
 
 /** The events that make a company's resources need checking. */
-export const PROVISIONING_TRIGGERS = ['CompanyCreated', 'CompanyRenamed', 'CompanyProvisioningRequested'] as const;
+export const PROVISIONING_TRIGGERS: readonly EventContract[] = [CompanyCreated, CompanyRenamed, CompanyProvisioningRequested];
 
 const GIT_ORGANIZATION = 'git-organization';
 /** How long a job's claim on a company's resource lasts, unless the job renews it. */
@@ -85,7 +92,7 @@ export class ProvisioningSaga {
         await recordStep(tx, { status: 'ready', externalId: outcome.externalId, error: null });
         // Renamed meanwhile: the rename's own job brings the organization's name along.
         if (current !== null && current.status !== 'suspended') {
-          await setStatus(tx, current, 'active', 'CompanyProvisioned', {});
+          await setStatus(tx, current, 'active', () => CompanyProvisioned.create({ companyId: currentCompanyId(), payload: {} }));
         }
         return null;
       }
@@ -93,7 +100,9 @@ export class ProvisioningSaga {
       const attempts = await recordStep(tx, { status: 'failed', externalId: null, error: describeError(error) });
       if (error instanceof PermanentProvisioningError || attempts >= this.#options.maxAttempts) {
         if (current !== null && current.status !== 'suspended') {
-          await setStatus(tx, current, 'provisioning-failed', 'CompanyProvisioningFailed', { reason: describeError(error) });
+          await setStatus(tx, current, 'provisioning-failed', () =>
+            CompanyProvisioningFailed.create({ companyId: currentCompanyId(), payload: { reason: describeError(error) } }),
+          );
         }
         return null;
       }
@@ -162,8 +171,7 @@ async function setStatus(
   tx: TenantTransaction,
   company: CompanyRow,
   status: CompanyStatus,
-  eventType: string,
-  payload: object,
+  event: () => DomainEvent,
 ): Promise<void> {
   if (company.status === status) {
     return;
@@ -172,5 +180,5 @@ async function setStatus(
     currentCompanyId(),
     status,
   ]);
-  await appendToOutbox(tx, [createDomainEvent({ eventType, companyId: currentCompanyId(), payload })]);
+  await appendToOutbox(tx, [event()]);
 }

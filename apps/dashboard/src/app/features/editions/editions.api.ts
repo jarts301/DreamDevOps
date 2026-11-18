@@ -1,37 +1,21 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type {
+  CompanyEditionView,
+  CompanyEntitlements,
+  Edition,
+  EditionsOverview,
+  FeatureView,
+} from '@dreamdevops/contracts/editions/http';
 
-export type Edition = 'community' | 'commercial';
+// The API's answers are Editions' HTTP contract, under the names the pages use.
+export type { CompanyEntitlements, Edition, EditionsOverview } from '@dreamdevops/contracts/editions/http';
+export type Feature = FeatureView;
+export type CompanyEditionRow = CompanyEditionView;
 
-export const EDITION_NAMES: Readonly<Record<Edition, string>> = {
-  community: 'Community',
-  commercial: 'Commercial',
-};
-
-export interface Feature {
-  readonly key: string;
-  readonly name: string;
-  readonly edition: Edition;
-  readonly enabled: boolean;
-}
-
-export interface CompanyEntitlements {
-  readonly edition: Edition;
-  readonly features: readonly Feature[];
-}
-
-export interface CompanyEditionRow {
-  readonly companyId: string;
-  readonly companyName: string;
-  readonly edition: Edition;
-  readonly changedAt: string | null;
-}
-
-export interface EditionsOverview {
-  readonly provider: { readonly name: string; readonly commercialAvailable: boolean; readonly detail: string | null };
-  readonly companies: readonly CompanyEditionRow[];
-}
+/** An edition's name, such as "Community", as Editions' contracts name it. */
+export { editionName } from '@dreamdevops/contracts/editions/features';
 
 @Injectable({ providedIn: 'root' })
 export class EditionsApi {

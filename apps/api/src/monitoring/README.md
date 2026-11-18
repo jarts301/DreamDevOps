@@ -26,7 +26,7 @@ This context reads everything back, only ever for the current company's places.
 
 ## Places
 
-A place's ID is made from its environment's and application's IDs, in `environments/domain/telemetry.ts`, so the same pair always gives the same ID and nobody has to store it. Telemetry carries four attributes:
+A place's ID is made from its environment's and application's IDs, in Environments' contract `environments/telemetry.ts`, so the same pair always gives the same ID and nobody has to store it. Telemetry carries four attributes:
 
 | Attribute | Label in Prometheus and Loki | What it is |
 |---|---|---|
@@ -119,7 +119,7 @@ Errors use `application/problem+json`: `400` for another range or a trace ID tha
 
 ## For other contexts
 
-[Alerts](../alerts/README.md) watch these metrics through `LatestMetrics`, in `application/latest-metrics.ts`, and find places through `RunningPlaces`, in `application/running-places.ts`. Both answer for the current company only, whichever IDs they're given.
+[Alerts](../alerts/README.md) watch these metrics through `LatestMetrics`, injected with the `LATEST_METRICS` token, in `monitoring/services.ts` in the [contracts](../../../../packages/contracts/README.md), with the metrics' definitions in `monitoring/metrics.ts`. It answers for the current company only, whichever places it's given. The routes' answers are in `monitoring/http.ts`.
 
 ## Data separation
 

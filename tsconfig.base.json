@@ -19,6 +19,9 @@
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // Workspace packages, such as the shared kernel and the contracts, are read as source
+    // when type checking and testing, so they need no build first. Builds set this to [].
+    "customConditions": ["@dreamdevops/source"]
   }
 }

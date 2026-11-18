@@ -1,7 +1,7 @@
 import { runWithCompany } from '@dreamdevops/shared-kernel';
-import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
-import type { TargetAgents } from '../../environments/application/target-agents.ts';
-import { COMPANY_ATTRIBUTE, PLATFORM_ATTRIBUTE_PREFIX, placeAttributes } from '../../environments/domain/telemetry.ts';
+import { type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import type { TargetAuthentication } from '@dreamdevops/contracts/environments/services';
+import { COMPANY_ATTRIBUTE, PLATFORM_ATTRIBUTE_PREFIX, placeAttributes } from '@dreamdevops/contracts/environments/telemetry';
 import { MonitoringError } from '../domain/errors.ts';
 import type { TelemetryKind, TelemetrySink } from './ports.ts';
 
@@ -40,11 +40,11 @@ export function parseTelemetryKind(value: unknown): TelemetryKind {
  * applications, such as the cluster's own tools, are dropped.
  */
 export class TelemetryGateway {
-  readonly #agents: TargetAgents;
-  readonly #catalog: ApplicationCatalog;
+  readonly #agents: TargetAuthentication;
+  readonly #catalog: ApplicationDirectory;
   readonly #sink: TelemetrySink | null;
 
-  constructor(agents: TargetAgents, catalog: ApplicationCatalog, sink: TelemetrySink | null) {
+  constructor(agents: TargetAuthentication, catalog: ApplicationDirectory, sink: TelemetrySink | null) {
     this.#agents = agents;
     this.#catalog = catalog;
     this.#sink = sink;

@@ -1,37 +1,18 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { ActivityEntry, AuditEntry, HistoryPage, IntegrityCheck } from '@dreamdevops/contracts/audit/http';
 
-export interface AuditEntry {
-  readonly sequence: number;
-  readonly eventType: string;
-  readonly actor: { readonly userId: string; readonly displayName: string | null } | null;
-  readonly occurredAt: string;
-  readonly payload: Record<string, unknown>;
-}
-
-export interface ActivityEntry {
-  readonly companyId: string;
-  readonly companyName: string;
-  readonly eventType: string;
-  readonly occurredAt: string;
-  readonly payload: Record<string, unknown>;
-}
-
-export interface IntegrityCheck {
-  readonly valid: boolean;
-  readonly checked: number;
-  readonly brokenAtSequence: number | null;
-  readonly reason: string | null;
-}
+// The API's answers are the audit log's HTTP contract.
+export type { ActivityEntry, AuditEntry, HistoryPage, IntegrityCheck } from '@dreamdevops/contracts/audit/http';
 
 @Injectable({ providedIn: 'root' })
 export class AuditApi {
   readonly #http = inject(HttpClient);
 
-  companyLog(before: string | null): Promise<{ entries: AuditEntry[]; nextBefore: string | null }> {
+  companyLog(before: string | null): Promise<HistoryPage<AuditEntry>> {
     return firstValueFrom(
-      this.#http.get<{ entries: AuditEntry[]; nextBefore: string | null }>('/api/v1/company/audit', {
+      this.#http.get<HistoryPage<AuditEntry>>('/api/v1/company/audit', {
         params: before === null ? {} : { before },
       }),
     );
@@ -41,9 +22,9 @@ export class AuditApi {
     return firstValueFrom(this.#http.get<IntegrityCheck>('/api/v1/company/audit/verify'));
   }
 
-  myActivity(before: string | null): Promise<{ entries: ActivityEntry[]; nextBefore: string | null }> {
+  myActivity(before: string | null): Promise<HistoryPage<ActivityEntry>> {
     return firstValueFrom(
-      this.#http.get<{ entries: ActivityEntry[]; nextBefore: string | null }>('/api/v1/platform/audit', {
+      this.#http.get<HistoryPage<ActivityEntry>>('/api/v1/platform/audit', {
         params: before === null ? {} : { before },
       }),
     );

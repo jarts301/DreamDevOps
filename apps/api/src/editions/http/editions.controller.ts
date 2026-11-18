@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Put, Req } from '@nestjs/common';
+import type { CompanyEntitlements, EditionsOverview } from '@dreamdevops/contracts/editions/http';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { Entitlements } from '../application/entitlements.ts';
@@ -14,13 +15,13 @@ export class EditionsController {
   /** Every member may see what their company's edition includes. Users without a company are refused. */
   @Authenticated()
   @Get('company/entitlements')
-  company(): Promise<object> {
+  company(): Promise<CompanyEntitlements> {
     return this.#entitlements.forCurrentCompany();
   }
 
   @RequirePermissions('editions:manage')
   @Get('platform/editions')
-  list(): Promise<object> {
+  list(): Promise<EditionsOverview> {
     return this.#entitlements.listCompanies();
   }
 

@@ -1,27 +1,13 @@
+import { describeRecordedEvent } from '@dreamdevops/contracts/events';
 import { currentCompanyId, type DomainEvent, isUuid } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import type { Pool } from 'pg';
-import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
-import { ChainVerifier, type ChainCheck, entryHash, GENESIS_HASH } from '../domain/hash-chain.ts';
+import type { ActivityEntry, AuditEntry, HistoryPage, IntegrityCheck } from '@dreamdevops/contracts/audit/http';
+import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
+import { ChainVerifier, entryHash, GENESIS_HASH } from '../domain/hash-chain.ts';
 
 const PAGE_SIZE = 50;
 const VERIFY_BATCH = 1_000;
-
-export interface AuditEntryView {
-  readonly sequence: number;
-  readonly eventType: string;
-  readonly actor: { readonly userId: string; readonly displayName: string | null } | null;
-  readonly occurredAt: string;
-  readonly payload: object;
-}
-
-export interface ActorEntryView {
-  readonly companyId: string;
-  readonly companyName: string;
-  readonly eventType: string;
-  readonly occurredAt: string;
-  readonly payload: object;
-}
 
 interface EntryRow {
   company_id: string;
@@ -95,7 +81,7 @@ export class AuditLog {
    * The current company's history, newest change first. Pages continue from the cursor
    * the previous page returned, which combines a time and an entry number.
    */
-  listCompany(beforeValue: unknown): Promise<{ entries: AuditEntryView[]; nextBefore: string | null }> {
+  listCompany(beforeValue: unknown): Promise<HistoryPage<AuditEntry>> {
     const before = cursor(beforeValue);
     return this.#database.transaction(async (tx) => {
       const { rows } = await tx.query<{
@@ -104,11 +90,12 @@ export class AuditLog {
         actor_id: string | null;
         actor_name: string | null;
         occurred_at: Date;
-        payload: object;
+        payload: Record<string, unknown>;
       }>('SELECT * FROM audit.company_entries($1, $2, $3)', [before?.time ?? null, before?.sequence ?? null, PAGE_SIZE]);
       const entries = rows.map((row) => ({
         sequence: Number(row.sequence),
         eventType: row.event_type,
+        description: describeRecordedEvent(row.event_type, row.payload),
         actor: row.actor_id === null ? null : { userId: row.actor_id, displayName: row.actor_name },
         occurredAt: row.occurred_at.toISOString(),
         payload: row.payload,
@@ -125,14 +112,14 @@ export class AuditLog {
    * One person's own actions across companies, newest first. Pages continue from the cursor
    * the previous page returned, which combines a time and an event ID.
    */
-  async listByActor(actorId: string, beforeValue: unknown): Promise<{ entries: ActorEntryView[]; nextBefore: string | null }> {
+  async listByActor(actorId: string, beforeValue: unknown): Promise<HistoryPage<ActivityEntry>> {
     const before = actorCursor(beforeValue);
     const { rows } = await this.#pool.query<{
       company_id: string;
       event_id: string;
       event_type: string;
       occurred_at: Date;
-      payload: object;
+      payload: Record<string, unknown>;
     }>('SELECT * FROM audit.actor_entries($1, $2, $3, $4)', [actorId, before?.time ?? null, before?.eventId ?? null, PAGE_SIZE]);
     // Company names come from Tenancy, which owns them, once per company on the page.
     const names = new Map<string, string>();
@@ -143,6 +130,7 @@ export class AuditLog {
       companyId: row.company_id,
       companyName: names.get(row.company_id)!,
       eventType: row.event_type,
+      description: describeRecordedEvent(row.event_type, row.payload),
       occurredAt: row.occurred_at.toISOString(),
       payload: row.payload,
     }));
@@ -154,7 +142,7 @@ export class AuditLog {
   }
 
   /** Recomputes the current company's whole chain, a batch at a time, so a long history needs little memory. */
-  verify(): Promise<ChainCheck> {
+  verify(): Promise<IntegrityCheck> {
     return this.#database.transaction(async (tx) => {
       const verifier = new ChainVerifier();
       for (let after = 0; ; ) {

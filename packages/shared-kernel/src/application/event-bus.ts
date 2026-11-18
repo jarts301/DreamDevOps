@@ -1,5 +1,6 @@
 import { InvalidCompanyIdError, parseCompanyId } from '../domain/company-id.ts';
 import type { DomainEvent } from '../domain/domain-event.ts';
+import { type EventContract, InvalidEventPayloadError } from './event-contract.ts';
 import { type EventPublisher, type JobQueue, type QueueOptions, UnrecoverableJobError } from './ports.ts';
 import { runWithCompany } from './tenant-context.ts';
 
@@ -10,9 +11,18 @@ const CONSUMER_PATTERN = /^[a-z][a-z0-9-]*$/;
 /** The topic every event is published to, for consumers of all events, such as the audit log. */
 const ALL_EVENTS_TOPIC = 'events.*';
 
-/** The topic events of one type are published to. */
-function topicOf(eventType: string): string {
-  return `events.${eventType}`;
+/**
+ * Where events of one type and version go: a topic, and each consumer's queue. Version 1
+ * keeps the names events had before versions had their own, so existing queues stay.
+ * Each version has its own, so a consumer only ever gets the version its contract reads,
+ * and can read two at once while its publisher moves from one to the next.
+ */
+function suffixOf(eventType: string, version: number): string {
+  return version === 1 ? eventType : `${eventType}.v${version}`;
+}
+
+function topicOf(eventType: string, version: number): string {
+  return `events.${suffixOf(eventType, version)}`;
 }
 
 /**
@@ -32,18 +42,25 @@ export class EventBus implements EventPublisher {
     this.#queue = queue;
   }
 
+  /**
+   * Delivers events of one type and version to a consumer, checked against the event's
+   * contract first. An event that doesn't hold to it goes to the consumer's dead letter
+   * queue, and the handler never sees it. Events of another version of the type go to those
+   * who subscribed with that version's contract.
+   */
   async subscribe<TEvent extends DomainEvent>(
-    eventType: TEvent['eventType'],
+    contract: EventContract<TEvent>,
     consumer: string,
     handler: EventHandler<TEvent>,
     options?: QueueOptions,
   ): Promise<void> {
     assertConsumerName(consumer);
-    const queueName = `events.${consumer}.${eventType}`;
+    const queueName = `events.${consumer}.${suffixOf(contract.type, contract.version)}`;
     if (this.#subscribed.has(queueName)) {
-      throw new Error(`Consumer "${consumer}" already subscribes to ${eventType}.`);
+      throw new Error(`Consumer "${consumer}" already subscribes to ${contract.type}, version ${contract.version}.`);
     }
-    await this.#listen(queueName, topicOf(eventType), handler as EventHandler, options);
+    const topic = topicOf(contract.type, contract.version);
+    await this.#listen(queueName, topic, (event) => handler(checked(contract, event)), options);
   }
 
   /**
@@ -59,9 +76,9 @@ export class EventBus implements EventPublisher {
     await this.#listen(queueName, ALL_EVENTS_TOPIC, handler, options);
   }
 
-  /** Sends the event to every consumer of its type and of all events, once each, whichever process they're in. */
+  /** Sends the event to every consumer of its type and version, and of all events, once each, whichever process they're in. */
   async publish(event: DomainEvent): Promise<void> {
-    await this.#queue.publish(topicOf(event.eventType), event, { id: event.eventId });
+    await this.#queue.publish(topicOf(event.eventType, event.eventVersion), event, { id: event.eventId });
     await this.#queue.publish(ALL_EVENTS_TOPIC, event, { id: event.eventId });
   }
 
@@ -79,6 +96,18 @@ export class EventBus implements EventPublisher {
 function assertConsumerName(consumer: string): void {
   if (!CONSUMER_PATTERN.test(consumer)) {
     throw new Error(`Consumer name "${consumer}" must be in kebab-case.`);
+  }
+}
+
+/** The event as its contract reads it. Anything its contract refuses is never tried again. */
+function checked<TEvent extends DomainEvent>(contract: EventContract<TEvent>, event: DomainEvent): TEvent {
+  try {
+    return contract.parse(event);
+  } catch (error) {
+    if (error instanceof UnrecoverableJobError) {
+      throw error;
+    }
+    throw new InvalidEventPayloadError(event, error instanceof Error ? error.message : 'it could not be read');
   }
 }
 

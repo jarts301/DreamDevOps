@@ -1,37 +1,12 @@
-import type { ContainerLimits, MetricKey, MetricUnit } from './monitoring.api';
+import type { ContainerLimits, MetricKey } from './monitoring.api';
 
 const MEBIBYTE = 1024 * 1024;
 
 /**
- * Shows a metric's value in its unit, such as 12.5%, 48.2 MiB, 3.1/s or 120 ms. Memory is
- * in MiB, as containers' limits are, so it reads against them.
+ * Shows a metric's value in its unit, such as 12.5%, 48.2 MiB, 3.1/s or 120 ms, as the API
+ * words it in alert emails. Memory is in MiB, as containers' limits are, so it reads against them.
  */
-export function formatMetric(value: number | null, unit: MetricUnit): string {
-  if (value === null) {
-    return 'No data';
-  }
-  switch (unit) {
-    case 'percent':
-      return `${round(value)}%`;
-    case 'bytes':
-      return value >= 1024 * MEBIBYTE ? `${(value / (1024 * MEBIBYTE)).toFixed(2)} GiB` : `${(value / MEBIBYTE).toFixed(1)} MiB`;
-    case 'per-second':
-      return `${round(value)}/s`;
-    case 'seconds':
-      return value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s`;
-  }
-}
-
-/** Fewer decimals as numbers grow, so small values don't read as zero and large ones stay short. */
-function round(value: number): string {
-  if (value === 0) {
-    return '0';
-  }
-  if (Math.abs(value) >= 10) {
-    return String(Math.round(value));
-  }
-  return Math.abs(value) >= 1 ? value.toFixed(1) : value.toFixed(2);
-}
+export { formatMetricValue as formatMetric } from '@dreamdevops/contracts/monitoring/metrics';
 
 /** A span's or trace's length, such as 0.4 ms, 84 ms or 1.25 s. */
 export function formatDuration(ms: number): string {

@@ -1,6 +1,8 @@
+import { EVENT_CATALOG } from '@dreamdevops/contracts/events';
+import { RoleGranted } from '@dreamdevops/contracts/identity-access/events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createDomainEvent, parseCompanyId } from '@dreamdevops/shared-kernel';
+import { parseCompanyId } from '@dreamdevops/shared-kernel';
 import { describe, expect, it } from 'vitest';
 import {
   canonicalJson,
@@ -89,32 +91,36 @@ describe('the audit hash chain', () => {
 });
 
 describe('notification messages', () => {
-  const event = (eventType: string, payload: object) =>
-    createDomainEvent({ eventType, companyId: parseCompanyId(COMPANY), payload });
+  const someone = '00000000-0000-4000-8000-0000000000ff';
 
-  it('describes every notifiable event without falling back', () => {
-    for (const type of Object.keys(NOTIFIABLE_EVENTS)) {
-      expect(summarize(event(type, { role: 'developer', previousName: 'Old' }), 'Acme')).not.toContain('happened');
-    }
+  it('offer only events that have a contract, which words them', () => {
+    const uncontracted = Object.keys(NOTIFIABLE_EVENTS).filter((type) => !EVENT_CATALOG.has(type));
+
+    expect(uncontracted).toEqual([]);
+    expect(Object.values(NOTIFIABLE_EVENTS)).toEqual(Object.keys(NOTIFIABLE_EVENTS).map((type) => EVENT_CATALOG.get(type)!.description));
   });
 
   it('names roles and the company', () => {
-    expect(summarize(event('RoleGranted', { role: 'tech-lead', invitationId: 'i' }), 'Acme')).toBe(
+    const companyId = parseCompanyId(COMPANY);
+
+    expect(summarize(RoleGranted.create({ companyId, payload: { userId: someone, role: 'tech-lead', invitationId: someone } }), 'Acme')).toBe(
       'Acme: Someone joined as Tech Lead.',
     );
-    expect(summarize(event('RoleGranted', { role: 'viewer' }), 'Acme')).toBe("Acme: A member's role changed to Viewer.");
+    expect(summarize(RoleGranted.create({ companyId, payload: { userId: someone, role: 'viewer' } }), 'Acme')).toBe(
+      "Acme: A member's role changed to Viewer.",
+    );
   });
 });
 
 describe('invitation emails', () => {
-  const invitation = { id: 'i-1', token: 'secret token', expiresAt: '2026-11-13T10:00:00.000Z', email: 'x', role: 'viewer' };
+  const invitation = { token: 'secret token', expiresAt: '2026-11-13T10:00:00.000Z' };
 
   it('links to the dashboard with the token in the fragment', async () => {
     const mailer = new FakeMailer();
     const emails = new InvitationEmails(mailer, 'http://localhost:4200/');
 
     await expect(
-      emails.send({ to: 'new@example.com', companyName: 'Acme', role: 'tech-lead', invitedBy: 'Ana', invitation }),
+      emails.send({ to: 'new@example.com', companyName: 'Acme', role: 'tech-lead', invitedBy: 'Ana', ...invitation }),
     ).resolves.toBe(true);
 
     const [sent] = mailer.sent;
@@ -134,7 +140,7 @@ describe('invitation emails', () => {
         companyName: 'Acme',
         role: 'viewer',
         invitedBy: 'Ana',
-        invitation,
+        ...invitation,
       }),
     ).resolves.toBe(false);
   });

@@ -1,4 +1,6 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req } from '@nestjs/common';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { ReleasesOverview, ReleasesSynced, StartedRelease, StartRelease } from '@dreamdevops/contracts/releases/http';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { Releases } from '../application/releases.ts';
@@ -14,7 +16,7 @@ export class ReleasesController {
 
   @Authenticated()
   @Get('applications/:id/releases')
-  list(@Param('id') id: string): Promise<object> {
+  list(@Param('id') id: string): Promise<ReleasesOverview> {
     return this.#releases.list(id);
   }
 
@@ -25,7 +27,7 @@ export class ReleasesController {
   @Authenticated()
   @Post('applications/:id/releases/sync')
   @HttpCode(200)
-  async sync(@Param('id') id: string): Promise<object> {
+  async sync(@Param('id') id: string): Promise<ReleasesSynced> {
     return { moved: await this.#releases.sync(id) };
   }
 
@@ -34,8 +36,8 @@ export class ReleasesController {
   async start(
     @Req() request: ApiRequest,
     @Param('id') id: string,
-    @Body() body: { kind?: unknown; version?: unknown },
-  ): Promise<object> {
+    @Body() body: Unchecked<StartRelease> | undefined,
+  ): Promise<StartedRelease> {
     return { id: await this.#releases.start(request.principal!, id, body ?? {}) };
   }
 

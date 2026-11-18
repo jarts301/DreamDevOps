@@ -1,16 +1,16 @@
 import { type DynamicModule, Module } from '@nestjs/common';
-import { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
+import { APPLICATION_DIRECTORY, type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import { CatalogModule } from '../catalog/catalog.module.ts';
-import { Deployments } from '../deployments/application/deployments.ts';
+import { RUNNING_VERSIONS, type RunningVersions } from '@dreamdevops/contracts/deployments/services';
 import { DeploymentsModule } from '../deployments/deployments.module.ts';
-import { TargetAgents } from '../environments/application/target-agents.ts';
+import { TARGET_AUTHENTICATION, type TargetAuthentication } from '@dreamdevops/contracts/environments/services';
 import { EnvironmentsModule } from '../environments/environments.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { ApplicationLogs } from './application/application-logs.ts';
 import { ApplicationMetrics } from './application/application-metrics.ts';
 import { ApplicationTraces } from './application/application-traces.ts';
 import { CompanyLatestMetrics } from './application/company-latest-metrics.ts';
-import { LATEST_METRICS } from './application/latest-metrics.ts';
+import { LATEST_METRICS } from '@dreamdevops/contracts/monitoring/services';
 import {
   LOG_STORE,
   type LogStore,
@@ -68,20 +68,20 @@ export class MonitoringModule {
             },
             {
               provide: RunningPlaces,
-              useFactory: (deployments: Deployments) => new RunningPlaces(deployments),
-              inject: [Deployments],
+              useFactory: (deployments: RunningVersions) => new RunningPlaces(deployments),
+              inject: [RUNNING_VERSIONS],
             },
             {
               provide: TelemetryGateway,
-              useFactory: (agents: TargetAgents, catalog: ApplicationCatalog, sink: TelemetrySink | null) =>
+              useFactory: (agents: TargetAuthentication, catalog: ApplicationDirectory, sink: TelemetrySink | null) =>
                 new TelemetryGateway(agents, catalog, sink),
-              inject: [TargetAgents, ApplicationCatalog, TELEMETRY_SINK],
+              inject: [TARGET_AUTHENTICATION, APPLICATION_DIRECTORY, TELEMETRY_SINK],
             },
             {
               provide: ApplicationLogs,
-              useFactory: (places: RunningPlaces, deployments: Deployments, store: LogStore | null) =>
+              useFactory: (places: RunningPlaces, deployments: RunningVersions, store: LogStore | null) =>
                 new ApplicationLogs(places, deployments, store),
-              inject: [RunningPlaces, Deployments, LOG_STORE],
+              inject: [RunningPlaces, RUNNING_VERSIONS, LOG_STORE],
             },
             {
               provide: ApplicationTraces,

@@ -2,7 +2,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
 import { ApplicationDetail } from './application-detail';
@@ -311,14 +310,5 @@ describe('ApplicationDetail', () => {
 
     expect(text(fixture)).toContain('Building the final image of 1.0.0 again.');
     fixture.destroy();
-  });
-
-  it('describes the new events in the audit log', () => {
-    setUp([]);
-    expect(describeEvent('BuildSucceeded', { tag: '1.0.0' })).toBe('Built, scanned and signed the image 1.0.0');
-    expect(describeEvent('PullRequestMerged', { number: 3, head: 'release/1.0.0', base: 'main' })).toBe(
-      'Merged pull request #3 from release/1.0.0 into main',
-    );
-    expect(describeEvent('ReleasePublished', { version: '1.0.0' })).toBe('Published version 1.0.0');
   });
 });

@@ -1,7 +1,15 @@
-import { createDomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import {
+  BranchCreated,
+  BranchDeleted,
+  CodePushed,
+  type GitChange,
+  PullRequestMerged,
+  PullRequestUpdated,
+} from '@dreamdevops/contracts/webhooks/events';
+import { type CompanyId, type DomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { repositoryOf, translate } from '../domain/forgejo-events.ts';
-import { isValidSignature, webhookSecret } from '../domain/signature.ts';
+import { isValidSignature, webhookSecret } from '@dreamdevops/contracts/webhooks/signature';
 
 const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -74,16 +82,26 @@ export class WebhookGateway {
         }
         await appendToOutbox(
           tx,
-          events.map((translated) =>
-            createDomainEvent({
-              eventType: translated.eventType,
-              companyId,
-              payload: { applicationId: owner.application_id, ...translated.payload },
-            }),
-          ),
+          events.map((change) => toEvent(change, companyId, owner.application_id)),
         );
         return 'accepted' as const;
       }),
     );
+  }
+}
+
+/** A change in an application's repository, as the event its contract defines. */
+function toEvent(change: GitChange, companyId: CompanyId, applicationId: string): DomainEvent {
+  switch (change.eventType) {
+    case 'CodePushed':
+      return CodePushed.create({ companyId, payload: { applicationId, ...change.payload } });
+    case 'BranchCreated':
+      return BranchCreated.create({ companyId, payload: { applicationId, ...change.payload } });
+    case 'BranchDeleted':
+      return BranchDeleted.create({ companyId, payload: { applicationId, ...change.payload } });
+    case 'PullRequestUpdated':
+      return PullRequestUpdated.create({ companyId, payload: { applicationId, ...change.payload } });
+    case 'PullRequestMerged':
+      return PullRequestMerged.create({ companyId, payload: { applicationId, ...change.payload } });
   }
 }

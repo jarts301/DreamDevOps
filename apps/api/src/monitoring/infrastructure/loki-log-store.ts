@@ -1,5 +1,5 @@
 import { isUuid } from '@dreamdevops/shared-kernel';
-import { PLACE_ATTRIBUTE } from '../../environments/domain/telemetry.ts';
+import { PLACE_ATTRIBUTE } from '@dreamdevops/contracts/environments/telemetry';
 import { type LogEntry, type LogStore, LogsUnavailableError } from '../application/ports.ts';
 
 export interface LokiOptions {

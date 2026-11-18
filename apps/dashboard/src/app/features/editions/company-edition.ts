@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, type OnInit, signal } from '@angular/core';
 import { errorMessage } from '../../core/api-error';
-import { type CompanyEntitlements, EDITION_NAMES, EditionsApi } from './editions.api';
+import { type CompanyEntitlements, editionName as nameOfEdition, EditionsApi } from './editions.api';
 
 /** What the company's edition includes. Any member may look. */
 @Component({
@@ -50,7 +50,7 @@ export class CompanyEdition implements OnInit {
 
   protected readonly entitlements = signal<CompanyEntitlements | null>(null);
   protected readonly error = signal<string | null>(null);
-  protected readonly editionName = computed(() => EDITION_NAMES[this.entitlements()?.edition ?? 'community']);
+  protected readonly editionName = computed(() => nameOfEdition(this.entitlements()?.edition ?? 'community'));
   protected readonly included = computed(() => this.entitlements()?.features.filter((feature) => feature.enabled) ?? []);
   protected readonly unavailable = computed(
     () => this.entitlements()?.features.filter((feature) => !feature.enabled) ?? [],

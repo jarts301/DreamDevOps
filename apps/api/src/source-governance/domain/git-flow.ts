@@ -1,6 +1,11 @@
-/** The Forgejo teams in each company's organization. Every team covers every repository. */
-export type TeamKey = 'developers' | 'tech-leads' | 'readers';
+import type { TeamKey } from '@dreamdevops/contracts/source-governance/http';
+import { RC_IMAGE_CHECK, TESTS_CHECK } from '@dreamdevops/contracts/source-governance/services';
 
+// The checks' and teams' names are Source governance's published language, kept in its contracts.
+export type { TeamKey } from '@dreamdevops/contracts/source-governance/http';
+export { RC_IMAGE_CHECK, TESTS_CHECK } from '@dreamdevops/contracts/source-governance/services';
+
+/** The Forgejo teams in each company's organization. Every team covers every repository. */
 export interface TeamDefinition {
   readonly key: TeamKey;
   readonly description: string;
@@ -46,13 +51,6 @@ export interface GitFlowPolicy {
   readonly platformTags: readonly string[];
 }
 
-/**
- * The status the platform reports for a pull request's newest commit, from its own check
- * pipeline. A repository's own workflows can't remove or rename it.
- */
-export const TESTS_CHECK = 'dreamdevops/tests';
-/** The status Release Management reports once a release branch's newest commit has a published RC image. */
-export const RC_IMAGE_CHECK = 'dreamdevops/rc-image';
 
 /**
  * The branch rules that make Git Flow the only path to production. feature/* branches

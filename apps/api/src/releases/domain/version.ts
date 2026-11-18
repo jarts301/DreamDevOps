@@ -1,6 +1,8 @@
+import type { ReleaseKind } from '@dreamdevops/contracts/releases/http';
 import { ReleaseError } from './errors.ts';
 
-export type ReleaseKind = 'release' | 'hotfix';
+// The kinds of release are Releases' published language, kept in its contracts.
+export type { ReleaseKind } from '@dreamdevops/contracts/releases/http';
 
 const VERSION = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 

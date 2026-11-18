@@ -14,9 +14,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
+import type { CurrentUser, SignedOut } from '@dreamdevops/contracts/identity-access/http';
 import type { CookieOptions, Response } from 'express';
 import type { AppConfig } from '../../config/app-config.ts';
-import { Authenticated, Public } from '../../http/access.decorators.ts';
+import { Authenticated, Public, SignInRateLimit } from '../../http/access.decorators.ts';
 import { type ApiRequest, LOGIN_COOKIE, SESSION_COOKIE } from '../../http/request.ts';
 import { hashSessionId, newSessionId, SESSION_STORE, type SessionStore } from '../../session/session-store.ts';
 import { APP_CONFIG } from '../../tokens.ts';
@@ -30,6 +31,7 @@ const LOGIN_COOKIE_LIFETIME_MS = 10 * 60_000;
  * and the browser only holds an opaque session ID that scripts can't read.
  */
 @Controller('auth')
+@SignInRateLimit()
 export class AuthController {
   readonly #config: AppConfig;
   readonly #identityProvider: IdentityProvider;
@@ -138,7 +140,7 @@ export class AuthController {
   @Authenticated()
   @Post('logout')
   @HttpCode(200)
-  async logout(@Req() request: ApiRequest, @Res({ passthrough: true }) response: Response): Promise<object> {
+  async logout(@Req() request: ApiRequest, @Res({ passthrough: true }) response: Response): Promise<SignedOut> {
     await this.#sessions.delete(request.sessionIdHash!);
     response.clearCookie(SESSION_COOKIE, this.#cookieOptions());
     return {
@@ -153,7 +155,7 @@ export class AuthController {
   @SkipThrottle({ auth: true })
   @Authenticated()
   @Get('me')
-  me(@Req() request: ApiRequest): object {
+  me(@Req() request: ApiRequest): CurrentUser {
     const { userId, email, displayName, companyId, companyName, role, permissions, memberships } = request.principal!;
     return { userId, email, displayName, companyId, companyName, role, permissions, memberships };
   }

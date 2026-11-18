@@ -11,6 +11,7 @@
     "no-console": "error",
     "typescript/no-explicit-any": "error",
     "import/no-cycle": "error",
+    "import/no-duplicates": "error",
     "promise/no-multiple-resolved": "error",
     "no-var": "error",
     "prefer-const": "error"

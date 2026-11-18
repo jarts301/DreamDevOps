@@ -11,7 +11,7 @@ import {
   type ScaffoldValues,
   unknownPlaceholders,
 } from '../domain/blueprint.ts';
-import type { BlueprintCatalog } from '../application/blueprint-catalog.ts';
+import type { BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
 
 /** The file that lists every published version and its checksum. */
 export const PUBLISHED_FILE = 'published.json';

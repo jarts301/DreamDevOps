@@ -1,49 +1,16 @@
+import { KUBERNETES_PROVIDER, LOCAL_PROVIDER } from '@dreamdevops/contracts/environments/hosting';
 import { isIP } from 'node:net';
 import { EnvironmentError } from './errors.ts';
 
-/** Where a provider runs: servers the company runs itself, or a cloud service. */
-export type HostingKind = 'self-hosted' | 'cloud';
+import type { HostingProvider, SettingDefinition } from '@dreamdevops/contracts/environments/http';
 
-export type SettingType = 'url' | 'hostname' | 'port' | 'text';
-
-export interface SettingDefinition {
-  /** A stable key. Saved settings use it, so it must never change. */
-  readonly key: string;
-  readonly label: string;
-  readonly type: SettingType;
-  readonly required: boolean;
-  /** For text settings, the form a value must have. */
-  readonly pattern?: string;
-  /** For optional ports, the value used when none is given. */
-  readonly defaultValue?: number;
-  readonly example: string;
-  readonly help: string | null;
-}
-
-/**
- * A kind of place where environments can run. Providers are data: adding one means
- * adding it to HOSTING_PROVIDERS, and the dashboard shows its settings from this.
- */
-export interface HostingProvider {
-  /** A stable key. Targets and events use it, so it must never change. */
-  readonly key: string;
-  readonly name: string;
-  readonly kind: HostingKind;
-  readonly description: string;
-  /**
-   * Whether the platform can deploy to it yet. Others can be chosen already, so
-   * environments can be planned, and will deploy once the platform supports them.
-   */
-  readonly deploys: boolean;
-  readonly settings: readonly SettingDefinition[];
-}
+// What a provider is, and the settings it needs, are Environments' published language, kept in its contracts.
+export type { HostingKind, HostingProvider, SettingDefinition, SettingType } from '@dreamdevops/contracts/environments/http';
 
 export type HostingSettings = Readonly<Record<string, string | number>>;
 
-/** The provider for the machine that runs DreamDevOps, for trying things out. */
-export const LOCAL_PROVIDER = 'local';
-/** The provider for clusters that run the platform's agent. */
-export const KUBERNETES_PROVIDER = 'kubernetes';
+// The providers' keys are Environments' published language, kept in its contracts.
+export { type HostingProviderKey, KUBERNETES_PROVIDER, LOCAL_PROVIDER } from '@dreamdevops/contracts/environments/hosting';
 
 /**
  * The places environments can run. Those that don't deploy yet are listed so people can

@@ -1,51 +1,63 @@
 import { randomUUID } from 'node:crypto';
-import { type CompanyId, createDomainEvent, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
-import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { Principal } from '../../identity-access/domain/access.ts';
 import {
-  CompanyAccessService,
-  type CreatedInvitation,
-} from '../../identity-access/application/company-access.service.ts';
-import { normalizeEmail } from '../../identity-access/domain/email.ts';
+  CompanyCreated,
+  CompanyProvisioningRequested,
+  CompanyReactivated,
+  CompanyRenamed,
+  CompanySuspended,
+} from '@dreamdevops/contracts/tenancy/events';
+import { type CompanyId, isUuid, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
+import { normalizedEmail, type Principal } from '@dreamdevops/contracts/identity-access/access';
+import type { CreatedInvitation } from '@dreamdevops/contracts/identity-access/http';
+import type { FirstAdminInvitations } from '@dreamdevops/contracts/identity-access/services';
+import type { CompanySummary } from '@dreamdevops/contracts/tenancy/http';
 import { type CompanyStatus, normalizeCompanyName, numberedSlug, slugFromName } from '../domain/company.ts';
 import { TenancyError } from '../domain/errors.ts';
-
-export interface CompanySummary {
-  readonly id: string;
-  readonly name: string;
-  readonly slug: string;
-  readonly status: CompanyStatus;
-  readonly createdAt: string;
-  readonly provisioningError: string | null;
-}
 
 /** The platform's register of companies. Only platform admins reach it. */
 export class CompaniesService {
   readonly #database: TenantDatabase;
-  readonly #access: CompanyAccessService;
+  readonly #invitations: FirstAdminInvitations;
 
-  constructor(database: TenantDatabase, access: CompanyAccessService) {
+  constructor(database: TenantDatabase, invitations: FirstAdminInvitations) {
     this.#database = database;
-    this.#access = access;
+    this.#invitations = invitations;
   }
 
   /** Lists companies without entering any of them, so it reveals no company data. */
   async list(): Promise<CompanySummary[]> {
     return this.#platform(async (tx) => {
-      const { rows } = await tx.query<CompanySummary>(
-        `SELECT c.id, c.name, c.slug, c.status, c.created_at AS "createdAt",
+      const { rows } = await tx.query<{
+        id: string;
+        name: string;
+        slug: string;
+        status: CompanyStatus;
+        created_at: Date;
+        provisioning_error: string | null;
+      }>(
+        `SELECT c.id, c.name, c.slug, c.status, c.created_at,
                 (SELECT r.last_error FROM tenancy.company_resources r
-                 WHERE r.company_id = c.id AND r.status = 'failed' LIMIT 1) AS "provisioningError"
+                 WHERE r.company_id = c.id AND r.status = 'failed' LIMIT 1) AS provisioning_error
          FROM tenancy.companies c
          ORDER BY lower(c.name)`,
       );
-      return rows;
+      return rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        status: row.status,
+        createdAt: row.created_at.toISOString(),
+        provisioningError: row.provisioning_error,
+      }));
     });
   }
 
   /**
-   * Creates the company and invites its first admin in one transaction, so a company
-   * can't exist without a way in. Its resources are provisioned in the background.
+   * Creates the company, then has Identity and access invite its first admin, in the new
+   * company. The two are separate steps, as Identity and access keeps its own data. Should
+   * the invitation fail after the company is made, a platform admin invites its first admin
+   * again. Its resources are provisioned in the background.
    */
   async create(
     actor: Principal,
@@ -53,10 +65,10 @@ export class CompaniesService {
     emailValue: unknown,
   ): Promise<{ company: CompanySummary; invitation: CreatedInvitation }> {
     const name = normalizeCompanyName(nameValue);
-    const email = normalizeEmail(emailValue);
+    const email = firstAdminEmail(emailValue);
     const companyId = parseCompanyId(randomUUID());
 
-    return runWithCompany(companyId, () =>
+    const company = await runWithCompany(companyId, () =>
       this.#database.transaction(async (tx) => {
         await assertNameFree(tx, name, null);
         const slug = await freeSlug(tx, slugFromName(name));
@@ -67,22 +79,20 @@ export class CompaniesService {
           [companyId, name, slug, actor.userId],
         );
         await appendToOutbox(tx, [
-          createDomainEvent({ eventType: 'CompanyCreated', companyId, actorId: actor.userId, payload: { name, slug, createdBy: actor.userId } }),
+          CompanyCreated.create({ companyId, actorId: actor.userId, payload: { name, slug, createdBy: actor.userId } }),
         ]);
-        const invitation = await this.#access.inviteFirstAdminIn(tx, actor, email);
         return {
-          company: {
-            id: companyId,
-            name,
-            slug,
-            status: 'provisioning' as const,
-            createdAt: rows[0]!.created_at.toISOString(),
-            provisioningError: null,
-          },
-          invitation,
+          id: companyId,
+          name,
+          slug,
+          status: 'provisioning' as const,
+          createdAt: rows[0]!.created_at.toISOString(),
+          provisioningError: null,
         };
       }),
     );
+    const invitation = await runWithCompany(companyId, () => this.#invitations.inviteFirstAdmin(actor, email));
+    return { company, invitation };
   }
 
   rename(actor: Principal, idValue: unknown, nameValue: unknown): Promise<void> {
@@ -94,8 +104,7 @@ export class CompaniesService {
       await assertNameFree(tx, name, companyId);
       await tx.query('UPDATE tenancy.companies SET name = $2, updated_at = now() WHERE id = $1', [companyId, name]);
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'CompanyRenamed',
+        CompanyRenamed.create({
           companyId,
           actorId: actor.userId,
           payload: { name, previousName: current.name, renamedBy: actor.userId },
@@ -115,7 +124,7 @@ export class CompaniesService {
         [companyId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({ eventType: 'CompanySuspended', companyId, actorId: actor.userId, payload: { suspendedBy: actor.userId } }),
+        CompanySuspended.create({ companyId, actorId: actor.userId, payload: { suspendedBy: actor.userId } }),
       ]);
     });
   }
@@ -131,8 +140,8 @@ export class CompaniesService {
         [companyId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({ eventType: 'CompanyReactivated', companyId, actorId: actor.userId, payload: { reactivatedBy: actor.userId } }),
-        createDomainEvent({ eventType: 'CompanyProvisioningRequested', companyId, actorId: actor.userId, payload: {} }),
+        CompanyReactivated.create({ companyId, actorId: actor.userId, payload: { reactivatedBy: actor.userId } }),
+        CompanyProvisioningRequested.create({ companyId, actorId: actor.userId, payload: {} }),
       ]);
     });
   }
@@ -153,8 +162,7 @@ export class CompaniesService {
         ]);
       }
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'CompanyProvisioningRequested',
+        CompanyProvisioningRequested.create({
           companyId,
           actorId: actor.userId,
           payload: { requestedBy: actor.userId },
@@ -164,18 +172,19 @@ export class CompaniesService {
   }
 
   /** Sends a new first-admin invitation, such as when the first one was lost. */
-  inviteFirstAdmin(
+  async inviteFirstAdmin(
     actor: Principal,
     idValue: unknown,
     emailValue: unknown,
   ): Promise<{ invitation: CreatedInvitation; companyName: string }> {
-    const email = normalizeEmail(emailValue);
-    return this.#inCompany(idValue, async (tx, _companyId, current) => {
+    const email = firstAdminEmail(emailValue);
+    const { companyId, companyName } = await this.#inCompany(idValue, async (_tx, companyId, current) => {
       if (current.status === 'suspended') {
         throw new TenancyError('conflict', 'Reactivate the company first.');
       }
-      return { invitation: await this.#access.inviteFirstAdminIn(tx, actor, email), companyName: current.name };
+      return { companyId, companyName: current.name };
     });
+    return { invitation: await runWithCompany(companyId, () => this.#invitations.inviteFirstAdmin(actor, email)), companyName };
   }
 
   /** Runs work for one company, after checking it exists and locking it. */
@@ -207,6 +216,15 @@ export class CompaniesService {
       this.#database.transaction(work),
     );
   }
+}
+
+/** The first admin's address, checked before the company is made, so a typo doesn't leave a company without a way in. */
+function firstAdminEmail(value: unknown): string {
+  const email = normalizedEmail(value);
+  if (email === null) {
+    throw new TenancyError('invalid', 'Enter a valid email address.');
+  }
+  return email;
 }
 
 async function assertNameFree(tx: TenantTransaction, name: string, exceptId: string | null): Promise<void> {

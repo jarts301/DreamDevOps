@@ -1,7 +1,6 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, type OnInit, signal } from '@angular/core';
 import { errorMessage } from '../../core/api-error';
-import { describeEvent } from '../../core/events';
 import { type ActivityEntry, AuditApi } from './audit.api';
 
 /** A platform admin's own actions, across every company they acted on. */
@@ -37,7 +36,7 @@ import { type ActivityEntry, AuditApi } from './audit.api';
                 <tr>
                   <td>{{ entry.occurredAt | date: 'medium' }}</td>
                   <td>{{ entry.companyName }}</td>
-                  <td>{{ describe(entry) }}</td>
+                  <td>{{ entry.description }}</td>
                 </tr>
               }
             </tbody>
@@ -61,10 +60,6 @@ export class MyActivity implements OnInit {
   async ngOnInit(): Promise<void> {
     await this.load();
     this.loading.set(false);
-  }
-
-  protected describe(entry: ActivityEntry): string {
-    return describeEvent(entry.eventType, entry.payload);
   }
 
   protected async load(): Promise<void> {

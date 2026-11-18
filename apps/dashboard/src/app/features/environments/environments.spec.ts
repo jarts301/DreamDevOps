@@ -2,7 +2,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { SessionService } from '../../core/session.service';
 import { confirmProduction, settle } from '../../testing';
 import { Environments } from './environments';
@@ -103,23 +102,6 @@ describe('Environments', () => {
     await render(fixture);
     return fixture;
   };
-
-  it('describes environment and target changes in the audit log', () => {
-    setUp([]);
-    expect(describeEvent('EnvironmentCreated', { name: 'Live', kind: 'production' })).toBe(
-      'Created the production environment "Live"',
-    );
-    expect(describeEvent('EnvironmentUpdated', { acceptsFeatureImages: false })).toBe(
-      'Stopped an environment from accepting feature images',
-    );
-    expect(describeEvent('TargetConnected', { environmentName: 'Live', keyFingerprint: 'ab12:cd34:ef56:7890' })).toBe(
-      'Connected a target to "Live", key ab12:cd34:ef56:7890',
-    );
-    expect(describeEvent('TargetLost', { environmentName: 'Live' })).toBe('The target of "Live" stopped reporting');
-    expect(describeEvent('TargetRevoked', { environmentName: 'Live', wasConnected: false })).toBe(
-      'Cancelled connecting a target to "Live"',
-    );
-  });
 
   it('lists environments with what they accept and the health of their target', async () => {
     const fixture = await open();

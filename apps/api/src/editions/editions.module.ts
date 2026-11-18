@@ -1,8 +1,9 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { COMPANY_DIRECTORY, type CompanyDirectory } from '../tenancy/application/company-directory.ts';
+import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
+import { FEATURE_ACCESS } from '@dreamdevops/contracts/editions/services';
 import { Entitlements } from './application/entitlements.ts';
 import { ENTITLEMENT_PROVIDER, type EntitlementProvider } from './application/ports.ts';
 import { EditionsController } from './http/editions.controller.ts';
@@ -29,11 +30,13 @@ export class EditionsModule {
               new Entitlements(database, companies, provider),
             inject: [TenantDatabase, COMPANY_DIRECTORY, ENTITLEMENT_PROVIDER],
           },
+          // What other contexts ask whether a company's edition includes a feature.
+          { provide: FEATURE_ACCESS, useExisting: Entitlements },
         ],
         settings.overrides,
       ),
-      // Every request's feature check needs it.
-      exports: [Entitlements],
+      // Entitlements is for every request's feature check, which the platform runs; contexts use FEATURE_ACCESS.
+      exports: [Entitlements, FEATURE_ACCESS],
     }));
   }
 }

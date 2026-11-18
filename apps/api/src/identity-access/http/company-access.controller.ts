@@ -1,7 +1,14 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Req } from '@nestjs/common';
-import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
+import { Authenticated, RequirePermissions, SignInRateLimit } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { InvitationEmails } from '../../notifications/application/invitation-emails.ts';
+import type {
+  AcceptedInvitation,
+  InvitationView,
+  MemberView,
+  RoleView,
+  SentInvitation,
+} from '@dreamdevops/contracts/identity-access/http';
+import { INVITATION_MAILER, type InvitationMailer } from '@dreamdevops/contracts/notifications/services';
 import { CompanyAccessService } from '../application/company-access.service.ts';
 
 const MANAGE_USERS = 'company-users:manage';
@@ -10,11 +17,11 @@ const MANAGE_USERS = 'company-users:manage';
 @Controller('company')
 export class CompanyAccessController {
   readonly #service: CompanyAccessService;
-  readonly #emails: InvitationEmails;
+  readonly #emails: InvitationMailer;
 
   constructor(
     @Inject(CompanyAccessService) service: CompanyAccessService,
-    @Inject(InvitationEmails) emails: InvitationEmails,
+    @Inject(INVITATION_MAILER) emails: InvitationMailer,
   ) {
     this.#service = service;
     this.#emails = emails;
@@ -22,13 +29,13 @@ export class CompanyAccessController {
 
   @RequirePermissions(MANAGE_USERS)
   @Get('roles')
-  roles(): Promise<object[]> {
+  roles(): Promise<RoleView[]> {
     return this.#service.listRoles();
   }
 
   @RequirePermissions(MANAGE_USERS)
   @Get('members')
-  members(): Promise<object[]> {
+  members(): Promise<MemberView[]> {
     return this.#service.listMembers();
   }
 
@@ -48,13 +55,13 @@ export class CompanyAccessController {
 
   @RequirePermissions(MANAGE_USERS)
   @Get('invitations')
-  invitations(): Promise<object[]> {
+  invitations(): Promise<InvitationView[]> {
     return this.#service.listInvitations();
   }
 
   @RequirePermissions(MANAGE_USERS)
   @Post('invitations')
-  async invite(@Req() request: ApiRequest, @Body() body: { email?: unknown; role?: unknown }): Promise<object> {
+  async invite(@Req() request: ApiRequest, @Body() body: { email?: unknown; role?: unknown }): Promise<SentInvitation> {
     const principal = request.principal!;
     const invitation = await this.#service.invite(principal, body?.email, body?.role);
     const emailSent = await this.#emails.send({
@@ -62,7 +69,8 @@ export class CompanyAccessController {
       companyName: principal.companyName ?? 'your company',
       role: invitation.role,
       invitedBy: principal.displayName,
-      invitation,
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
     });
     return { ...invitation, emailSent };
   }
@@ -76,6 +84,7 @@ export class CompanyAccessController {
 }
 
 @Controller('invitations')
+@SignInRateLimit()
 export class InvitationsController {
   readonly #service: CompanyAccessService;
 
@@ -86,7 +95,7 @@ export class InvitationsController {
   @Authenticated()
   @Post('accept')
   @HttpCode(200)
-  accept(@Req() request: ApiRequest, @Body() body: { token?: unknown }): Promise<object> {
+  accept(@Req() request: ApiRequest, @Body() body: { token?: unknown }): Promise<AcceptedInvitation> {
     return this.#service.acceptInvitation(request.principal!, body?.token);
   }
 }

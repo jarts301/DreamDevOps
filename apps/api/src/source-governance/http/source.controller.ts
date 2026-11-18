@@ -1,4 +1,5 @@
 import { Controller, Get, HttpCode, Inject, Param, Post, Req } from '@nestjs/common';
+import type { RepositoryView, SourceAccessView } from '@dreamdevops/contracts/source-governance/http';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { Repositories } from '../application/repositories.ts';
@@ -17,7 +18,7 @@ export class SourceController {
 
   @Authenticated()
   @Get('repositories')
-  list(): Promise<object[]> {
+  list(): Promise<RepositoryView[]> {
     return this.#repositories.list();
   }
 
@@ -31,14 +32,14 @@ export class SourceController {
 
   @Authenticated()
   @Get('source-access')
-  mine(@Req() request: ApiRequest): Promise<object> {
+  mine(@Req() request: ApiRequest): Promise<SourceAccessView> {
     return this.#access.mine(request.principal!);
   }
 
   /** Checks for new Git accounts, such as right after someone first signs in to Forgejo. */
   @Authenticated()
   @Post('source-access/sync')
-  async sync(@Req() request: ApiRequest): Promise<object> {
+  async sync(@Req() request: ApiRequest): Promise<SourceAccessView> {
     await this.#access.syncCompany();
     return this.#access.mine(request.principal!);
   }

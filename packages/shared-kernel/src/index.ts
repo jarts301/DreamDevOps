@@ -13,5 +13,6 @@ export type { EventPublisher, Job, JobHandler, JobQueue, QueueOptions, WorkOptio
 export { EventBus } from './application/event-bus.ts';
 export { deterministicJobId } from './application/job-ids.ts';
 export { withRenewal } from './application/renewal.ts';
-export { EventPayload, InvalidEventPayloadError, payloadOf } from './application/event-payload.ts';
+export { InvalidEventPayloadError } from './application/event-contract.ts';
+export type { EventContract } from './application/event-contract.ts';
 export type { EventHandler } from './application/event-bus.ts';

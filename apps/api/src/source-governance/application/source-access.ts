@@ -1,27 +1,23 @@
-import { currentCompanyId } from '@dreamdevops/shared-kernel';
+import { MemberRemoved, RoleGranted } from '@dreamdevops/contracts/identity-access/events';
+import { RepositoryCreated } from '@dreamdevops/contracts/source-governance/events';
+import { CompanyProvisioned, CompanyReactivated, CompanySuspended } from '@dreamdevops/contracts/tenancy/events';
+import { currentCompanyId, type EventContract } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import type { Principal } from '../../identity-access/domain/access.ts';
-import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { planTeamChanges, TEAMS, teamFor, type TeamKey } from '../domain/git-flow.ts';
+import type { SourceAccessView } from '@dreamdevops/contracts/source-governance/http';
 import type { SourceHost } from './ports.ts';
 
 /** The events that change who should be in which team. */
-export const ACCESS_TRIGGERS = [
-  'RoleGranted',
-  'MemberRemoved',
-  'CompanySuspended',
-  'CompanyReactivated',
-  'CompanyProvisioned',
-  'RepositoryCreated',
-] as const;
-
-export interface SourceAccessView {
-  /** Where to sign in to Forgejo, which creates the account on first use. */
-  readonly signInUrl: string;
-  readonly gitUrl: string;
-  readonly hasAccount: boolean;
-  readonly team: TeamKey;
-}
+export const ACCESS_TRIGGERS: readonly EventContract[] = [
+  RoleGranted,
+  MemberRemoved,
+  CompanySuspended,
+  CompanyReactivated,
+  CompanyProvisioned,
+  RepositoryCreated,
+];
 
 interface MemberAccount {
   user_id: string;

@@ -2,18 +2,20 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { settle } from '../../testing';
 import { Notifications } from '../notifications/notifications';
+import type { ActivityEntry, AuditEntry } from './audit.api';
 import { AuditLog } from './audit-log';
 import { MyActivity } from './my-activity';
 
-const entry = (sequence: number, eventType: string, payload: object, actor: object | null = null) => ({
+/** An entry as the API sends it, with the change in words, as its event's contract tells it. */
+const entry = (sequence: number, eventType: string, description: string, actor: AuditEntry['actor'] = null): AuditEntry => ({
   sequence,
   eventType,
+  description,
   actor,
   occurredAt: '2026-11-01T10:00:00Z',
-  payload,
+  payload: {},
 });
 
 describe('audit and notification screens', () => {
@@ -38,17 +40,6 @@ describe('audit and notification screens', () => {
     await fixture.whenStable();
   };
 
-  describe('describeEvent', () => {
-    it('reads like a sentence, with role names', () => {
-      expect(describeEvent('RoleGranted', { role: 'tech-lead', invitationId: 'i' })).toBe('Joined as Tech Lead');
-      expect(describeEvent('RoleGranted', { role: 'viewer' })).toBe("Changed a member's role to Viewer");
-      expect(describeEvent('CompanyRenamed', { previousName: 'Old', name: 'New' })).toBe(
-        'Renamed the company from "Old" to "New"',
-      );
-      expect(describeEvent('SomethingNew', {})).toBe('SomethingNew');
-    });
-  });
-
   describe('AuditLog', () => {
     const open = async (page: object) => {
       const fixture = TestBed.createComponent(AuditLog);
@@ -59,11 +50,11 @@ describe('audit and notification screens', () => {
       return fixture;
     };
 
-    it('shows who did what, and the platform for its own work', async () => {
+    it("shows who did what, in the API's words, and the platform for its own work", async () => {
       const fixture = await open({
         entries: [
-          entry(2, 'RoleGranted', { role: 'developer' }, { userId: 'u', displayName: 'Ana Admin' }),
-          entry(1, 'CompanyProvisioned', {}),
+          entry(2, 'RoleGranted', "Changed a member's role to Developer", { userId: 'u', displayName: 'Ana Admin' }),
+          entry(1, 'CompanyProvisioned', 'Finished setting up the company'),
         ],
         nextBefore: null,
       });
@@ -75,13 +66,13 @@ describe('audit and notification screens', () => {
     });
 
     it('loads older entries on request', async () => {
-      const fixture = await open({ entries: [entry(51, 'MemberRemoved', {})], nextBefore: '2026-11-01T10:00:00.000Z|51' });
+      const fixture = await open({ entries: [entry(51, 'MemberRemoved', 'Removed a member who was Viewer')], nextBefore: '2026-11-01T10:00:00.000Z|51' });
 
       button(fixture, 'Show older entries').click();
       await settle();
       const request = http.expectOne((candidate) => candidate.url === '/api/v1/company/audit');
       expect(request.request.params.get('before')).toBe('2026-11-01T10:00:00.000Z|51');
-      request.flush({ entries: [entry(50, 'InvitationRevoked', {})], nextBefore: null });
+      request.flush({ entries: [entry(50, 'InvitationRevoked', 'Revoked an invitation')], nextBefore: null });
       await render(fixture);
 
       expect(text(fixture)).toContain('Revoked an invitation');
@@ -109,12 +100,15 @@ describe('audit and notification screens', () => {
       const fixture = TestBed.createComponent(MyActivity);
       fixture.detectChanges();
       await settle();
-      http.expectOne('/api/v1/platform/audit').flush({
-        entries: [
-          { companyId: 'c', companyName: 'Acme', eventType: 'CompanySuspended', occurredAt: '2026-11-01T10:00:00Z', payload: {} },
-        ],
-        nextBefore: null,
-      });
+      const suspended: ActivityEntry = {
+        companyId: 'c',
+        companyName: 'Acme',
+        eventType: 'CompanySuspended',
+        description: 'Suspended the company',
+        occurredAt: '2026-11-01T10:00:00Z',
+        payload: {},
+      };
+      http.expectOne('/api/v1/platform/audit').flush({ entries: [suspended], nextBefore: null });
       await render(fixture);
 
       expect(text(fixture)).toContain('Acme');

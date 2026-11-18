@@ -19,6 +19,7 @@
           "options": {
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
+            "conditions": ["module", "@dreamdevops/source"],
             "assets": [
               {
                 "glob": "**/*",
@@ -43,12 +44,14 @@
                   "maximumError": "8kB"
                 }
               ],
-              "outputHashing": "all"
+              "outputHashing": "all",
+              "conditions": ["module", "production", "@dreamdevops/source"]
             },
             "development": {
               "optimization": false,
               "extractLicenses": false,
-              "sourceMap": true
+              "sourceMap": true,
+              "conditions": ["module", "development", "@dreamdevops/source"]
             }
           },
           "defaultConfiguration": "production"
@@ -69,7 +72,10 @@
           }
         },
         "test": {
-          "builder": "@angular/build:unit-test"
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "runnerConfig": "vitest.config.ts"
+          }
         }
       }
     }

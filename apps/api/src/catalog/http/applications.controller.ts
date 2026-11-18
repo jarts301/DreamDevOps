@@ -1,4 +1,11 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import type {
+  ApplicationType,
+  ApplicationView,
+  RegisterApplication,
+  UpdateApplication,
+} from '@dreamdevops/contracts/catalog/http';
+import type { Unchecked } from '@dreamdevops/contracts/http';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
 import { ApplicationCatalog } from '../application/application-catalog.ts';
@@ -17,19 +24,19 @@ export class ApplicationsController {
 
   @Authenticated()
   @Get('application-types')
-  types(): Promise<object[]> {
+  types(): Promise<ApplicationType[]> {
     return this.#catalog.types();
   }
 
   @Authenticated()
   @Get('applications')
-  list(@Query('status') status: unknown): Promise<object[]> {
+  list(@Query('status') status: unknown): Promise<ApplicationView[]> {
     return this.#catalog.list(status);
   }
 
   @Authenticated()
   @Get('applications/:id')
-  get(@Param('id') id: string): Promise<object> {
+  get(@Param('id') id: string): Promise<ApplicationView> {
     return this.#catalog.get(id);
   }
 
@@ -37,8 +44,8 @@ export class ApplicationsController {
   @Post('applications')
   register(
     @Req() request: ApiRequest,
-    @Body() body: { name?: unknown; type?: unknown; description?: unknown },
-  ): Promise<object> {
+    @Body() body: Unchecked<RegisterApplication> | undefined,
+  ): Promise<ApplicationView> {
     return this.#catalog.register(request.principal!, body ?? {});
   }
 
@@ -48,7 +55,7 @@ export class ApplicationsController {
   update(
     @Req() request: ApiRequest,
     @Param('id') id: string,
-    @Body() body: { name?: unknown; description?: unknown },
+    @Body() body: Unchecked<UpdateApplication> | undefined,
   ): Promise<void> {
     return this.#catalog.update(request.principal!, id, body ?? {});
   }

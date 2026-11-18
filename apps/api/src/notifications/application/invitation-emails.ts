@@ -1,21 +1,13 @@
 import { Logger } from '@nestjs/common';
-import type { CreatedInvitation } from '../../identity-access/application/company-access.service.ts';
-import { roleName } from '../domain/event-catalog.ts';
+import { roleName } from '@dreamdevops/contracts/identity-access/roles';
+import type { InvitationEmail, InvitationMailer } from '@dreamdevops/contracts/notifications/services';
 import type { Mailer } from './ports.ts';
-
-export interface InvitationEmail {
-  readonly to: string;
-  readonly companyName: string;
-  readonly role: string;
-  readonly invitedBy: string;
-  readonly invitation: CreatedInvitation;
-}
 
 /**
  * Emails invitation links. The token is only ever in memory and in the email, so it's
  * sent straight after the invitation is saved rather than through a stored job.
  */
-export class InvitationEmails {
+export class InvitationEmails implements InvitationMailer {
   readonly #logger = new Logger(InvitationEmails.name);
   readonly #mailer: Mailer;
   readonly #dashboardUrl: string;
@@ -28,8 +20,8 @@ export class InvitationEmails {
   /** Returns whether the email was sent. A failure never undoes the invitation. */
   async send(email: InvitationEmail): Promise<boolean> {
     const link = new URL('invitations/accept', `${this.#dashboardUrl.replace(/\/$/, '')}/`);
-    link.hash = `token=${encodeURIComponent(email.invitation.token)}`;
-    const expires = new Date(email.invitation.expiresAt).toUTCString().slice(0, 16);
+    link.hash = `token=${encodeURIComponent(email.token)}`;
+    const expires = new Date(email.expiresAt).toUTCString().slice(0, 16);
     try {
       await this.#mailer.send({
         to: email.to,

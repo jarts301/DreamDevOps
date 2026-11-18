@@ -1,5 +1,5 @@
 import { isUuid } from '@dreamdevops/shared-kernel';
-import { PLACE_ATTRIBUTE } from '../../environments/domain/telemetry.ts';
+import { PLACE_ATTRIBUTE } from '@dreamdevops/contracts/environments/telemetry';
 import { DAILY_HIGH_SECONDS, METRIC_KEYS, type MetricKey, type MetricValues } from '../domain/metrics.ts';
 import { type MetricsStore, MetricsUnavailableError, type MetricsWindow, type SeriesData } from '../application/ports.ts';
 

@@ -1,9 +1,11 @@
+import type { AlertState } from '@dreamdevops/contracts/alerts/http';
+
 /**
  * An alert is ok, pending while its metric is past the threshold but not yet for long
  * enough, or firing. It fires once the metric has stayed past the threshold for its
  * minutes, and is resolved as soon as a check finds it back.
  */
-export type AlertState = 'ok' | 'pending' | 'firing';
+export type { AlertState } from '@dreamdevops/contracts/alerts/http';
 
 export interface AlertStatus {
   readonly state: AlertState;

@@ -105,7 +105,7 @@ All routes start with `/api/v1`, and need the `monitoring` feature, which every 
 
 ## Events
 
-Published through the outbox, with contracts in `domain/events.ts`. The audit log records them all.
+Published through the outbox, with contracts in `alerts/events.ts` in the [contracts](../../../../packages/contracts/README.md). The audit log records them all.
 
 | Event | When | Actor |
 |---|---|---|
@@ -117,7 +117,7 @@ Published through the outbox, with contracts in `domain/events.ts`. The audit lo
 
 Payloads hold the alert, its condition in words, the environment's and application's names, and for the last two, the value in words. They never hold whom it emails, only how many members, so the audit log and chat never show anyone's address.
 
-This context also reacts to Identity's `MemberRemoved`, whose contract is in `identity-access/domain/events.ts`.
+This context also reacts to Identity's `MemberRemoved`, whose contract is in `identity-access/events.ts`.
 
 ## Data separation
 

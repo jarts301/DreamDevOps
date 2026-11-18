@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authorizeChange, type ProtectedChange } from '../src/environments/domain/protection.ts';
+import { authorizeChange, type ProtectedChange } from '@dreamdevops/contracts/environments/protection';
 
 const production = { name: 'Production', production: true };
 const staging = { name: 'Staging', production: false };

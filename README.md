@@ -265,6 +265,8 @@ The [API guide](apps/api/README.md#security-controls) lists the security control
 | [Deployment orchestration](apps/api/src/deployments/README.md) | Deploying, strategies, approval, promote, abort and rollback |
 | [Editions and entitlements](apps/api/src/editions/README.md) | Editions, the feature catalog, and how commercial features plug in |
 | [Dashboard](apps/dashboard/README.md) | Running, structure and testing of the dashboard |
+| [Architecture](ARCHITECTURE.md) | The bounded contexts, the rules that keep them apart, and what's left before one can be split off |
+| [Contracts](packages/contracts/README.md) | What each context publishes: its events, the queries it answers, its HTTP API and the agent protocol, and how they may change |
 | [Shared kernel](packages/shared-kernel/README.md) | Company context, domain events, the outbox and background jobs |
 
 ## Contributing

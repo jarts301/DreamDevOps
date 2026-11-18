@@ -2,7 +2,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { SessionService } from '../../core/session.service';
 import { settle } from '../../testing';
 import { Applications } from './applications';
@@ -130,18 +129,6 @@ describe('Applications', () => {
     input.dispatchEvent(new Event('input'));
     await render(fixture);
   };
-
-  it('describes application changes in the audit log', () => {
-    setUp([]);
-    expect(describeEvent('ApplicationRegistered', { name: 'Billing' })).toBe('Registered the application "Billing"');
-    expect(describeEvent('ApplicationUpdated', { name: 'Payments', previousName: 'Billing' })).toBe(
-      'Renamed the application "Billing" to "Payments"',
-    );
-    expect(describeEvent('ApplicationUpdated', { descriptionChanged: true })).toBe(
-      "Changed an application's description",
-    );
-    expect(describeEvent('ApplicationArchived', { name: 'Billing' })).toBe('Archived the application "Billing"');
-  });
 
   it('lists applications with their type, short name and who registered them', async () => {
     const fixture = await open();

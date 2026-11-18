@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId, type DomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import { AlertResolved, AlertTriggered } from '@dreamdevops/contracts/alerts/events';
+import { currentCompanyId, type DomainEvent, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import type { LatestMetrics } from '../../monitoring/application/latest-metrics.ts';
-import type { MetricKey } from '../../monitoring/domain/metrics.ts';
-import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
+import type { LatestMetrics } from '@dreamdevops/contracts/monitoring/services';
+import type { MetricKey } from '@dreamdevops/contracts/monitoring/metrics';
+import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { type Comparator, describeValue, isPastThreshold } from '../domain/alert.ts';
 import { type AlertState, type AlertStatus, nextStatus } from '../domain/evaluation.ts';
-import type { AlertIncidentPayload, AlertResolvedPayload } from '../domain/events.ts';
 import { conditionOf, payloadOf } from './alert-rules.ts';
 import type { Place, Places } from './places.ts';
 
@@ -141,7 +141,7 @@ export class AlertChecks {
             `INSERT INTO alerts.incidents (id, company_id, alert_id, started_at, start_value) VALUES ($1, $2, $3, $4, $5)`,
             [incidentId, currentCompanyId(), alert.id, now, value],
           );
-          events.push(incidentEvent('AlertTriggered', alert, place!, { incidentId, value, firingSince: now }));
+          events.push(incidentEvent(alert, place!, { incidentId, value, firingSince: now }));
           triggered += 1;
         } else if (transition === 'resolved') {
           const { rows: ended } = await tx.query<{ id: string; started_at: Date }>(
@@ -153,7 +153,7 @@ export class AlertChecks {
           const incident = ended[0];
           if (incident !== undefined) {
             events.push(
-              incidentEvent('AlertResolved', alert, place!, { incidentId: incident.id, value, firingSince: incident.started_at }, now),
+              incidentEvent(alert, place!, { incidentId: incident.id, value, firingSince: incident.started_at }, now),
             );
             resolved += 1;
           }
@@ -169,26 +169,22 @@ function statusOf(alert: Pick<WatchedRow, 'state' | 'pending_since'>): AlertStat
   return { state: alert.state, pendingSince: alert.pending_since };
 }
 
+/** The alert started firing, or, given when, it was resolved. */
 function incidentEvent(
-  eventType: 'AlertTriggered' | 'AlertResolved',
   alert: WatchedRow,
   place: Place,
   incident: { readonly incidentId: string; readonly value: number | null; readonly firingSince: Date },
   resolvedAt?: Date,
 ): DomainEvent {
-  const payload: AlertIncidentPayload = {
+  const payload = {
     ...payloadOf(alert.id, alert.name, conditionOf(alert), place),
     incidentId: incident.incidentId,
     measured: incident.value,
     value: describeValue(incident.value, alert.metric),
     firingSince: incident.firingSince.toISOString(),
   };
-  return createDomainEvent({
-    // Both names written out, so the architecture test finds that both events are published.
-    eventType: eventType === 'AlertTriggered' ? 'AlertTriggered' : 'AlertResolved',
-    companyId: currentCompanyId(),
-    // The platform noticed it, not a person.
-    actorId: null,
-    payload: resolvedAt === undefined ? payload : ({ ...payload, resolvedAt: resolvedAt.toISOString() } satisfies AlertResolvedPayload),
-  });
+  // The platform noticed it, not a person.
+  return resolvedAt === undefined
+    ? AlertTriggered.create({ companyId: currentCompanyId(), actorId: null, payload })
+    : AlertResolved.create({ companyId: currentCompanyId(), actorId: null, payload: { ...payload, resolvedAt: resolvedAt.toISOString() } });
 }

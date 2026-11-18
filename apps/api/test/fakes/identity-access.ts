@@ -1,5 +1,5 @@
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
-import type { CompanyMember, CompanyMembers } from '../../src/identity-access/application/company-members.ts';
+import type { CompanyMember, CompanyMembers } from '@dreamdevops/contracts/identity-access/services';
 import type {
   AuthorizationRequest,
   CodeExchange,

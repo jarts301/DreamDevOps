@@ -1,8 +1,10 @@
+import type { EnvironmentKind } from '@dreamdevops/contracts/environments/http';
 import { numberedSlug, slugFromName } from '../../shared/slug.ts';
 import { EnvironmentError } from './errors.ts';
 
-export type EnvironmentKind = 'test' | 'production';
-export type EnvironmentStatus = 'active' | 'archived';
+// An environment's kind and status are this context's published language, kept in its contracts.
+export type { EnvironmentKind } from '@dreamdevops/contracts/environments/http';
+export type { EnvironmentStatus } from '@dreamdevops/contracts/environments/http';
 
 /** Short enough to name Kubernetes namespaces with the application's short name added. */
 export const MAX_SLUG_LENGTH = 40;

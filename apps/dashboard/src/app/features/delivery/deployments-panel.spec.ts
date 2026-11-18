@@ -2,7 +2,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describeEvent } from '../../core/events';
 import { SessionService } from '../../core/session.service';
 import { confirmProduction, settle } from '../../testing';
 import type { Deployment, RunningVersion } from './delivery.api';
@@ -57,6 +56,8 @@ const runningVersion = (overrides: Partial<RunningVersion> = {}): RunningVersion
   strategy: 'rolling',
   limits: { cpu: '250m', memory: '256Mi' },
   since: '2026-11-10T10:05:00Z',
+  provider: 'kubernetes',
+  address: null,
   settingsChanged: false,
   ...overrides,
 });
@@ -84,15 +85,6 @@ describe('deployment steps', () => {
       'Traffic switched:running',
     ]);
     expect(states(deployment({ strategy: 'blue-green', status: 'aborted' })).at(-1)).toBe('Traffic switched:failed');
-  });
-
-  it('are described in the audit log', () => {
-    expect(describeEvent('DeploymentRequested', { strategy: 'blue-green', environmentName: 'Live', needsApproval: true })).toBe(
-      'Asked for a blue-green deployment to "Live", which needs approval',
-    );
-    expect(describeEvent('EnvironmentSecretSet', { name: 'API_KEY', environmentName: 'Live', applicationId: 'a-1' })).toBe(
-      'Set the secret API_KEY in "Live" for one application',
-    );
   });
 });
 
@@ -200,25 +192,6 @@ describe('DeploymentsPanel', () => {
     await settle();
     answerRefresh([]);
     fixture.destroy();
-  });
-
-  it('describes choosing This machine in the audit log', () => {
-    expect(describeEvent('TargetConnected', { provider: 'local', environmentName: 'Trial' })).toBe('Set "Trial" to run on this machine');
-  });
-
-  it('describes stops, applied values and production reasons in the audit log', () => {
-    expect(describeEvent('DeploymentRequested', { action: 'stop', environmentName: 'Live', reason: 'Retiring the old API' })).toBe(
-      'Asked to stop an application in "Live", because "Retiring the old API"',
-    );
-    expect(describeEvent('DeploymentRequested', { action: 'apply', environmentName: 'Staging' })).toBe(
-      'Asked to apply the values of "Staging" to what runs there',
-    );
-    expect(describeEvent('DeploymentSucceeded', { action: 'stop', applicationName: 'Billing', environmentName: 'Staging' })).toBe(
-      'Stopped Billing in "Staging"',
-    );
-    expect(describeEvent('TargetRevoked', { wasConnected: true, environmentName: 'Live', reason: 'Moving to the new cluster' })).toBe(
-      'Disconnected the target of "Live", because "Moving to the new cluster"',
-    );
   });
 
   it('shows what runs, with changed values to apply, and stops it', async () => {

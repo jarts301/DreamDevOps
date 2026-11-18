@@ -1,15 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { createDomainEvent, currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
+import type { BuildRequests } from '@dreamdevops/contracts/builds/services';
+import type { ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type { ReleasesOverview, ReleaseStatus, StartRelease } from '@dreamdevops/contracts/releases/http';
+import { ReleaseCandidateCreated, ReleaseMerged, ReleasePublished, ReleaseStarted } from '@dreamdevops/contracts/releases/events';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import {
+  RC_IMAGE_CHECK,
+  type RepositoryGit,
+  type RepositoryLookup,
+  type RepositorySpec,
+} from '@dreamdevops/contracts/source-governance/services';
+import { currentCompanyId, parseCompanyId, runWithCompany } from '@dreamdevops/shared-kernel';
 import { appendToOutbox, TenantDatabase, type TenantTransaction } from '@dreamdevops/shared-kernel/postgres';
-import type { Builds } from '../../builds/application/builds.ts';
-import type { ApplicationCatalog } from '../../catalog/application/application-catalog.ts';
-import type { Principal } from '../../identity-access/domain/access.ts';
-import type { RepositorySpec, SourceHost } from '../../source-governance/application/ports.ts';
-import type { RepositoryLookup } from '../../source-governance/application/repository-lookup.ts';
-import { RC_IMAGE_CHECK } from '../../source-governance/domain/git-flow.ts';
 import { ReleaseError } from '../domain/errors.ts';
-
-const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 import {
   branchFor,
   formatVersion,
@@ -20,9 +24,8 @@ import {
   suggestVersions,
 } from '../domain/version.ts';
 
+const NO_COMPANY = parseCompanyId('00000000-0000-0000-0000-000000000000');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export type ReleaseStatus = 'open' | 'merged' | 'published';
 
 interface ReleaseRow {
   id: string;
@@ -39,27 +42,6 @@ interface ReleaseRow {
   created_at: Date;
   merged_at: Date | null;
   published_at: Date | null;
-}
-
-export interface ReleaseView {
-  readonly id: string;
-  readonly kind: ReleaseKind;
-  readonly version: string;
-  readonly branch: string;
-  readonly status: ReleaseStatus;
-  readonly candidates: readonly {
-    readonly number: number;
-    readonly commit: string;
-    readonly tag: string;
-    readonly buildId: string | null;
-    readonly buildStatus: string | null;
-  }[];
-  readonly mergeBackPullRequest: number | null;
-  readonly finalBuildId: string | null;
-  readonly finalBuildStatus: string | null;
-  readonly createdAt: string;
-  readonly mergedAt: string | null;
-  readonly publishedAt: string | null;
 }
 
 /** What a finished build tells this module. */
@@ -79,17 +61,17 @@ export interface FinishedBuild {
  */
 export class Releases {
   readonly #database: TenantDatabase;
-  readonly #catalog: ApplicationCatalog;
+  readonly #catalog: ApplicationDirectory;
   readonly #repositories: RepositoryLookup;
-  readonly #source: SourceHost;
-  readonly #builds: Builds;
+  readonly #source: RepositoryGit;
+  readonly #builds: BuildRequests;
 
   constructor(
     database: TenantDatabase,
-    catalog: ApplicationCatalog,
+    catalog: ApplicationDirectory,
     repositories: RepositoryLookup,
-    source: SourceHost,
-    builds: Builds,
+    source: RepositoryGit,
+    builds: BuildRequests,
   ) {
     this.#database = database;
     this.#catalog = catalog;
@@ -98,7 +80,7 @@ export class Releases {
     this.#builds = builds;
   }
 
-  async list(applicationIdValue: unknown): Promise<{ releases: ReleaseView[]; suggestions: Record<ReleaseKind, string> }> {
+  async list(applicationIdValue: unknown): Promise<ReleasesOverview> {
     const application = await this.#catalog.get(applicationIdValue);
     const { rows, candidates } = await this.#database.transaction(async (tx) => {
       const { rows: releases } = await tx.query<ReleaseRow>(
@@ -120,7 +102,7 @@ export class Releases {
       );
       return { rows: releases, candidates: found };
     });
-    // Build statuses come from Builds, which owns them.
+    // Build statuses come from BuildRequests, which owns them.
     const statuses = await this.#builds.statuses(
       [...rows.map((row) => row.final_build_id), ...candidates.map((candidate) => candidate.build_id)].filter(
         (id): id is string => id !== null,
@@ -155,7 +137,7 @@ export class Releases {
   }
 
   /** A Tech Lead starts a release from develop, or a hotfix from main. */
-  async start(actor: Principal, applicationIdValue: unknown, input: { kind?: unknown; version?: unknown }): Promise<string> {
+  async start(actor: Principal, applicationIdValue: unknown, input: Unchecked<StartRelease>): Promise<string> {
     const application = await this.#catalog.get(applicationIdValue);
     if (application.status === 'archived') {
       throw new ReleaseError('conflict', 'Restore the application first.');
@@ -189,8 +171,7 @@ export class Releases {
         [id, currentCompanyId(), application.id, kind, text, branchFor(kind, text), actor.userId],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'ReleaseStarted',
+        ReleaseStarted.create({
           companyId: currentCompanyId(),
           actorId: actor.userId,
           payload: { releaseId: id, applicationId: application.id, kind, version: text, branch: branchFor(kind, text) },
@@ -263,8 +244,7 @@ export class Releases {
           [found.id, payload.mergeCommit],
         );
         await appendToOutbox(tx, [
-          createDomainEvent({
-            eventType: 'ReleaseMerged',
+          ReleaseMerged.create({
             companyId: currentCompanyId(),
             payload: {
               releaseId: found.id,
@@ -324,8 +304,7 @@ export class Releases {
         );
         if (rowCount === 1) {
           await appendToOutbox(tx, [
-            createDomainEvent({
-              eventType: 'ReleasePublished',
+            ReleasePublished.create({
               companyId: currentCompanyId(),
               payload: {
                 releaseId: release.id,
@@ -412,7 +391,7 @@ export class Releases {
     return false;
   }
 
-  /** Builds the final image again, such as after a failure. */
+  /** BuildRequests the final image again, such as after a failure. */
   async rebuildFinal(releaseIdValue: unknown): Promise<void> {
     if (typeof releaseIdValue !== 'string' || !UUID_PATTERN.test(releaseIdValue)) {
       throw new ReleaseError('invalid', 'The release ID is not valid.');
@@ -476,8 +455,7 @@ export class Releases {
         [releaseId, number, commit],
       );
       await appendToOutbox(tx, [
-        createDomainEvent({
-          eventType: 'ReleaseCandidateCreated',
+        ReleaseCandidateCreated.create({
           companyId: currentCompanyId(),
           actorId,
           payload: { releaseId, applicationId: release.application_id, version: release.version, number, tag, commit },

@@ -1,3 +1,4 @@
+import { BuildRequested } from '@dreamdevops/contracts/builds/events';
 import { createDomainEvent, EventBus, parseCompanyId } from '@dreamdevops/shared-kernel';
 import type { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { InMemoryJobQueue } from '@dreamdevops/shared-kernel/testing';
@@ -87,17 +88,30 @@ describe('background sweeps', () => {
 });
 
 describe('events from other modules', () => {
-  it('are read field by field, and go to the dead letter queue when a field is missing', async () => {
+  it("are checked against their contract, and go to the dead letter queue when they don't hold to it", async () => {
     const queue = new InMemoryJobQueue();
     const builds = { start: vi.fn(async () => {}) };
     const work = processOn(queue);
     await new BuildsSubscriptions(builds as unknown as Builds, config).subscribe(work);
 
-    await work.bus.publish(createDomainEvent({ eventType: 'BuildRequested', companyId, payload: { buildId: 'build-1' } }));
-    await work.bus.publish(createDomainEvent({ eventType: 'BuildRequested', companyId, payload: {} }));
+    const requested = BuildRequested.create({
+      companyId,
+      payload: {
+        buildId: '00000000-0000-4000-8000-0000000000b1',
+        applicationId: '00000000-0000-4000-8000-0000000000a1',
+        kind: 'feature',
+        branch: 'feature/login',
+        commit: 'a'.repeat(40),
+        tag: 'feature-login',
+        version: null,
+      },
+    });
+    await work.bus.publish(requested);
+    // Made by hand, the way a publisher with the wrong contract might, without its build's ID.
+    await work.bus.publish(createDomainEvent({ eventType: 'BuildRequested', companyId, payload: { applicationId: requested.payload.applicationId } }));
     await queue.drain();
 
-    expect(builds.start.mock.calls).toEqual([['build-1']]);
+    expect(builds.start.mock.calls).toEqual([[requested.payload.buildId]]);
     expect(queue.deadLettersOf('events.builds.BuildRequested')).toHaveLength(1);
   });
 });

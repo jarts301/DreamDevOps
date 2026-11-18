@@ -11,6 +11,7 @@ import {
 import { appendToOutbox, OutboxRelay, PgBossJobQueue, TenantDatabase } from '../src/postgres/index.ts';
 import { describeJobQueueContract } from './job-queue-contract.ts';
 import { startTestDatabase, type TestDatabase } from './test-database.ts';
+import { contractFor } from './contracts.ts';
 
 describeJobQueueContract('pg-boss', async () => {
   const database = await startTestDatabase();
@@ -65,7 +66,7 @@ describe('from a saved event to a running handler', () => {
     const seen: { company: string; visibleEvents: number }[] = [];
     const event = createDomainEvent({ eventType: 'ApplicationCreated', companyId, payload: { name: 'api' } });
 
-    await bus.subscribe('ApplicationCreated', 'audit', async () => {
+    await bus.subscribe(contractFor('ApplicationCreated'), 'audit', async () => {
       const visibleEvents = await tenantDatabase.transaction(async (tx) => {
         const { rows } = await tx.query('SELECT count(*)::int AS total FROM kernel.outbox');
         return rows[0].total as number;
@@ -90,7 +91,7 @@ describe('from a saved event to a running handler', () => {
       const consumer = new EventBus(queue);
       const publisher = new EventBus(publisherQueue);
       const seen: string[] = [];
-      await consumer.subscribe('ApplicationArchived', 'search', async (received) => void seen.push(received.eventId));
+      await consumer.subscribe(contractFor('ApplicationArchived'), 'search', async (received) => void seen.push(received.eventId));
       const event = createDomainEvent({ eventType: 'ApplicationArchived', companyId, payload: { name: 'api' } });
 
       await publisher.publish(event);

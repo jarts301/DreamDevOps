@@ -1,4 +1,5 @@
 import { Controller, Get, Inject } from '@nestjs/common';
+import type { BlueprintManifest } from '@dreamdevops/contracts/blueprints/http';
 import { Authenticated } from '../../http/access.decorators.ts';
 import { BlueprintLibrary } from '../infrastructure/blueprint-library.ts';
 
@@ -14,7 +15,7 @@ export class BlueprintsController {
   /** Every version, newest first within each blueprint. */
   @Authenticated()
   @Get()
-  list(): object[] {
+  list(): BlueprintManifest[] {
     return this.#library.all();
   }
 }

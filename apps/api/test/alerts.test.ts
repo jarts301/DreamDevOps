@@ -1,6 +1,7 @@
+import { AlertResolved, AlertTriggered } from '@dreamdevops/contracts/alerts/events';
 import { Places } from '../src/alerts/application/places.ts';
 import { CatalogError } from '../src/catalog/domain/errors.ts';
-import { createDomainEvent, deterministicJobId as jobIdFor, isUuid, parseCompanyId } from '@dreamdevops/shared-kernel';
+import { deterministicJobId as jobIdFor, isUuid, parseCompanyId } from '@dreamdevops/shared-kernel';
 import { describe, expect, it } from 'vitest';
 import {
   describeCondition,
@@ -16,7 +17,8 @@ import {
 import { AlertError } from '../src/alerts/domain/errors.ts';
 import { type AlertStatus, nextStatus, OK } from '../src/alerts/domain/evaluation.ts';
 import { formatMetricValue } from '../src/monitoring/domain/metrics.ts';
-import { type AlertEmail, AlertEmails } from '../src/notifications/application/alert-emails.ts';
+import type { AlertEmail } from '@dreamdevops/contracts/notifications/services';
+import { AlertEmails } from '../src/notifications/application/alert-emails.ts';
 import { NOTIFIABLE_EVENTS, summarize } from '../src/notifications/domain/event-catalog.ts';
 import { COMPANY_A, FakeMailer } from './fakes.ts';
 
@@ -218,20 +220,30 @@ describe('alert emails', () => {
 
   it('can also be posted to chat, as events anyone can choose', () => {
     const payload = {
+      alertId: '00000000-0000-4000-8000-0000000000a1',
       name: 'High CPU',
+      environmentId: '00000000-0000-4000-8000-0000000000e1',
       environmentName: 'Production',
+      applicationId: '00000000-0000-4000-8000-0000000000b1',
       applicationName: 'Billing API',
       production: true,
+      metric: 'cpu' as const,
+      comparator: 'above' as const,
+      threshold: 80,
+      forMinutes: 5,
       condition: 'CPU above 80%',
+      incidentId: '00000000-0000-4000-8000-0000000000c1',
+      measured: 93,
       value: '93%',
+      firingSince: '2026-11-10T12:00:00.000Z',
     };
-    const event = (eventType: string) => createDomainEvent({ eventType, companyId: parseCompanyId(COMPANY_A), payload });
+    const companyId = parseCompanyId(COMPANY_A);
 
     expect(Object.keys(NOTIFIABLE_EVENTS)).toEqual(expect.arrayContaining(['AlertTriggered', 'AlertResolved']));
-    expect(summarize(event('AlertTriggered'), 'Acme')).toBe(
+    expect(summarize(AlertTriggered.create({ companyId, payload }), 'Acme')).toBe(
       'Acme: The alert "High CPU" is firing: Billing API in the production environment "Production" has CPU above 80%, at 93%.',
     );
-    expect(summarize(event('AlertResolved'), 'Acme')).toBe(
+    expect(summarize(AlertResolved.create({ companyId, payload: { ...payload, resolvedAt: '2026-11-10T12:30:00.000Z' } }), 'Acme')).toBe(
       'Acme: The alert "High CPU" is resolved: Billing API in the production environment "Production" no longer has CPU above 80%, at 93%.',
     );
   });

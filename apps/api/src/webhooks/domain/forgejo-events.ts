@@ -1,8 +1,7 @@
+import type { GitChange } from '@dreamdevops/contracts/webhooks/events';
+
 /** A domain event made from a Forgejo webhook, before it's tied to an application. */
-export interface TranslatedEvent {
-  readonly eventType: 'CodePushed' | 'BranchCreated' | 'BranchDeleted' | 'PullRequestUpdated' | 'PullRequestMerged';
-  readonly payload: Readonly<Record<string, unknown>>;
-}
+export type TranslatedEvent = GitChange;
 
 const NO_COMMIT = /^0+$/;
 const COMMIT = /^[0-9a-f]{40,64}$/;

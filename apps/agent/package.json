@@ -13,6 +13,7 @@
     "publish:local": "node --env-file=../../infra/local/.env scripts/publish-local.ts"
   },
   "devDependencies": {
+    "@dreamdevops/contracts": "*",
     "@types/node": "^24.19.2",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"

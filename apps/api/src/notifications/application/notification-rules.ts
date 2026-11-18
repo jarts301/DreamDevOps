@@ -1,5 +1,5 @@
+import { NotificationTest } from '@dreamdevops/contracts/notifications/events';
 import {
-  createDomainEvent,
   currentCompanyId,
   describeError,
   deterministicJobId,
@@ -10,28 +10,23 @@ import {
   runWithCompany,
 } from '@dreamdevops/shared-kernel';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import type { Principal } from '../../identity-access/domain/access.ts';
+import type { Unchecked } from '@dreamdevops/contracts/http';
+import type { Principal } from '@dreamdevops/contracts/identity-access/access';
+import type {
+  CreateRule,
+  NotifiableEventType,
+  RuleKind,
+  RuleTestResult,
+  RuleView,
+  UpdateRule,
+} from '@dreamdevops/contracts/notifications/http';
 import { normalizeName } from '../../shared/names.ts';
-import type { CompanyDirectory } from '../../tenancy/application/company-directory.ts';
+import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { NOTIFIABLE_EVENTS, summarize } from '../domain/event-catalog.ts';
 import { NotificationError } from '../domain/errors.ts';
 import { RefusedWebhookError, type WebhookSender } from './ports.ts';
 
 export const DELIVERY_QUEUE = 'notifications.deliver';
-
-export type RuleKind = 'slack' | 'generic';
-
-export interface RuleView {
-  readonly id: string;
-  readonly name: string;
-  readonly kind: RuleKind;
-  /** Only the address's origin, because the rest is often a secret. */
-  readonly destination: string;
-  readonly eventTypes: readonly string[];
-  readonly enabled: boolean;
-  readonly lastDeliveryAt: string | null;
-  readonly lastError: string | null;
-}
 
 interface RuleRow {
   id: string;
@@ -73,7 +68,7 @@ export class NotificationRules {
     this.#options = options;
   }
 
-  eventTypes(): { type: string; description: string }[] {
+  eventTypes(): NotifiableEventType[] {
     return Object.entries(NOTIFIABLE_EVENTS).map(([type, description]) => ({ type, description }));
   }
 
@@ -84,7 +79,7 @@ export class NotificationRules {
     });
   }
 
-  create(actor: Principal, input: { name?: unknown; kind?: unknown; url?: unknown; eventTypes?: unknown }): Promise<RuleView> {
+  create(actor: Principal, input: Unchecked<CreateRule>): Promise<RuleView> {
     const name = ruleName(input.name);
     const kind = ruleKind(input.kind);
     const url = this.#webhookUrl(input.url);
@@ -100,7 +95,7 @@ export class NotificationRules {
     });
   }
 
-  update(idValue: unknown, input: { name?: unknown; eventTypes?: unknown; enabled?: unknown }): Promise<RuleView> {
+  update(idValue: unknown, input: Unchecked<UpdateRule>): Promise<RuleView> {
     const id = ruleId(idValue);
     const name = input.name === undefined ? null : ruleName(input.name);
     const eventTypes = input.eventTypes === undefined ? null : chosenEvents(input.eventTypes);
@@ -136,13 +131,12 @@ export class NotificationRules {
   }
 
   /** Sends a sample message straight away, so an admin can check the address works. */
-  async test(actor: Principal, idValue: unknown): Promise<{ delivered: boolean; error: string | null }> {
+  async test(actor: Principal, idValue: unknown): Promise<RuleTestResult> {
     const rule = await this.#find(ruleId(idValue));
     if (rule === null) {
       throw new NotificationError('not-found', 'This rule does not exist.');
     }
-    const event = createDomainEvent({
-      eventType: 'NotificationTest',
+    const event = NotificationTest.create({
       companyId: currentCompanyId(),
       actorId: actor.userId,
       payload: {},

@@ -1,24 +1,11 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { CurrentUser, SignedOut } from '@dreamdevops/contracts/identity-access/http';
 import { BrowserNavigation } from './browser-navigation';
 
-export interface Membership {
-  readonly companyId: string;
-  readonly companyName: string;
-  readonly role: string;
-}
-
-export interface CurrentUser {
-  readonly userId: string;
-  readonly email: string;
-  readonly displayName: string;
-  readonly companyId: string | null;
-  readonly companyName: string | null;
-  readonly role: string | null;
-  readonly permissions: readonly string[];
-  readonly memberships: readonly Membership[];
-}
+// Who is signed in is Identity and access's HTTP contract.
+export type { CurrentUser, Membership } from '@dreamdevops/contracts/identity-access/http';
 
 /** Who is signed in. The API holds the session, so this only ever reflects its answers. */
 @Injectable({ providedIn: 'root' })
@@ -64,9 +51,7 @@ export class SessionService {
 
   /** Ends the API's session, then sends the browser to end the login provider's session. */
   async signOut(): Promise<void> {
-    const { logoutUrl } = await firstValueFrom(
-      this.#http.post<{ logoutUrl: string | null }>('/api/v1/auth/logout', {}),
-    );
+    const { logoutUrl } = await firstValueFrom(this.#http.post<SignedOut>('/api/v1/auth/logout', {}));
     this.#user.set(null);
     this.#navigation.go(logoutUrl ?? '/');
   }

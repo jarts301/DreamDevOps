@@ -1,4 +1,4 @@
-import { type Check, failed, passed } from '../../shared/progress.ts';
+import { type Check, failed, passed } from './checks.ts';
 
 export interface Instruction {
   /** The line the instruction starts on, counting from 1. */

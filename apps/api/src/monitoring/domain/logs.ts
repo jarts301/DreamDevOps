@@ -1,17 +1,7 @@
-/** Levels as most logging libraries name them. */
-export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+import type { LogLevel, LogLine } from '@dreamdevops/contracts/monitoring/http';
 
-/** One line an application wrote, read for people. */
-export interface LogLine {
-  readonly at: string;
-  readonly stream: 'stdout' | 'stderr';
-  /** Its level, when it says, or null. */
-  readonly level: LogLevel | null;
-  readonly message: string;
-  /** The trace it was written in, when it says, so people can open that trace. */
-  readonly traceId: string | null;
-  readonly spanId: string | null;
-}
+// A line as people read it is Monitoring's published language, kept in its contracts.
+export type { LogLevel, LogLine } from '@dreamdevops/contracts/monitoring/http';
 
 /** The most lines shown at once. */
 export const MAX_LOG_LINES = 500;

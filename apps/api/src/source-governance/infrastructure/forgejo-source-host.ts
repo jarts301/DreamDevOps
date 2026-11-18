@@ -1,4 +1,4 @@
-import type { BlueprintFile } from '../../blueprints/domain/blueprint.ts';
+import type { BlueprintFile } from '@dreamdevops/contracts/blueprints/services';
 import { expectOk as expectForgejoOk, ForgejoApi, type ForgejoConnection, refPath, segment } from '../../shared/forgejo/forgejo-api.ts';
 import {
   type CommitStatus,

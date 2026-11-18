@@ -1,29 +1,5 @@
+import type { AlertEmail, AlertEmailKind, AlertMailer } from '@dreamdevops/contracts/notifications/services';
 import type { Mailer } from './ports.ts';
-
-/** What an alert email is about: it started firing, it's resolved, or someone is checking that emails arrive. */
-export type AlertEmailKind = 'firing' | 'resolved' | 'test';
-
-/**
- * An alert email, with everything already in words, such as "CPU above 80%" and "92%",
- * because the context that watches the metrics knows how they read.
- */
-export interface AlertEmail {
-  readonly kind: AlertEmailKind;
-  readonly to: string;
-  readonly companyName: string;
-  readonly alertName: string;
-  readonly applicationName: string;
-  readonly environmentName: string;
-  readonly production: boolean;
-  /** What it watches for, such as "CPU above 80% for 5 minutes". */
-  readonly condition: string;
-  /** The value that made it fire or resolve, such as "92%" or "No data". */
-  readonly value: string;
-  /** When it started firing, as an ISO date. */
-  readonly firingSince: string | null;
-  /** When it fired, resolved, or the test was sent, as an ISO date. */
-  readonly at: string;
-}
 
 const SUBJECT_PREFIXES: Readonly<Record<AlertEmailKind, string>> = {
   firing: '[Firing]',
@@ -35,7 +11,7 @@ const SUBJECT_PREFIXES: Readonly<Record<AlertEmailKind, string>> = {
  * Emails the members an alert names when it fires and when it's resolved. Each email goes
  * through a background job, so a failure throws, and the job tries again.
  */
-export class AlertEmails {
+export class AlertEmails implements AlertMailer {
   readonly #mailer: Mailer;
   readonly #dashboardUrl: string;
 

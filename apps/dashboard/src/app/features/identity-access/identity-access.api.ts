@@ -1,34 +1,20 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type {
+  AcceptedInvitation,
+  InvitationView,
+  MemberView,
+  RoleView,
+  SentInvitation,
+} from '@dreamdevops/contracts/identity-access/http';
 
-export interface Role {
-  readonly key: string;
-  readonly name: string;
-}
-
-export interface Member {
-  readonly userId: string;
-  readonly email: string;
-  readonly displayName: string;
-  readonly role: string;
-  readonly joinedAt: string;
-}
-
-export interface Invitation {
-  readonly id: string;
-  readonly email: string;
-  readonly role: string;
-  readonly expiresAt: string;
-}
-
-export interface CreatedInvitation {
-  readonly id: string;
-  readonly token: string;
-  readonly expiresAt: string;
-  /** Whether the API emailed the link. Missing from responses that send no email. */
-  readonly emailSent?: boolean;
-}
+// The API's answers are Identity and access's HTTP contract, under the names the pages use.
+export type Role = RoleView;
+export type Member = MemberView;
+export type Invitation = InvitationView;
+/** An invitation just made, with whether the API emailed its link. */
+export type CreatedInvitation = SentInvitation;
 
 /** The fragment never reaches a server, so the token stays out of server and proxy logs. */
 export function invitationLink(token: string): string {
@@ -67,7 +53,7 @@ export class IdentityAccessApi {
     return firstValueFrom(this.#http.delete(`/api/v1/company/invitations/${encodeURIComponent(id)}`));
   }
 
-  acceptInvitation(token: string): Promise<{ companyId: string; role: string }> {
-    return firstValueFrom(this.#http.post<{ companyId: string; role: string }>('/api/v1/invitations/accept', { token }));
+  acceptInvitation(token: string): Promise<AcceptedInvitation> {
+    return firstValueFrom(this.#http.post<AcceptedInvitation>('/api/v1/invitations/accept', { token }));
   }
 }

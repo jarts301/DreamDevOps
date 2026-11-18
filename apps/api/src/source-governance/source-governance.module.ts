@@ -1,19 +1,19 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
-import { BLUEPRINT_CATALOG, type BlueprintCatalog } from '../blueprints/application/blueprint-catalog.ts';
+import { BLUEPRINT_CATALOG, type BlueprintCatalog } from '@dreamdevops/contracts/blueprints/services';
 import { BlueprintsModule } from '../blueprints/blueprints.module.ts';
-import { ApplicationCatalog } from '../catalog/application/application-catalog.ts';
+import { APPLICATION_DIRECTORY, type ApplicationDirectory } from '@dreamdevops/contracts/catalog/services';
 import { CatalogModule } from '../catalog/catalog.module.ts';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { COMPANY_DIRECTORY, type CompanyDirectory } from '../tenancy/application/company-directory.ts';
+import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
 import { SOURCE_HOST, type SourceHost } from './application/ports.ts';
 import { Repositories } from './application/repositories.ts';
-import { REPOSITORY_LOOKUP } from './application/repository-lookup.ts';
+import { REPOSITORY_GIT, REPOSITORY_LOOKUP } from '@dreamdevops/contracts/source-governance/services';
 import { SourceAccess } from './application/source-access.ts';
 import { SourceController } from './http/source.controller.ts';
 import { ForgejoSourceHost } from './infrastructure/forgejo-source-host.ts';
-import { webhookSecret } from '../webhooks/domain/signature.ts';
+import { webhookSecret } from '@dreamdevops/contracts/webhooks/signature';
 import { SourceGovernanceSubscriptions } from './messaging/source-governance-subscriptions.ts';
 
 /** Each application's repository, its Git Flow rules, and the teams that can use it. */
@@ -47,7 +47,7 @@ export class SourceGovernanceModule {
                 database: TenantDatabase,
                 companies: CompanyDirectory,
                 host: SourceHost,
-                catalog: ApplicationCatalog,
+                catalog: ApplicationDirectory,
                 blueprints: BlueprintCatalog,
               ) =>
                 new Repositories(database, companies, host, catalog, blueprints, {
@@ -57,9 +57,11 @@ export class SourceGovernanceModule {
                   webhookUrl: `${config.toolsApiUrl}/api/v1/webhooks/forgejo`,
                   webhookSecret: (applicationId) => webhookSecret(config.webhookSecretKey, applicationId),
                 }),
-              inject: [TenantDatabase, COMPANY_DIRECTORY, SOURCE_HOST, ApplicationCatalog, BLUEPRINT_CATALOG],
+              inject: [TenantDatabase, COMPANY_DIRECTORY, SOURCE_HOST, APPLICATION_DIRECTORY, BLUEPRINT_CATALOG],
             },
             { provide: REPOSITORY_LOOKUP, useExisting: Repositories },
+            // The Git work other contexts do, such as Builds reading code and Releases tagging it.
+            { provide: REPOSITORY_GIT, useExisting: SOURCE_HOST },
             {
               provide: SourceAccess,
               useFactory: (database: TenantDatabase, companies: CompanyDirectory, host: SourceHost) =>
@@ -75,9 +77,9 @@ export class SourceGovernanceModule {
           ],
           settings.overrides,
         ),
-        // Other modules find repositories only through the RepositoryLookup interface, and
-        // drive Git, such as for builds and releases, through the source host port.
-        exports: [REPOSITORY_LOOKUP, SOURCE_HOST, SourceGovernanceSubscriptions],
+        // Other contexts find repositories through REPOSITORY_LOOKUP, and do Git work, such as
+        // for builds and releases, through REPOSITORY_GIT. The Git tool itself stays this context's.
+        exports: [REPOSITORY_LOOKUP, REPOSITORY_GIT, SourceGovernanceSubscriptions],
       };
     });
   }

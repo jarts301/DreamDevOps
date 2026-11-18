@@ -1,6 +1,7 @@
-# Checks every push and pull request: lint, types, unit tests with coverage, the build, and
-# the integration tests against throwaway containers. The browser test and the blueprint
-# scaffold test need the whole local stack, so they stay manual, as the README describes.
+# Checks every push and pull request: lint, types, unit tests with coverage, the build, the
+# types and unit tests again on Windows, and the integration tests against throwaway
+# containers. The browser test and the blueprint scaffold test need the whole local stack,
+# so they stay manual, as the README describes.
 name: CI
 
 on:
@@ -29,7 +30,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      # The API and the shared kernel, with coverage, which must not drop below its thresholds.
+      # The API, the shared kernel and the contracts, with coverage, which must not drop below its thresholds.
       - run: npm run test:coverage
       - run: npm run test:unit -w @dreamdevops/agent -w @dreamdevops/dashboard
       - run: npm run build
@@ -41,7 +42,24 @@ jobs:
           path: |
             apps/api/coverage/
             packages/shared-kernel/coverage/
+            packages/contracts/coverage/
           if-no-files-found: ignore
+
+  # The same types and unit tests on Windows, where paths use backslashes and Git checks
+  # files out with CRLF line endings, as on the machines some people develop on.
+  windows:
+    name: Types and unit tests on Windows
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:unit
 
   integration:
     name: Integration tests

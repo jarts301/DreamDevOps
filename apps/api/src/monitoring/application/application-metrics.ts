@@ -1,64 +1,17 @@
+import type { EnvironmentMetrics, MonitoredEnvironment, MonitoringOverview } from '@dreamdevops/contracts/monitoring/http';
 import { MonitoringError } from '../domain/errors.ts';
 import {
   dailyHighWindow,
-  type MetricDefinition,
   METRICS,
   type MetricValues,
   NO_VALUES,
   parseRange,
-  type TimeRangeKey,
   windowOf,
 } from '../domain/metrics.ts';
 import { type MetricsStore, MetricsUnavailableError } from './ports.ts';
 import type { RunningPlace, RunningPlaces } from './running-places.ts';
 
 const NOT_SET_UP = 'This server doesn’t keep applications’ metrics. An administrator can set it up with PROMETHEUS_URL.';
-
-/** An application that runs in an environment, as the monitoring page lists it. */
-export interface MonitoredEnvironment {
-  /** The place: this application in this environment. Routes name it by this. */
-  readonly placeId: string;
-  readonly environmentId: string;
-  readonly environmentName: string;
-  readonly applicationId: string;
-  readonly applicationName: string;
-  readonly production: boolean;
-  readonly version: string | null;
-  readonly since: string | null;
-  readonly address: string | null;
-  /** What runs the environment, such as kubernetes, or local for This machine. */
-  readonly provider: string | null;
-  /** What its container may use at most, to set its CPU and memory against, or null when unknown. */
-  readonly limits: { readonly cpus: number; readonly memoryBytes: number } | null;
-}
-
-export interface MonitoringOverview {
-  /** Whether this server keeps applications' metrics at all. */
-  readonly enabled: boolean;
-  /** Why the metrics couldn't be read just now, if they couldn't. The environments are listed anyway. */
-  readonly problem: string | null;
-  readonly metrics: readonly MetricDefinition[];
-  /** Each application that runs in an environment, with its latest metrics. */
-  readonly environments: readonly (MonitoredEnvironment & { readonly latest: MetricValues })[];
-}
-
-export interface MetricSeries extends MetricDefinition {
-  /** One point per step, oldest first. Steps where the application sent nothing have no point. */
-  readonly points: readonly { readonly at: string; readonly value: number }[];
-  /**
-   * The highest value in the day before the range, what's been normal lately, or null when
-   * the application sent nothing then. Values above it are higher than any that day.
-   */
-  readonly dailyHigh: number | null;
-}
-
-export interface EnvironmentMetrics {
-  readonly environment: MonitoredEnvironment;
-  readonly range: { readonly key: TimeRangeKey; readonly start: string; readonly end: string; readonly stepSeconds: number };
-  /** The day each series' daily high comes from: the 24 hours before the range. */
-  readonly dailyHigh: { readonly start: string; readonly end: string };
-  readonly series: readonly MetricSeries[];
-}
 
 /**
  * The metrics of what runs in the company's environments: CPU, memory, requests,

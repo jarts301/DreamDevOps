@@ -1,17 +1,26 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
+import type {
+  Connection,
+  ConnectTarget,
+  CreateEnvironment,
+  EnvironmentConfigView,
+  EnvironmentView,
+  ProductionConfirmation,
+  ProviderView,
+  SetValue,
+  UpdateEnvironment,
+} from '@dreamdevops/contracts/environments/http';
+import type { Unchecked } from '@dreamdevops/contracts/http';
 import { Authenticated, RequirePermissions } from '../../http/access.decorators.ts';
 import type { ApiRequest } from '../../http/request.ts';
-import { EnvironmentConfig, type EnvironmentConfigView } from '../application/environment-config.ts';
-import { type Connection, Environments, type EnvironmentView, type ProviderView } from '../application/environments.ts';
+import { EnvironmentConfig } from '../application/environment-config.ts';
+import { Environments } from '../application/environments.ts';
 
 /** Creating environments and connecting their targets use this permission, which Company Admins and Operators have. */
 const MANAGE_TARGETS = 'targets:connect';
 
 /** What a change to production carries: its name, typed to confirm, and why. */
-interface Confirmed {
-  confirmation?: unknown;
-  reason?: unknown;
-}
+type Confirmed = Unchecked<ProductionConfirmation> | undefined;
 
 /** Every member can see the company's environments and their health. */
 @Controller('company/environments')
@@ -39,7 +48,7 @@ export class EnvironmentsController {
     @Req() request: ApiRequest,
     @Param('id') id: string,
     @Param('name') name: string,
-    @Body() body: { value?: unknown; application?: unknown } & Confirmed,
+    @Body() body: Unchecked<SetValue> | undefined,
   ): Promise<void> {
     return this.#config.setVariable(request.principal!, id, name, body ?? {});
   }
@@ -64,7 +73,7 @@ export class EnvironmentsController {
     @Req() request: ApiRequest,
     @Param('id') id: string,
     @Param('name') name: string,
-    @Body() body: { value?: unknown; application?: unknown } & Confirmed,
+    @Body() body: Unchecked<SetValue> | undefined,
   ): Promise<void> {
     return this.#config.setSecret(request.principal!, id, name, body ?? {});
   }
@@ -105,7 +114,7 @@ export class EnvironmentsController {
   @Post()
   create(
     @Req() request: ApiRequest,
-    @Body() body: { name?: unknown; kind?: unknown; acceptsFeatureImages?: unknown } & Confirmed,
+    @Body() body: Unchecked<CreateEnvironment> | undefined,
   ): Promise<EnvironmentView> {
     return this.#environments.create(request.principal!, body ?? {});
   }
@@ -116,7 +125,7 @@ export class EnvironmentsController {
   update(
     @Req() request: ApiRequest,
     @Param('id') id: string,
-    @Body() body: { name?: unknown; acceptsFeatureImages?: unknown; requiresApproval?: unknown } & Confirmed,
+    @Body() body: Unchecked<UpdateEnvironment> | undefined,
   ): Promise<void> {
     return this.#environments.update(request.principal!, id, body ?? {});
   }
@@ -141,7 +150,7 @@ export class EnvironmentsController {
   connect(
     @Req() request: ApiRequest,
     @Param('id') id: string,
-    @Body() body: { provider?: unknown; settings?: unknown },
+    @Body() body: Unchecked<ConnectTarget> | undefined,
   ): Promise<Connection> {
     return this.#environments.connect(request.principal!, id, body ?? {});
   }

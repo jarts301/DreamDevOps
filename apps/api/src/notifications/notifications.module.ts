@@ -1,11 +1,12 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { COMPANY_DIRECTORY, type CompanyDirectory } from '../tenancy/application/company-directory.ts';
+import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
 import { AlertEmails } from './application/alert-emails.ts';
 import { InvitationEmails } from './application/invitation-emails.ts';
 import { NotificationRules } from './application/notification-rules.ts';
+import { ALERT_MAILER, INVITATION_MAILER } from '@dreamdevops/contracts/notifications/services';
 import { MAILER, type Mailer, WEBHOOK_SENDER, type WebhookSender } from './application/ports.ts';
 import { NotificationRulesController } from './http/notification-rules.controller.ts';
 import { SafeWebhookSender } from './infrastructure/safe-webhook-sender.ts';
@@ -46,6 +47,9 @@ export class NotificationsModule {
               useFactory: (mailer: Mailer) => new AlertEmails(mailer, config.dashboardUrl),
               inject: [MAILER],
             },
+            // What other contexts send emails through.
+            { provide: INVITATION_MAILER, useExisting: InvitationEmails },
+            { provide: ALERT_MAILER, useExisting: AlertEmails },
             {
               provide: WEBHOOK_SENDER,
               useFactory: () => new SafeWebhookSender({ allowPrivateNetworks: config.webhookAllowPrivateNetworks }),
@@ -64,7 +68,7 @@ export class NotificationsModule {
           ],
           settings.overrides,
         ),
-        exports: [InvitationEmails, AlertEmails, NotificationsSubscriptions],
+        exports: [INVITATION_MAILER, ALERT_MAILER, NotificationsSubscriptions],
       };
     });
   }
