@@ -28,7 +28,9 @@ The pipeline is defined once, in [`pipelines/build.yaml`](../../../../pipelines/
 | `sbom` | Syft lists the stored image's contents as a CycloneDX SBOM |
 | `failed` | Runs only when a job failed, and tells the platform which, so the build doesn't wait for the timeout |
 
-The test job's commands live in [`pipelines/run-tests.sh`](../../../../pipelines/run-tests.sh), which the API puts into both workflows, where `__RUN_TESTS__` stands, when it starts. Every blueprint builds on the same `node:24-alpine` image as the job and adds its language's tools from Alpine's packages, so the tests run with the tools the image is built with. `npm run test:scaffolds` runs the job on every blueprint version.
+The test job's commands live in [`pipelines/run-tests.sh`](../../../../pipelines/run-tests.sh), which the API puts into both workflows, where `__RUN_TESTS__` stands, when it starts. Every blueprint builds on the same `node:24-alpine` image as the job and adds its language's tools from Alpine's packages, so the tests run with the tools the image is built with. `npm run test:scaffolds` runs the job on every blueprint version, and `test/pipeline-test-job.test.ts` checks how the job behaves, with stand-ins for the tools, in the unit tests.
+
+Downloads, of the language's tools and the project's packages, run apart from the tests, and each is tried up to three times, 15 seconds apart, as the network drops lookups and connections now and then, such as Docker Desktop's on a busy machine. Cargo downloads one crate at a time and retries on its own, as the Rust blueprints' `Dockerfile` does, and pip waits up to two minutes for a slow download. The tests run once: a failing test is the project's. Whether they pass or fail, the job sends the end of their output, so the build shows why.
 
 Every tool image is pinned by digest. Each job tells the platform when it starts, at `/pipeline/builds/:id/jobs/:job/started`, so the dashboard shows every job waiting, running, passed, failed or skipped while the build runs.
 

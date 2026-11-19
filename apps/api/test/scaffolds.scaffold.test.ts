@@ -90,7 +90,8 @@ function runPlatformTests(folder: string): string {
     folders.push(dirname(job));
     writeFileSync(job, 'set -u\n. /run-tests.sh\ncat /tmp/tests.log\nexit "$code"\n');
     run('docker', ['cp', job, `${container}:/job.sh`], folder);
-    return run('docker', ['exec', '-w', '/tmp/source', container, 'sh', '/job.sh'], folder);
+    // With -e, as Forgejo runs every step, so a failure stops the job as it would there.
+    return run('docker', ['exec', '-w', '/tmp/source', container, 'sh', '-e', '/job.sh'], folder);
   } finally {
     spawnSync('docker', ['rm', '-f', container]);
   }
