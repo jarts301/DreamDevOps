@@ -3,7 +3,7 @@ import type { DeliveriesSession, DeliveriesStore, RepositoryOwner } from '../app
 
 /** The deliveries taken, in the webhooks schema. They're kept, so a replayed one is refused for good. */
 export function postgresDeliveriesStore(database: TenantDatabase): DeliveriesStore {
-  return transactional(database, (tx) => new PostgresDeliveriesSession(tx));
+  return transactional(database, (tx) => new PostgresDeliveriesSession(tx), { role: 'dreamdevops_webhooks' });
 }
 
 class PostgresDeliveriesSession extends PostgresSession implements DeliveriesSession {

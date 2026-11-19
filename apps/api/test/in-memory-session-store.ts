@@ -1,4 +1,4 @@
-import type { SessionData, SessionLifetime, SessionStore } from '../src/session/session-store.ts';
+import type { SessionData, SessionLifetime, SessionStore } from '../src/identity-access/application/sessions.ts';
 
 interface StoredSession {
   data: SessionData;

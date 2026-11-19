@@ -1,7 +1,7 @@
 import type { EventLog, Transactional } from '../application/persistence.ts';
 import type { DomainEvent } from '../domain/domain-event.ts';
 import { appendToOutbox } from './outbox.ts';
-import type { TenantDatabase, TenantTransaction } from './tenant-database.ts';
+import type { DatabaseRole, TenantDatabase, TenantTransaction } from './tenant-database.ts';
 
 /**
  * The base of a context's PostgreSQL session: its queries, run in one tenant transaction,
@@ -19,10 +19,14 @@ export class PostgresSession implements EventLog {
   }
 }
 
-/** Runs each piece of work in a tenant transaction, with a session made for it. */
+/**
+ * Runs each piece of work in a tenant transaction, as the context's database role, with a
+ * session made for it. The role keeps the work to the context's own schemas.
+ */
 export function transactional<TSession>(
   database: TenantDatabase,
   session: (tx: TenantTransaction) => TSession,
+  options: DatabaseRole,
 ): Transactional<TSession> {
-  return { transaction: (work) => database.transaction((tx) => work(session(tx))) };
+  return { transaction: (work) => database.transaction((tx) => work(session(tx)), options) };
 }

@@ -17,14 +17,14 @@ This guide describes the contexts, the contracts they publish to each other, the
 
 ## Contexts
 
-Each context is a folder in `apps/api/src`, with its own guide. What it publishes is in its folder of [`packages/contracts`](packages/contracts/README.md), and nothing else of it is visible to the others.
+Each context is a folder in `apps/api/src`, with its own guide and its migrations, in `migrations/`. Its tests are in its folder of `apps/api/test`. What it publishes is in its folder of [`packages/contracts`](packages/contracts/README.md), and nothing else of it is visible to the others. [`.github/CODEOWNERS`](.github/CODEOWNERS) names who reviews each context's folders, its dashboard screens included.
 
 | Context | Responsibility | Schema | Publishes, in its contracts | Calls | Hears |
 |---|---|---|---|---|---|
-| [Identity and access](apps/api/src/identity-access/README.md) | Login, sessions, members, roles and invitations | `identity` | `Principal` and permission checks, role names, `CompanyMembers`, `FirstAdminInvitations`, member and invitation events | Notifications | Nothing |
+| [Identity and access](apps/api/src/identity-access/README.md) | Login, sessions, members, roles and invitations | `identity` | `Principal` and permission checks, role names, `Authenticator`, `CompanyMembers`, `FirstAdminInvitations`, member and invitation events | Notifications | Nothing |
 | [Tenancy](apps/api/src/tenancy/README.md) | The company register, and each company's Git organization | `tenancy` | `CompanyDirectory`, company events | Identity and access, Notifications | Its own events |
 | [Audit](apps/api/src/audit/README.md) | Each company's tamper-evident history | `audit` | Its HTTP API only | Tenancy | Every event |
-| [Notifications](apps/api/src/notifications/README.md) | Invitation and alert emails, and chat rules | `notification` | `InvitationMailer`, `AlertMailer`, its test event | Tenancy | Every event people can be notified about |
+| [Notifications](apps/api/src/notifications/README.md) | Invitation and alert emails, and chat rules | `notification` | `InvitationMailer`, `AlertMailer`, `CompanyNames`, its test event | Nothing | Every event people can be notified about, and `CompanyCreated` and `CompanyRenamed`, for company names |
 | [Editions](apps/api/src/editions/README.md) | Each company's edition and features | `editions` | `FeatureAccess`, the editions and features, the edition event | Tenancy | Nothing |
 | [Blueprints](blueprints/README.md) | Versioned scaffolds for new applications, in several languages and frameworks per type | Files | `BlueprintCatalog`, `BlueprintManifest` | Nothing | Nothing |
 | [Catalog](apps/api/src/catalog/README.md) | Each company's applications, and the blueprint each one starts from | `catalog` | `ApplicationDirectory`, application events | Blueprints | Nothing |
@@ -38,7 +38,7 @@ Each context is a folder in `apps/api/src`, with its own guide. What it publishe
 | [Alerts](apps/api/src/alerts/README.md) | Alerts on each place's metrics, checked every minute, and their history | `alerts` | Alert events | Catalog, Environments, Identity and access, Monitoring, Notifications, Tenancy | `MemberRemoved`, and its own events |
 | Demo | Local only: Demo Company, a demo user for each role, and a demo application for each blueprint | None | Nothing | Identity and access, Tenancy, Catalog, Environments | Nothing |
 
-"Calls" are the services a context uses, which it needs running to do its work. "Hears" are the events it reacts to, which it can do whenever they arrive. One cycle of calls remains: Identity and access emails invitations through Notifications, Notifications names companies in chat messages through Tenancy, and Tenancy has Identity and access invite a new company's first admin. The architecture test knows it, and fails on any new cycle. [Splitting a context into a service](#splitting-a-context-into-a-service) says how to break it, and [the report](docs/reports/cycles-data-ownership-repository-layout.md#1-break-the-cycles) recommends Notifications keeping company names from Tenancy's events.
+"Calls" are the services a context uses, which it needs running to do its work. "Hears" are the events it reacts to, which it can do whenever they arrive. There are no cycles of calls, and the architecture test fails on any. Identity and access calls Notifications to email invitations, and Tenancy calls Identity and access to invite a new company's first admin, but Notifications calls neither: it keeps the company names its chat messages need from Tenancy's events. For companies made before it did, the platform's background code told it their names once, from Tenancy's directory.
 
 ## Inside a context
 
@@ -68,6 +68,18 @@ return this.#store.transaction(async (session) => {
 ```
 
 The change and its events commit together, or neither does. Only the store has SQL, and maps rows to the records its port defines, such as `StoredApplication`. The shared kernel gives stores `Transactional`, `EventLog` and, for PostgreSQL, `PostgresSession` and `transactional`.
+
+### Database roles
+
+Each context with a schema works as a database role of its own, such as `dreamdevops_catalog`, with rights on its own schema only, and on the kernel's outbox. So the database refuses a query that strays into another context's tables, as the architecture test refuses one it can read. The API logs in as `dreamdevops_app`, which may switch to each context's role but holds none of their rights itself. Each store passes its role to `transactional`, which starts every transaction with `SET LOCAL ROLE`:
+
+```ts
+return transactional(database, (tx) => new PostgresCatalogSession(tx), { role: 'dreamdevops_catalog' });
+```
+
+Reads that belong to no one company, such as a person's access across companies or a webhook's owner, use `database.acrossCompanies({ role })`, which runs each query in a transaction of its own, as the role, with no company set. No context uses the connection pool directly.
+
+The roles are made by the platform's database setup, [`init-platform-database.sql`](infra/local/postgres/init-platform-database.sql), as only it may create roles, and migration `0031` moved each schema's grants and row-level security policies to its role. A new table's migration grants to its context's role, never to `dreamdevops_app`.
 
 ## How contexts work together
 
@@ -110,14 +122,22 @@ These are checked by `apps/api/test/architecture.test.ts`:
 | Only the platform wires other contexts' background work | A context's subscriptions move with it |
 | Events are only made through their contracts, and every event people can be notified about has one | No event is published without a contract, and the notification settings never show unknown events |
 | Controllers answer with their contracts' types, never a bare `object` | The dashboard and the API agree on every answer |
-| Contexts have no cycles of calls between them, other than the known one | A context in a cycle can't run without the others |
+| Contexts have no cycles of calls between them | A context in a cycle can't run without the others |
 | Contexts use only the platform files meant for them, such as access decorators and the background work contract | The platform's guards and wiring stay the platform's business |
-| Only the composition root, `app.module.ts`, `background.module.ts` and `demo/`, imports contexts from the platform | The platform doesn't grow into a context |
-| Every migration names its context's schema, and uses no other, except known couplings | Each context's data can move to its own database |
+| Only the composition root, `app.module.ts`, `background/` and `demo/`, imports contexts from the platform. The guards find who a request is from through Identity and access's published `Authenticator`. | The platform doesn't grow into a context |
+| Each context's migrations are in its own `migrations/` folder, and the platform's in `src/database/migrations/`, numbered once across them all | A context's whole footprint is in its folder |
+| Every migration uses only its own schema. The couplings made before the rule, up to `0029`, are listed, and the list can't grow. | Each context's data can move to its own database |
+| Each context's database work runs only as its own role | The database enforces what the test checks |
 
 The contracts' own tests check that they depend only on each other, the shared kernel and Zod, and that every `http.ts`, and every contract file the dashboard imports, runs in a browser.
 
-Exceptions are listed in the test with a reason, and the list should only shrink, so the test also fails when an exception is no longer needed. Today they are: the `yaml` library in application code, the cycle of calls above, the guards that belong to Identity and access, and the migrations that use another context's schema, such as through foreign keys.
+Exceptions are listed in the test with a reason, and the list should only shrink, so the test also fails when an exception is no longer needed. Today they are: the `yaml` library in application code, and the migrations up to `0029` that use another context's schema, such as through foreign keys.
+
+[`context-roles.integration.test.ts`](apps/api/test/platform/context-roles.integration.test.ts) checks against a real database that each context's role reads its own schema and is refused every other context's, and that `dreamdevops_app` can do nothing in a context's schema without switching to its role.
+
+### Permissions
+
+Each context declares the permissions it checks, and the roles that have them by default, in a `permissions.ts` in its contracts, such as `alerts/permissions.ts`. Only Identity and access keeps roles' permissions, in `identity.role_permissions`. When the API starts, it adds the declared ones that are missing, so a context's new permission reaches its roles without touching Identity's tables. It never removes one: taking a permission from a role is a decision, made in a migration of Identity's.
 
 Lint rules, run by `npm run lint` with oxlint, catch code mistakes such as loose equality, `any` and import cycles between files.
 
@@ -129,9 +149,9 @@ Folders that aren't contexts are the platform every context runs on:
 |---|---|
 | `platform/` | The global module with settings and the database, and helpers that put modules together |
 | `http/` | Guards, the company context for each request, and the single error format. `DomainError` kinds map to HTTP statuses in one place, and a change the database's unique rules refuse, such as after two requests race, answers 409. |
-| `background/` | The outbox relay, the job queue, and the outbox's daily clean-up. Each context's `messaging/` subscriptions are plugged in by `background.module.ts`. Recurring work, such as each context's sweeps, runs on job queue schedules that every API process shares, never on timers in each process. |
+| `background/` | The outbox relay, the job queue, and the outbox's daily clean-up. Each context's `messaging/` subscriptions are plugged in by `background.module.ts`. Recurring work, such as each context's sweeps, runs on job queue schedules that every API process shares, never on timers in each process. It also runs the platform's one-off jobs between contexts, such as telling Notifications the names of companies made before it kept them. |
 | `config/` | Settings, read and checked once at startup |
-| `session/`, `database/`, `health/` | Sessions, migrations and health checks |
+| `database/`, `health/` | The migration runner and the platform's own migrations, and health checks. Login sessions are Identity and access's. |
 | `shared/` | Small helpers with no business meaning: slugs, names, running command-line tools, sealed boxes, and the Forgejo HTTP client shared by three contexts' adapters |
 | `demo/` | Local development only: the demo company and accounts, and a demo application for each blueprint with a Test environment, set up through the contexts' own services when `DEMO_DATA` is on |
 
@@ -162,18 +182,22 @@ Still to do, per context, when the time comes:
 |---|---|---|
 | Foreign keys between schemas | For example, `builds.builds` and `source.repositories` reference `catalog.applications`, and most tables reference `tenancy.companies` and `identity.users` | Drop them when moving the data, and keep the IDs. The contexts already treat them as references, not joins. |
 | Database functions that read other schemas | `catalog.applications_view`, `deployments.deployments_view` and `audit.company_entries` read user names from `identity`; `identity.user_access` and `identity.invitation_company` read companies' names and status from `tenancy`; `source.member_accounts` reads `identity` and `tenancy`; and `webhooks.repository_owner` reads `source` | Ask Identity for names, keep a name with each history entry when it's written, or keep a copy fed by the owner's events |
-| Migrations that change another context's schema | Notifications, Editions, Deployments and Alerts add their permissions to `identity.role_permissions`; Tenancy's `0004` changes Identity's tables; Webhooks' `0011` adds a column to `source.repositories`; Deployments' `0017` made Environments' variables tables | Publish each context's permissions in its contracts for Identity to add, and let new migrations change only their own schema |
-| One database role | `dreamdevops_app` can use every schema, so only the architecture test keeps each context to its own | A role per context, taken with `SET LOCAL ROLE` at the start of each store's transaction |
-| The cycle of calls between Identity and access, Notifications and Tenancy | Invitation emails, company names in chat messages, and the first admin's invitation | Let Notifications keep company names from Tenancy's events, or let Identity and access invite the first admin when it hears `CompanyCreated`, with the link sent by email only |
+| Migrations that changed another context's schema | Migrations up to `0029`: Notifications, Editions, Deployments and Alerts added their permissions to `identity.role_permissions`; Tenancy's `0004` changed Identity's tables; Webhooks' `0011` added a column to `source.repositories`; Deployments' `0017` made Environments' variables tables | Nothing for new work: permissions are declared in the contracts, and later migrations may change only their own schema. Applied migrations never change, so these stay listed until a context gets its own database, where its first migration starts from what it owns. |
 | Two steps that used to be one | Creating a company, then inviting its first admin, are two transactions in two contexts. If the second fails, the company exists without an invitation, and a platform admin invites its first admin again. | Nothing, unless it happens often. A saga could retry it on its own. |
 | In-process calls | Every interface in a `services.ts` | Implement it with an HTTP client, in the calling service |
 | One outbox and job queue | `kernel.outbox` and the `pgboss` schema | Give each service its own outbox and relay. Which consumer gets which event is already kept in the job queue's tables, not in each process, so a relay in one service reaches consumers in another. Moving to a broker means implementing `JobQueue`'s `publish` and `subscribe` with it |
 | One login session | The API is the dashboard's backend, with a session cookie, and its guards belong to Identity and access | Keep the backend for the dashboard, and let it call services with a signed token for the user and company |
 | One settings object | `config/app-config.ts` holds every context's settings | Split it into a section per context before moving one |
 | The demo | `demo/` sets up the demo company through the contexts' own services, not their contracts | Move it to the contexts' routes, or drop it from the services |
-| The guards and sessions | `http/guards.ts` uses Identity and access's session store, user directory and domain, and the sessions' table is the platform's | Publish an `Authenticator` service in Identity's contracts, and move sessions into Identity |
-| One folder for every context | Every context, its tests and its migrations are in `apps/api`, and contexts import platform helpers by relative path | Move each context to a package of its own, after the helpers it uses become packages |
+| One folder for every context | Every context is in `apps/api`, with its tests and migrations beside it, and contexts import platform helpers by relative path, such as `platform/module-settings.ts` and `shared/forgejo` | Move the helpers to packages, such as `@dreamdevops/nest-platform` and `@dreamdevops/forgejo-client`, then each context to a package of its own under `contexts/`, starting with a small one, such as Webhooks, Editions or Catalog. Its `package.json` then lists what it may use, so the package manager keeps the boundaries. TypeScript project references build them in order. Once they're packages, CI can run only the tests of what changed. |
 
 A context is ready to move when its tables have no foreign keys from or to other schemas, it's in no cycle of calls, and every contract it uses has a client that works over the network.
 
-[The report on breaking the cycles, data ownership and repository layout](docs/reports/cycles-data-ownership-repository-layout.md) looks at each of these in detail, with options, a recommended order of small steps, how to check each one, and how ready each context is today.
+A possible order for what's left, each step small and leaving the system working:
+
+1. The platform helpers as packages, then settings per context, so a context can start on its own.
+2. A first, small context as a package, then the others, one at a time. Identity and access and Tenancy, which most contexts use, go last.
+3. Replace the database functions that read other schemas, one at a time, each with a test that its page or job shows the same thing. Suspending a company should keep taking effect at once, so Identity keeps reading the company's state when it checks access. History, such as the audit log, should keep the name a person had when they acted, so it's kept with each entry when it's written.
+4. Only when a context moves to a database of its own: an outbox of its own, then its foreign keys to other schemas dropped, in its first migration there.
+
+Splitting is worth its cost when a part needs to scale on its own, must stay up while others are down, has a team of its own, or has different security needs. By those, Monitoring, which keeps no tables, is the first candidate, then the webhook gateway, once it keeps its own copy of repository owners.

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Principal } from '@dreamdevops/contracts/identity-access/access';
 import type { SignedOut } from '@dreamdevops/contracts/identity-access/http';
-import { hashSessionId, newSessionId, type SessionData, type SessionLifetime, type SessionStore } from '../../session/session-store.ts';
+import { hashSessionId, newSessionId, type SessionData, type SessionLifetime, type SessionStore } from './sessions.ts';
 import { requiresMfa } from '../domain/access.ts';
 import { AccessError } from '../domain/errors.ts';
 import type { IdentityProvider, UserDirectory } from './ports.ts';

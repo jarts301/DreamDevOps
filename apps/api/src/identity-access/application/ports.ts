@@ -129,3 +129,17 @@ export interface MembershipStore extends Transactional<MembershipSession> {
    */
   invitationCompany(tokenHash: string): Promise<string | null>;
 }
+
+/** A role's permission, as Identity keeps them for every company. */
+export interface RolePermission {
+  readonly role: string;
+  readonly permission: string;
+}
+
+export const PERMISSION_STORE = Symbol('PERMISSION_STORE');
+
+/** Each role's permissions. */
+export interface PermissionStore {
+  /** Adds the ones missing, for roles that exist, and returns those it added. It never removes one. */
+  addMissing(grants: readonly RolePermission[]): Promise<RolePermission[]>;
+}

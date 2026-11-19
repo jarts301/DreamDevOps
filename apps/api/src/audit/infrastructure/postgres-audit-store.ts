@@ -1,6 +1,5 @@
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
 import { PostgresSession, type TenantDatabase, transactional } from '@dreamdevops/shared-kernel/postgres';
-import type { Pool } from 'pg';
 import type { ActorEntry, AuditSession, AuditStore, CompanyEntry } from '../application/ports.ts';
 import type { StoredEntry } from '../domain/hash-chain.ts';
 
@@ -18,11 +17,13 @@ interface EntryRow {
 }
 
 /** Each company's history, in the audit schema. Entries are only ever added: the database refuses anything else. */
-export function postgresAuditStore(database: TenantDatabase, pool: Pool): AuditStore {
+export function postgresAuditStore(database: TenantDatabase): AuditStore {
+  // One person's entries across companies: the function shows only the companies they're in.
+  const acrossCompanies = database.acrossCompanies({ role: 'dreamdevops_audit' });
   return {
-    ...transactional(database, (tx) => new PostgresAuditSession(tx)),
+    ...transactional(database, (tx) => new PostgresAuditSession(tx), { role: 'dreamdevops_audit' }),
     async actorEntries(actorId, before, limit): Promise<ActorEntry[]> {
-      const { rows } = await pool.query<{
+      const { rows } = await acrossCompanies.query<{
         company_id: string;
         event_id: string;
         event_type: string;

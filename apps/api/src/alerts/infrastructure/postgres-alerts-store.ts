@@ -45,7 +45,7 @@ const SELECT_WATCHED = `
 
 /** Each company's alerts and their incidents, in the alerts schema. */
 export function postgresAlertsStore(database: TenantDatabase): AlertsStore {
-  return transactional(database, (tx) => new PostgresAlertsSession(tx));
+  return transactional(database, (tx) => new PostgresAlertsSession(tx), { role: 'dreamdevops_alerts' });
 }
 
 class PostgresAlertsSession extends PostgresSession implements AlertsSession {

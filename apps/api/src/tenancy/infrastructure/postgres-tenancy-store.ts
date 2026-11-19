@@ -4,7 +4,7 @@ import type { CompanyStatus } from '../domain/company.ts';
 
 /** The company register and each company's resources, in the tenancy schema. */
 export function postgresTenancyStore(database: TenantDatabase): TenancyStore {
-  return transactional(database, (tx) => new PostgresTenancySession(tx));
+  return transactional(database, (tx) => new PostgresTenancySession(tx), { role: 'dreamdevops_tenancy' });
 }
 
 class PostgresTenancySession extends PostgresSession implements TenancySession {

@@ -9,8 +9,8 @@ import { AppModule } from '../src/app.module.ts';
 import { BACKGROUND_PROCESSING, NoBackgroundProcessing } from '../src/background/background-processing.ts';
 import type { AppConfig } from '../src/config/app-config.ts';
 import { APP_CREATION_OPTIONS, configureApp } from '../src/configure-app.ts';
-import { IDENTITY_PROVIDER, USER_DIRECTORY } from '../src/identity-access/application/ports.ts';
-import { SESSION_STORE } from '../src/session/session-store.ts';
+import { IDENTITY_PROVIDER, PERMISSION_STORE, USER_DIRECTORY } from '../src/identity-access/application/ports.ts';
+import { SESSION_STORE } from '../src/identity-access/application/sessions.ts';
 import { DATABASE_POOL } from '../src/tokens.ts';
 import { MAILER } from '../src/notifications/application/ports.ts';
 import { SOURCE_HOST } from '../src/source-governance/application/ports.ts';
@@ -22,6 +22,7 @@ import {
   FakeIdentityProvider,
   FakeImageRegistry,
   FakeMailer,
+  FakePermissionStore,
   FakePipelineHost,
   FakePullAccounts,
   FakeSecretStore,
@@ -152,6 +153,7 @@ export function createTestApp(options: TestAppOptions = {}): Promise<INestApplic
       { provide: DATABASE_POOL, useValue: { query: async () => ({ rows: [] }), end: async () => {} } },
       { provide: IDENTITY_PROVIDER, useValue: new FakeIdentityProvider() },
       { provide: USER_DIRECTORY, useValue: new InMemoryUserDirectory() },
+      { provide: PERMISSION_STORE, useValue: new FakePermissionStore() },
       ...(options.overrides ?? []),
     ],
   });

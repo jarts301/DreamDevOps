@@ -23,7 +23,7 @@ interface ReleaseRow {
 
 /** Each company's releases and their candidates, in the releases schema. */
 export function postgresReleasesStore(database: TenantDatabase): ReleasesStore {
-  return transactional(database, (tx) => new PostgresReleasesSession(tx));
+  return transactional(database, (tx) => new PostgresReleasesSession(tx), { role: 'dreamdevops_releases' });
 }
 
 class PostgresReleasesSession extends PostgresSession implements ReleasesSession {

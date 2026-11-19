@@ -9,6 +9,7 @@ Each context has a folder, such as `src/builds`, and may have these files in it:
 | `events.ts` | The events the context publishes: each one's type, version, payload schema, and how it reads in the history and in chat | The publisher creates its events only with `Contract.create(...)`, and consumers subscribe with `bus.subscribe(Contract, consumer, handler)`, which checks every event first |
 | `services.ts` | The queries and commands the context answers for others, as interfaces, each with a token, such as `COMPANY_DIRECTORY` | The owning context provides the token; others inject it. When the owner becomes a service, an HTTP client implements the same interface |
 | `http.ts` | The context's HTTP API: what each route answers, and the bodies it takes | The API's controllers and the dashboard |
+| `permissions.ts` | The permissions the context checks, and the roles that have them by default. `permissions.ts` at the root gathers them all. | Identity and access adds the missing ones when the API starts |
 | Other files | Rules both sides must apply the same way, such as `environments/protection.ts`, and published vocabulary, such as `identity-access/roles.ts` or `monitoring/metrics.ts` | Whoever needs them |
 
 Besides those:

@@ -16,7 +16,7 @@ interface RepositoryRow {
 
 /** Each company's repositories, in the source schema. */
 export function postgresSourceStore(database: TenantDatabase): SourceStore {
-  return transactional(database, (tx) => new PostgresSourceSession(tx));
+  return transactional(database, (tx) => new PostgresSourceSession(tx), { role: 'dreamdevops_source' });
 }
 
 class PostgresSourceSession extends PostgresSession implements SourceSession {

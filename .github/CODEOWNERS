@@ -1,0 +1,109 @@
+# Who reviews what, by bounded context. GitHub asks the owners of every file a pull request
+# changes to review it. For each pattern, the last line that matches wins.
+#
+# Each context owns its code and migrations, in apps/api/src/<context>/, its tests, in
+# apps/api/test/<context>/, what it publishes, in packages/contracts/src/<context>/, and its
+# dashboard screens. When a team takes on a context, put the team, such as
+# @<organization>/<team>, in place of the owner on its lines. See ARCHITECTURE.md.
+
+# The platform: everything no context owns, such as the composition root, the guards, the
+# shared kernel, the dashboard's frame and the local stack.
+*                                   @jarts301
+
+# Identity and access
+/apps/api/src/identity-access/                          @jarts301
+/apps/api/test/identity-access/                         @jarts301
+/packages/contracts/src/identity-access/                @jarts301
+/apps/dashboard/src/app/features/identity-access/       @jarts301
+
+# Tenancy
+/apps/api/src/tenancy/                                  @jarts301
+/apps/api/test/tenancy/                                 @jarts301
+/packages/contracts/src/tenancy/                        @jarts301
+/apps/dashboard/src/app/features/tenancy/               @jarts301
+
+# Audit
+/apps/api/src/audit/                                    @jarts301
+/apps/api/test/audit/                                   @jarts301
+/packages/contracts/src/audit/                          @jarts301
+/apps/dashboard/src/app/features/audit/                 @jarts301
+
+# Notifications
+/apps/api/src/notifications/                            @jarts301
+/apps/api/test/notifications/                           @jarts301
+/packages/contracts/src/notifications/                  @jarts301
+/apps/dashboard/src/app/features/notifications/         @jarts301
+
+# Editions
+/apps/api/src/editions/                                 @jarts301
+/apps/api/test/editions/                                @jarts301
+/packages/contracts/src/editions/                       @jarts301
+/apps/dashboard/src/app/features/editions/              @jarts301
+
+# Blueprints
+/apps/api/src/blueprints/                               @jarts301
+/apps/api/test/blueprints/                              @jarts301
+/packages/contracts/src/blueprints/                     @jarts301
+/blueprints/                                            @jarts301
+
+# Catalog
+/apps/api/src/catalog/                                  @jarts301
+/apps/api/test/catalog/                                 @jarts301
+/packages/contracts/src/catalog/                        @jarts301
+/apps/dashboard/src/app/features/catalog/               @jarts301
+
+# Source governance
+/apps/api/src/source-governance/                        @jarts301
+/apps/api/test/source-governance/                       @jarts301
+/packages/contracts/src/source-governance/              @jarts301
+
+# Webhooks
+/apps/api/src/webhooks/                                 @jarts301
+/apps/api/test/webhooks/                                @jarts301
+/packages/contracts/src/webhooks/                       @jarts301
+
+# Builds
+/apps/api/src/builds/                                   @jarts301
+/apps/api/test/builds/                                  @jarts301
+/packages/contracts/src/builds/                         @jarts301
+/pipelines/                                             @jarts301
+
+# Releases
+/apps/api/src/releases/                                 @jarts301
+/apps/api/test/releases/                                @jarts301
+/packages/contracts/src/releases/                       @jarts301
+
+# Environments
+/apps/api/src/environments/                             @jarts301
+/apps/api/test/environments/                            @jarts301
+/packages/contracts/src/environments/                   @jarts301
+/apps/dashboard/src/app/features/environments/          @jarts301
+/apps/agent/                                            @jarts301
+/charts/                                                @jarts301
+
+# Deployments
+/apps/api/src/deployments/                              @jarts301
+/apps/api/test/deployments/                             @jarts301
+/packages/contracts/src/deployments/                    @jarts301
+
+# Monitoring
+/apps/api/src/monitoring/                               @jarts301
+/apps/api/test/monitoring/                              @jarts301
+/packages/contracts/src/monitoring/                     @jarts301
+/apps/dashboard/src/app/features/monitoring/            @jarts301
+
+# Alerts
+/apps/api/src/alerts/                                   @jarts301
+/apps/api/test/alerts/                                  @jarts301
+/packages/contracts/src/alerts/                         @jarts301
+/apps/dashboard/src/app/features/alerts/                @jarts301
+
+# The dashboard's delivery screens are shared by Builds, Releases and Deployments.
+/apps/dashboard/src/app/features/delivery/              @jarts301
+
+# The rules that keep the contexts apart, and the contexts' database roles.
+/apps/api/test/platform/architecture.test.ts            @jarts301
+/apps/api/src/database/migrations/                      @jarts301
+/infra/local/postgres/                                  @jarts301
+/ARCHITECTURE.md                                        @jarts301
+/.github/CODEOWNERS                                     @jarts301

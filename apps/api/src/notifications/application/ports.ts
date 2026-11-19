@@ -67,3 +67,17 @@ export interface RulesSession {
 export const RULES_STORE = Symbol('RULES_STORE');
 
 export type RulesStore = Transactional<RulesSession>;
+
+/** The current company's name, as Notifications keeps it, in one transaction. */
+export interface CompanyNamesSession {
+  /** Null when Notifications hasn't heard the company's name yet. */
+  name(): Promise<string | null>;
+  /** Keeps the name given at that time, unless the name kept was given later. */
+  named(name: string, at: Date): Promise<void>;
+  /** Keeps the name only if there's none yet. */
+  rememberIfUnknown(name: string): Promise<void>;
+}
+
+export const COMPANY_NAMES_STORE = Symbol('COMPANY_NAMES_STORE');
+
+export type CompanyNamesStore = Transactional<CompanyNamesSession>;

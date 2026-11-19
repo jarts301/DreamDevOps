@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Queryable } from '@dreamdevops/shared-kernel/postgres';
 import type { CompanyDirectory, CompanyRecord } from '@dreamdevops/contracts/tenancy/services';
 
 const SELECT_COMPANIES = 'SELECT id, name, slug, status FROM tenancy.companies';
@@ -8,9 +8,9 @@ const SELECT_COMPANIES = 'SELECT id, name, slug, status FROM tenancy.companies';
  * by row-level security and needs no company context.
  */
 export class PostgresCompanyDirectory implements CompanyDirectory {
-  readonly #pool: Pick<Pool, 'query'>;
+  readonly #pool: Queryable;
 
-  constructor(pool: Pick<Pool, 'query'>) {
+  constructor(pool: Queryable) {
     this.#pool = pool;
   }
 

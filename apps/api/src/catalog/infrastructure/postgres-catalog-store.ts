@@ -37,7 +37,7 @@ const SELECT_TYPES = 'SELECT key, name, description, default_blueprint FROM cata
 
 /** The catalog's tables. Row-level security limits every query to the current company. */
 export function postgresCatalogStore(database: TenantDatabase): CatalogStore {
-  return transactional(database, (tx) => new PostgresCatalogSession(tx));
+  return transactional(database, (tx) => new PostgresCatalogSession(tx), { role: 'dreamdevops_catalog' });
 }
 
 class PostgresCatalogSession extends PostgresSession implements CatalogSession {

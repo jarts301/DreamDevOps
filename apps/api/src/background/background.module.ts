@@ -1,4 +1,6 @@
 import { type DynamicModule, Module } from '@nestjs/common';
+import { COMPANY_NAMES, type CompanyNames } from '@dreamdevops/contracts/notifications/services';
+import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { AlertsModule } from '../alerts/alerts.module.ts';
 import { AlertsSubscriptions } from '../alerts/messaging/alerts-subscriptions.ts';
 import { AuditModule } from '../audit/audit.module.ts';
@@ -17,9 +19,11 @@ import { ReleasesModule } from '../releases/releases.module.ts';
 import { SourceGovernanceSubscriptions } from '../source-governance/messaging/source-governance-subscriptions.ts';
 import { SourceGovernanceModule } from '../source-governance/source-governance.module.ts';
 import { TenancySubscriptions } from '../tenancy/messaging/tenancy-subscriptions.ts';
+import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
 import { TenancyModule } from '../tenancy/tenancy.module.ts';
 import { BACKGROUND_SUBSCRIBERS, type BackgroundSubscriber } from './background-subscriber.ts';
 import { BACKGROUND_PROCESSING, BackgroundProcessing } from './background-processing.ts';
+import { CompanyNamesFill } from './company-names-fill.ts';
 
 /** Each module that works in the background, in the order its subscriptions are set up. */
 const SUBSCRIBERS = [
@@ -32,6 +36,8 @@ const SUBSCRIBERS = [
   AuditSubscriptions,
   NotificationsSubscriptions,
   AlertsSubscriptions,
+  // The platform's own: it fills what one context keeps from another's directory, once.
+  CompanyNamesFill,
 ];
 
 /** Runs the outbox relay and job queue, and lets each module set up its own background work. */
@@ -42,6 +48,7 @@ export class BackgroundModule {
       module: BackgroundModule,
       imports: [
         TenancyModule.register(settings),
+        CompanyDirectoryModule.register(settings),
         SourceGovernanceModule.register(settings),
         BuildsModule.register(settings),
         ReleasesModule.register(settings),
@@ -53,6 +60,11 @@ export class BackgroundModule {
       ],
       providers: withOverrides(
         [
+          {
+            provide: CompanyNamesFill,
+            useFactory: (directory: CompanyDirectory, names: CompanyNames) => new CompanyNamesFill(directory, names),
+            inject: [COMPANY_DIRECTORY, COMPANY_NAMES],
+          },
           {
             provide: BACKGROUND_SUBSCRIBERS,
             useFactory: (...subscribers: BackgroundSubscriber[]) => subscribers,

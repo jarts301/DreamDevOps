@@ -3,7 +3,6 @@ import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
 import { COMPANY_DIRECTORY, type CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { CompanyDirectoryModule } from '../tenancy/company-directory.module.ts';
-import { DATABASE_POOL } from '../tokens.ts';
 import { AuditLog } from './application/audit-log.ts';
 import { AUDIT_STORE, type AuditStore } from './application/ports.ts';
 import { AuditController } from './http/audit.controller.ts';
@@ -20,7 +19,7 @@ export class AuditModule {
       controllers: [AuditController],
       providers: withOverrides(
         [
-          { provide: AUDIT_STORE, useFactory: postgresAuditStore, inject: [TenantDatabase, DATABASE_POOL] },
+          { provide: AUDIT_STORE, useFactory: postgresAuditStore, inject: [TenantDatabase] },
           {
             provide: AuditLog,
             useFactory: (store: AuditStore, companies: CompanyDirectory) => new AuditLog(store, companies),

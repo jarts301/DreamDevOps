@@ -4,7 +4,7 @@ import type { Edition } from '../domain/features.ts';
 
 /** Each company's edition, in the editions schema. */
 export function postgresEditionsStore(database: TenantDatabase): EditionsStore {
-  return transactional(database, (tx) => new PostgresEditionsSession(tx));
+  return transactional(database, (tx) => new PostgresEditionsSession(tx), { role: 'dreamdevops_editions' });
 }
 
 class PostgresEditionsSession extends PostgresSession implements EditionsSession {

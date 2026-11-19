@@ -60,7 +60,7 @@ Every route must declare who can call it, with one of these decorators. A route 
 @RequirePermissions('releases:start')      // Signed-in users with every listed permission
 ```
 
-Each request runs in the signed-in user's company, which comes only from the server-side session. Company data is reached through the context's store, whose PostgreSQL adapter uses `TenantDatabase`, and row-level security limits it to that company. If a user with no company calls such a route, the answer is 403.
+Each request runs in the signed-in user's company, which comes only from the server-side session. The guards find who a request is from through Identity and access's published `Authenticator`, which keeps the sessions. Company data is reached through the context's store, whose PostgreSQL adapter uses `TenantDatabase` as the context's own database role, and row-level security limits it to that company. If a user with no company calls such a route, the answer is 403.
 
 A controller only carries the request to its context's own use case, and the answer back: the use case, in `application/`, decides, and the store, in `infrastructure/`, holds the SQL. The [architecture guide](../../ARCHITECTURE.md#inside-a-context) says what each folder may do, and the architecture test checks it.
 
@@ -75,7 +75,8 @@ register(@Req() request: ApiRequest, @Body() body: Unchecked<RegisterApplication
 
 ## Security controls
 
-- **Sessions:** the browser holds a random ID in an `HttpOnly`, `SameSite=Lax` cookie, which is `Secure` unless `SECURE_COOKIES=false`. The database stores only its hash, and the application role can reach sessions only through functions that need that hash.
+- **Sessions:** the browser holds a random ID in an `HttpOnly`, `SameSite=Lax` cookie, which is `Secure` unless `SECURE_COOKIES=false`. The database stores only its hash, in Identity and access's schema, and its role can reach sessions only through functions that need that hash.
+- **Database roles:** each context works as its own database role, with rights on its own schema only, so a query that strays into another context's tables is refused. See the [architecture guide](../../ARCHITECTURE.md#database-roles).
 - **Session limits:** sessions end after 30 minutes idle or 8 hours in total. Login replaces any previous session, and logout also ends the Keycloak session.
 - **Login:** the flow uses `state`, a nonce and PKCE, and redirects only to the configured dashboard address. In production, the API refuses to start without https for Keycloak, secure cookies and verified emails for invitations.
 - **Cross-site requests:** state-changing requests from an unknown `Origin` are refused, and no CORS access is granted.
@@ -112,3 +113,7 @@ Each queue's worker takes up to 10 jobs at a time and keeps going while a backlo
 | `npm run test:integration` | Access rules and company provisioning against a throwaway PostgreSQL, plus login through a throwaway Keycloak and organizations in a throwaway Forgejo, using Docker Desktop |
 | `npm test` | Both |
 | `npm run test:scaffolds` | Every blueprint version, rendered, installed, tested, built and run as a container. Needs Docker and the internet, and tries a command again when the network fails. See [Blueprints](../../blueprints/README.md#publishing-a-version). |
+
+Each context's tests are in its own folder, `test/<context>/`, beside the context's code in `src/<context>/`. Tests of the platform, such as the architecture test, are in `test/platform/`. What they share stays at the top: the fakes of each context's ports in `test/fakes/`, helpers in `test/support/`, and the test app and database in `test-app.ts` and `test-database.ts`.
+
+Migrations are beside their context too, in `src/<context>/migrations/`, and the platform's in `src/database/migrations/`. They run in the order of their numbers across all the folders, so a new one takes the next number after the highest anywhere.

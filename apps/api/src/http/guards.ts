@@ -8,51 +8,35 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { hasPermissions } from '@dreamdevops/contracts/identity-access/access';
+import { AUTHENTICATOR, type Authenticator } from '@dreamdevops/contracts/identity-access/services';
 import { APP_CONFIG } from '../tokens.ts';
 import type { AppConfig } from '../config/app-config.ts';
-import { hasPermissions, requiresMfa, toPrincipal } from '../identity-access/domain/access.ts';
-import { USER_DIRECTORY, type UserDirectory } from '../identity-access/application/ports.ts';
-import { hashSessionId, SESSION_STORE, type SessionStore } from '../session/session-store.ts';
 import { ACCESS_METADATA, type AccessRule } from './access.decorators.ts';
 import { type ApiRequest, SESSION_COOKIE } from './request.ts';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-/** Finds the signed-in user from the session cookie. Deciding access is a later step. */
+/**
+ * Finds the signed-in user from the session cookie, by asking Identity and access, which
+ * keeps the sessions. Deciding access is a later step.
+ */
 @Injectable()
 export class SessionGuard implements CanActivate {
-  readonly #store: SessionStore;
-  readonly #directory: UserDirectory;
-  readonly #config: AppConfig;
+  readonly #authenticator: Authenticator;
 
-  constructor(
-    @Inject(SESSION_STORE) store: SessionStore,
-    @Inject(USER_DIRECTORY) directory: UserDirectory,
-    @Inject(APP_CONFIG) config: AppConfig,
-  ) {
-    this.#store = store;
-    this.#directory = directory;
-    this.#config = config;
+  constructor(@Inject(AUTHENTICATOR) authenticator: Authenticator) {
+    this.#authenticator = authenticator;
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<ApiRequest>();
     const sessionId = request.cookies[SESSION_COOKIE];
-    if (sessionId === undefined) {
-      return true;
-    }
-    const idHash = hashSessionId(sessionId);
-    const session = await this.#store.touch(idHash, this.#config.sessionIdleMs);
-    if (session === null) {
-      return true;
-    }
-    const access = await this.#directory.loadAccess(session.userId);
-    // Someone who needs a second factor but signed in without one, such as a member just
-    // made a Tech Lead, counts as signed out, so they sign in again with one.
-    if (access !== null && !(requiresMfa(access) && session.mfa !== true)) {
-      request.session = session;
-      request.sessionIdHash = idHash;
-      request.principal = toPrincipal(access, session.chosenCompanyId);
+    const signedIn = sessionId === undefined ? null : await this.#authenticator.authenticate(sessionId);
+    if (signedIn !== null) {
+      request.session = signedIn.session;
+      request.sessionIdHash = signedIn.sessionIdHash;
+      request.principal = signedIn.principal;
     }
     return true;
   }

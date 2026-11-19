@@ -1,6 +1,5 @@
 import { currentCompanyId } from '@dreamdevops/shared-kernel';
 import { PostgresSession, type TenantDatabase, transactional } from '@dreamdevops/shared-kernel/postgres';
-import type { Pool } from 'pg';
 import type {
   CompanyRole,
   MembershipSession,
@@ -22,11 +21,13 @@ interface MemberRow {
  * Members and invitations, in the identity schema. Member details come through
  * identity.company_members(), which answers for the current company only.
  */
-export function postgresMembershipStore(database: TenantDatabase, pool: Pool): MembershipStore {
+export function postgresMembershipStore(database: TenantDatabase): MembershipStore {
+  // An invitation's company is found before anyone is in it, so across companies.
+  const acrossCompanies = database.acrossCompanies({ role: 'dreamdevops_identity' });
   return {
-    ...transactional(database, (tx) => new PostgresMembershipSession(tx)),
+    ...transactional(database, (tx) => new PostgresMembershipSession(tx), { role: 'dreamdevops_identity' }),
     async invitationCompany(tokenHash: string): Promise<string | null> {
-      const { rows } = await pool.query<{ company_id: string | null }>('SELECT identity.invitation_company($1) AS company_id', [
+      const { rows } = await acrossCompanies.query<{ company_id: string | null }>('SELECT identity.invitation_company($1) AS company_id', [
         tokenHash,
       ]);
       return rows[0]?.company_id ?? null;

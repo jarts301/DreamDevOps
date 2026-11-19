@@ -28,6 +28,7 @@ Company Admins create rules with the `notifications:manage` permission. A rule c
 - **Delivery:** each rule gets its own background job per event, so a failing webhook doesn't hold up or repeat the others. Failures are retried 4 times, and the last error shows on the rule.
 - **Timing:** rules apply to events as they're delivered, so a rule made just after a change may still receive it.
 - **Secrets:** webhook addresses often contain a secret, so the API never shows them in full after saving, only their site.
+- **Company names:** messages start with the company's name, which this context keeps itself, in `notification.companies`, from Tenancy's `CompanyCreated` and `CompanyRenamed` events. So it never calls Tenancy, and a message never fails because Tenancy is down. A rename shows in messages once its event arrives, a few seconds later at most, and a late or repeated event never puts back an older name. Companies made before this were named once by the platform, from Tenancy's directory, through `CompanyNames`, which this context publishes for that.
 
 ## Webhook safety
 

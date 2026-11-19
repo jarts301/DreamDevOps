@@ -6,6 +6,8 @@ import type {
   ExternalIdentity,
   IdentityProvider,
   LogoutRequest,
+  PermissionStore,
+  RolePermission,
   UserDirectory,
 } from '../../src/identity-access/application/ports.ts';
 import type { CompanyMembership, UserAccess } from '../../src/identity-access/domain/access.ts';
@@ -118,5 +120,18 @@ export class FakeCompanyMembers implements CompanyMembers {
   /** Removes someone from a company, as removing a member does. */
   remove(companyId: string, userId: string): void {
     this.byCompany.set(companyId, (this.byCompany.get(companyId) ?? []).filter((member) => member.userId !== userId));
+  }
+}
+
+/** Keeps each role's permissions in memory, starting with none. */
+export class FakePermissionStore implements PermissionStore {
+  readonly granted = new Set<string>();
+
+  async addMissing(grants: readonly RolePermission[]): Promise<RolePermission[]> {
+    const added = grants.filter(({ role, permission }) => !this.granted.has(`${role} ${permission}`));
+    for (const { role, permission } of added) {
+      this.granted.add(`${role} ${permission}`);
+    }
+    return added;
   }
 }

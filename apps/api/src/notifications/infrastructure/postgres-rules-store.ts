@@ -16,7 +16,7 @@ interface RuleRow {
 
 /** Each company's chat rules, in the notification schema. */
 export function postgresRulesStore(database: TenantDatabase): RulesStore {
-  return transactional(database, (tx) => new PostgresRulesSession(tx));
+  return transactional(database, (tx) => new PostgresRulesSession(tx), { role: 'dreamdevops_notification' });
 }
 
 class PostgresRulesSession extends PostgresSession implements RulesSession {

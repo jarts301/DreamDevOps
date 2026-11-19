@@ -1,4 +1,16 @@
-/** What Notifications does for other contexts: it sends their emails. */
+/** What Notifications does for other contexts: it sends their emails, and keeps company names for its messages. */
+
+export const COMPANY_NAMES = Symbol('COMPANY_NAMES');
+
+/**
+ * The company names Notifications keeps for its chat messages. It hears them from Tenancy's
+ * CompanyCreated and CompanyRenamed events. Companies made before it kept them are told to
+ * it once, by the platform, from Tenancy's directory.
+ */
+export interface CompanyNames {
+  /** Keeps a company's name, unless an event already gave it one, which is newer. */
+  rememberIfUnknown(companyId: string, name: string): Promise<void>;
+}
 
 /** An invitation to a company, to email to the person invited. */
 export interface InvitationEmail {

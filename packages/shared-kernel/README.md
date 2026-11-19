@@ -21,13 +21,15 @@ await runWithCompany(companyId, () =>
 );
 ```
 
-The store's PostgreSQL adapter extends `PostgresSession`, whose `record` saves the events to the outbox in the same transaction, and `transactional` runs each piece of work in a tenant transaction with a new session:
+The store's PostgreSQL adapter extends `PostgresSession`, whose `record` saves the events to the outbox in the same transaction, and `transactional` runs each piece of work in a tenant transaction with a new session, as the context's own database role:
 
 ```ts
 export function postgresCatalogStore(database: TenantDatabase): CatalogStore {
-  return transactional(database, (tx) => new PostgresCatalogSession(tx));
+  return transactional(database, (tx) => new PostgresCatalogSession(tx), { role: 'dreamdevops_catalog' });
 }
 ```
+
+Each transaction starts with `SET LOCAL ROLE`, so the work can use only the context's own schema, and the kernel's outbox. Reads that belong to no one company, such as finding who a webhook is for, use `database.acrossCompanies({ role })`: each query runs in a transaction of its own, as the role, with no company set, so row-level security shows no company's rows. Role names are checked before they reach SQL.
 
 The change and its events commit together, so an event can't be lost or sent for a change that failed. The `OutboxRelay` then passes saved events to the `EventBus`, which runs each subscriber in the event's company context.
 
@@ -54,7 +56,8 @@ Delivered events stay in the outbox for `OUTBOX_RETENTION_DAYS`, a week by defau
 | Role | Used by | Access |
 |---|---|---|
 | `dreamdevops_owner` | Migrations | Owns the tables |
-| `dreamdevops_app` | The application | One company at a time; can only read and add outbox events |
+| `dreamdevops_app` | The application | One company at a time; can only read and add outbox events. It may switch to each context's role, without holding their rights. |
+| `dreamdevops_<schema>`, such as `dreamdevops_catalog` | Each bounded context's work, switched to with `SET LOCAL ROLE` | Its own schema, one company at a time, and adding outbox events. It can't log in. |
 | `dreamdevops_relay` | The outbox relay | Reads every company's events; can only change `published_at`, and remove delivered events through `kernel.purge_published_outbox` |
 | `dreamdevops_jobs` | The job queue | Its own `pgboss` schema |
 

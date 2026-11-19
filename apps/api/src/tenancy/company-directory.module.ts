@@ -1,7 +1,6 @@
 import { type DynamicModule, Module } from '@nestjs/common';
-import type pg from 'pg';
+import { TenantDatabase } from '@dreamdevops/shared-kernel/postgres';
 import { type ModuleSettings, registerOnce, withOverrides } from '../platform/module-settings.ts';
-import { DATABASE_POOL } from '../tokens.ts';
 import { COMPANY_DIRECTORY } from '@dreamdevops/contracts/tenancy/services';
 import { PostgresCompanyDirectory } from './infrastructure/postgres-company-directory.ts';
 
@@ -20,8 +19,9 @@ export class CompanyDirectoryModule {
           [
             {
               provide: COMPANY_DIRECTORY,
-              useFactory: (pool: pg.Pool) => new PostgresCompanyDirectory(pool),
-              inject: [DATABASE_POOL],
+              // Companies are looked up across companies, as Tenancy's own role.
+              useFactory: (database: TenantDatabase) => new PostgresCompanyDirectory(database.acrossCompanies({ role: 'dreamdevops_tenancy' })),
+              inject: [TenantDatabase],
             },
           ],
           overrides,

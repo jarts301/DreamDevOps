@@ -20,9 +20,9 @@ import type {
   UpdateRule,
 } from '@dreamdevops/contracts/notifications/http';
 import { normalizeName } from '../../shared/names.ts';
-import type { CompanyDirectory } from '@dreamdevops/contracts/tenancy/services';
 import { NOTIFIABLE_EVENTS, summarize } from '../domain/event-catalog.ts';
 import { NotificationError } from '../domain/errors.ts';
+import type { CompanyNames } from './company-names.ts';
 import { RefusedWebhookError, type RulesStore, type StoredRule, type WebhookSender } from './ports.ts';
 
 export const DELIVERY_QUEUE = 'notifications.deliver';
@@ -40,11 +40,11 @@ export interface NotificationRulesOptions {
 /** Company rules that post chosen events to a chat tool, and their delivery. */
 export class NotificationRules {
   readonly #store: RulesStore;
-  readonly #companies: CompanyDirectory;
+  readonly #companies: CompanyNames;
   readonly #sender: WebhookSender;
   readonly #options: NotificationRulesOptions;
 
-  constructor(store: RulesStore, companies: CompanyDirectory, sender: WebhookSender, options: NotificationRulesOptions) {
+  constructor(store: RulesStore, companies: CompanyNames, sender: WebhookSender, options: NotificationRulesOptions) {
     this.#store = store;
     this.#companies = companies;
     this.#sender = sender;
@@ -152,7 +152,7 @@ export class NotificationRules {
   }
 
   async #companyName(): Promise<string> {
-    return (await this.#companies.find(currentCompanyId()))?.name ?? 'Your company';
+    return (await this.#companies.current()) ?? 'Your company';
   }
 
   async #recordDelivery(id: string, error: string | null): Promise<void> {

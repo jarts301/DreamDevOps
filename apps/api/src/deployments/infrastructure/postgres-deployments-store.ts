@@ -42,7 +42,7 @@ const SELECT = 'SELECT d.* FROM deployments.deployments_view() d';
 
 /** Each company's deployments and the commands for its agents, in the deployments schema. */
 export function postgresDeploymentsStore(database: TenantDatabase): DeploymentsStore {
-  return transactional(database, (tx) => new PostgresDeploymentsSession(tx));
+  return transactional(database, (tx) => new PostgresDeploymentsSession(tx), { role: 'dreamdevops_deployments' });
 }
 
 class PostgresDeploymentsSession extends PostgresSession implements DeploymentsSession {

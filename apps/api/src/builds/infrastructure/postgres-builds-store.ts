@@ -28,7 +28,7 @@ interface BuildRow {
 
 /** Each company's builds, SBOMs and signing keys, in the builds schema. */
 export function postgresBuildsStore(database: TenantDatabase): BuildsStore {
-  return transactional(database, (tx) => new PostgresBuildsSession(tx));
+  return transactional(database, (tx) => new PostgresBuildsSession(tx), { role: 'dreamdevops_builds' });
 }
 
 class PostgresBuildsSession extends PostgresSession implements BuildsSession {

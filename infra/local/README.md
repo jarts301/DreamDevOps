@@ -44,6 +44,8 @@ npm run db:migrate
 
 If you already had a `.env` file, copy any new values from `.env.example` into it first.
 
+The stack's `platform-db-init` service sets up the database's roles each time it starts, including a role for each bounded context, which only it may create. So after pulling changes, start the stack before running `npm run db:migrate`, as above. A migration that needs a role the setup hasn't made yet stops and says so.
+
 ## Signing in to Forgejo
 
 Forgejo signs people in through Keycloak, and creates their account on first sign-in. Its username is their Keycloak user ID, so nobody can choose a name that belongs to someone else, and a Keycloak login never attaches to an existing local account such as the bot's. Only the administrator and the bot sign in with a Forgejo password.

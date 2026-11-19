@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashSessionId, newSessionId, type SessionData, type SessionStore } from '../src/session/session-store.ts';
+import { hashSessionId, newSessionId, type SessionData, type SessionStore } from '../src/identity-access/application/sessions.ts';
 
 const data: SessionData = {
   userId: '00000000-0000-4000-8000-000000000001',

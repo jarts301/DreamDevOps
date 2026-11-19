@@ -55,7 +55,7 @@ const FOR_APPLICATION = 'environment_id = $1 AND (application_id IS NULL OR appl
 
 /** Each company's environments, targets, values and pull account, in the environments schema. */
 export function postgresEnvironmentsStore(database: TenantDatabase): EnvironmentsStore {
-  return transactional(database, (tx) => new PostgresEnvironmentsSession(tx));
+  return transactional(database, (tx) => new PostgresEnvironmentsSession(tx), { role: 'dreamdevops_environments' });
 }
 
 class PostgresEnvironmentsSession extends PostgresSession implements EnvironmentsSession {

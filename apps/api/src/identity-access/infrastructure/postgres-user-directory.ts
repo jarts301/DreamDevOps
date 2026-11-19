@@ -1,11 +1,15 @@
-import type { Pool } from 'pg';
+import type { Queryable } from '@dreamdevops/shared-kernel/postgres';
 import type { UserAccess } from '../domain/access.ts';
 import type { ExternalIdentity, UserDirectory } from '../application/ports.ts';
 
+/**
+ * People and their access across companies, which every request reads before any company is
+ * chosen. It reads through functions made for that, as Identity and access's own role.
+ */
 export class PostgresUserDirectory implements UserDirectory {
-  readonly #pool: Pool;
+  readonly #pool: Queryable;
 
-  constructor(pool: Pool) {
+  constructor(pool: Queryable) {
     this.#pool = pool;
   }
 

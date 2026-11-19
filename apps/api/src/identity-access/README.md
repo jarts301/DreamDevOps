@@ -70,10 +70,18 @@ Right after registering, Keycloak hasn't recorded the password level, so a new C
 - **Changes apply at once:** permissions are read on every request, so a role change or removal takes effect on the member's next request.
 - **A company keeps an admin:** the last Company Admin can't be removed or demoted, even if two admins act at the same moment.
 - **Platform roles stay out of companies:** they can't be granted through an invitation or role change.
-- **Company data stays apart:** row-level security limits memberships and invitations to the current company. The application role reaches users only through database functions.
+- **Company data stays apart:** row-level security limits memberships and invitations to the current company. Its database role, `dreamdevops_identity`, reaches users and sessions only through database functions.
+
+## Sessions
+
+Login sessions are this context's, in `identity.sessions`. The platform's guards ask who a request is from through `Authenticator`, which it publishes as `AUTHENTICATOR`. It finds the session by the hash of its cookie, extends its idle time, and reads the person's access afresh, so the guards need nothing else of this context. Someone who needs a second factor but signed in without one counts as signed out.
+
+## Permissions
+
+Each context declares the permissions it checks, and the roles that have them by default, in a `permissions.ts` in its contracts. When the API starts, this context adds to `identity.role_permissions` the declared ones that are missing, for roles that exist, and logs what it added. It never removes one, so what a role may do never changes without someone deciding it: taking a permission away is a migration of this context's. A new permission needs no migration here.
 
 ## Events
 
 Changes publish `UserInvited`, `RoleGranted`, `MemberRemoved` and `InvitationRevoked` through the outbox, with contracts in `identity-access/events.ts` in the [contracts](../../../../packages/contracts/README.md). Their payloads hold IDs and roles, not email addresses or tokens.
 
-Other contexts use `Principal` and `hasPermissions`, in `identity-access/access.ts`, the role names in `identity-access/roles.ts`, and `CompanyMembers` and `FirstAdminInvitations`, in `identity-access/services.ts`.
+Other contexts use `Principal` and `hasPermissions`, in `identity-access/access.ts`, the role names in `identity-access/roles.ts`, and `CompanyMembers` and `FirstAdminInvitations`, in `identity-access/services.ts`. The platform's guards use `Authenticator`, from the same file.
