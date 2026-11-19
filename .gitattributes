@@ -1,3 +1,9 @@
+# Every text file keeps LF line endings, in the repository and in every working copy, on
+# every operating system, whatever core.autocrlf says. Code, scripts and configuration run
+# in Linux containers, checksums and diffs stay the same everywhere, and Git has nothing to
+# convert, so it doesn't warn about it. Git finds binary files itself and leaves them alone.
+* text=auto eol=lf
+
 # Shell scripts run inside Linux containers, so they must keep LF line endings.
 *.sh text eol=lf
 # Blueprints are copied byte for byte into new repositories and checked by checksum,
