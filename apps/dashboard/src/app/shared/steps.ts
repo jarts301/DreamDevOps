@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { STATE_SYMBOLS, type Status, StatusBadge, stepStatus } from './status';
 
 /** Work that runs in steps, such as a build or a deployment, as the API reports it. */
 export type StepStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped';
@@ -27,44 +28,11 @@ export interface Step {
   readonly facts: readonly Fact[];
 }
 
-const STEP_STATUS_NAMES: Readonly<Record<StepStatus, string>> = {
-  pending: 'Waiting',
-  running: 'In progress',
-  passed: 'Passed',
-  failed: 'Failed',
-  skipped: 'Skipped',
-};
-
-/** Shown beside each step's name. The text says the same, so color and symbols are never needed. */
-const STEP_SYMBOLS: Readonly<Record<StepStatus, string>> = {
-  pending: '○',
-  running: '◐',
-  passed: '✓',
-  failed: '✗',
-  skipped: '–',
-};
-
 const OUTCOME_NAMES: Readonly<Record<Check['outcome'], string>> = { passed: 'Passed', failed: 'Failed', warning: 'Warning' };
 const OUTCOME_SYMBOLS: Readonly<Record<Check['outcome'], string>> = { passed: '✓', failed: '✗', warning: '!' };
 
-export const stepStatusName = (status: StepStatus): string => STEP_STATUS_NAMES[status] ?? status;
-export const stepSymbol = (status: StepStatus): string => STEP_SYMBOLS[status] ?? '';
-
-/** How a status badge looks: done, failed, under way, or plain. The text always says the same. */
-export type Tone = 'success' | 'danger' | 'progress' | null;
-
-export function stepTone(status: StepStatus): Tone {
-  switch (status) {
-    case 'passed':
-      return 'success';
-    case 'failed':
-      return 'danger';
-    case 'running':
-      return 'progress';
-    default:
-      return null;
-  }
-}
+/** Shown beside each step's name, the same as its status's symbol everywhere else. */
+export const stepSymbol = (status: StepStatus): string => STATE_SYMBOLS[stepStatus(status).state];
 
 /** How long something took, such as "42s" or "3m 05s". */
 export function duration(startedAt: string | null, finishedAt: string | null, now = Date.now()): string | null {
@@ -101,6 +69,7 @@ export function plainStep(key: string, name: string, status: StepStatus, summary
  */
 @Component({
   selector: 'app-step-list',
+  imports: [StatusBadge],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <ol class="pipeline" [attr.aria-label]="label()">
@@ -110,7 +79,7 @@ export function plainStep(key: string, name: string, status: StepStatus, summary
             <span class="pipeline-symbol" aria-hidden="true">{{ stepSymbol(step.status) }}</span>
             <span class="pipeline-name">{{ step.name }}</span>
             <span class="visually-hidden">: </span>
-            <span class="status" [attr.data-tone]="stepTone(step.status)">{{ stepStatusName(step.status) }}</span>
+            <app-status [status]="stepState(step.status)" [symbol]="false" />
             @if (took(step); as time) {
               <span class="cell-note"><span class="visually-hidden">, took </span>{{ time }}</span>
             }
@@ -151,9 +120,11 @@ export class StepList {
   readonly steps = input.required<readonly Step[]>();
   readonly label = input('Steps');
 
-  protected readonly stepStatusName = stepStatusName;
   protected readonly stepSymbol = stepSymbol;
-  protected readonly stepTone = stepTone;
+
+  protected stepState(status: StepStatus): Status {
+    return stepStatus(status);
+  }
 
   /** How long it took, or has taken so far. Unknown for a finished step without its end. */
   protected took(step: Step): string | null {

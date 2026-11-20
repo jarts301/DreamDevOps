@@ -167,7 +167,7 @@ describe('ApplicationDetail', () => {
     await render(fixture);
 
     expect(text(fixture)).toContain('Building feature-login-aaaaaaa.');
-    expect(text(fixture)).toContain('Building');
+    expect(element(fixture).querySelector('td > app-status .status')?.textContent?.trim()).toBe('◐ Running');
     fixture.destroy();
   });
 
@@ -201,11 +201,11 @@ describe('ApplicationDetail', () => {
       ['passed', 'Dockerfile rules', 'Passed', null],
       ['passed', 'Secret scan', 'Passed', 'none found'],
       ['passed', 'Tests', 'Passed', null],
-      ['running', 'Image', 'In progress', null],
-      ['pending', 'Image rules', 'Waiting', null],
-      ['pending', 'Vulnerability scan', 'Waiting', null],
-      ['pending', 'SBOM', 'Waiting', null],
-      ['pending', 'Signature', 'Waiting', null],
+      ['running', 'Image', 'Running', null],
+      ['pending', 'Image rules', 'Queued', null],
+      ['pending', 'Vulnerability scan', 'Queued', null],
+      ['pending', 'SBOM', 'Queued', null],
+      ['pending', 'Signature', 'Queued', null],
     ]);
     // Only the step under way says how long it's taken so far.
     expect(element(fixture).querySelectorAll('.pipeline-step-header .cell-note')).toHaveLength(1);

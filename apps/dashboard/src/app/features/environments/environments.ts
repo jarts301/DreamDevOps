@@ -9,6 +9,7 @@ import {
   type ProductionConfirmation,
   ProductionConfirmationPanel,
 } from '../../shared/production-confirmation';
+import { type Status, StatusBadge, targetStatus } from '../../shared/status';
 import {
   type Connection,
   type Environment,
@@ -22,13 +23,6 @@ import {
 /** How often the list refreshes while a target is being connected. */
 const REFRESH_MS = 5_000;
 
-const TARGET_LABELS: Readonly<Record<TargetStatus, string>> = {
-  pending: 'Waiting for the agent',
-  connected: 'Connected',
-  lost: 'Not reporting',
-  revoked: 'Disconnected',
-};
-
 const IMAGE_LABELS: Readonly<Record<string, string>> = { feature: 'feature', rc: 'RC', final: 'final' };
 
 type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disconnect' | 'connect' } | null;
@@ -39,7 +33,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
  */
 @Component({
   selector: 'app-environments',
-  imports: [DatePipe, ReactiveFormsModule, RouterLink, ProductionConfirmationPanel],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink, ProductionConfirmationPanel, StatusBadge],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Environments</h1>
@@ -162,9 +156,7 @@ type Editing = { readonly id: string; readonly kind: 'edit' | 'archive' | 'disco
                   <td>{{ imagesLabel(environment) }} images</td>
                   <td>
                     @if (environment.target; as target) {
-                      <span class="status" [attr.data-status]="'target-' + target.status">
-                        {{ targetLabel(target.status) }}
-                      </span>
+                      <app-status [status]="targetState(target.status)" />
                       @if (target.provider === 'local') {
                         <p class="cell-note">This machine</p>
                       }
@@ -412,8 +404,8 @@ export class Environments implements OnInit, OnDestroy {
     clearTimeout(this.#refreshTimer);
   }
 
-  protected targetLabel(status: TargetStatus): string {
-    return TARGET_LABELS[status];
+  protected targetState(status: TargetStatus): Status {
+    return targetStatus(status);
   }
 
   protected imagesLabel(environment: Environment): string {

@@ -17,14 +17,7 @@ import {
 } from './delivery.api';
 import { DeploymentsPanel } from './deployments-panel';
 import { StepList, type Step, type StepStatus } from '../../shared/steps';
-
-const STATUS_LABELS: Readonly<Record<BuildStatus, string>> = {
-  queued: 'Waiting',
-  running: 'Building',
-  succeeded: 'Ready',
-  failed: 'Failed',
-  deleted: 'Deleted',
-};
+import { buildStatus, releaseStatus, type Status, StatusBadge, statusText } from '../../shared/status';
 
 const KIND_LABELS: Readonly<Record<BuildKind, string>> = {
   feature: 'Feature',
@@ -33,19 +26,13 @@ const KIND_LABELS: Readonly<Record<BuildKind, string>> = {
   check: 'Pull request check',
 };
 
-const RELEASE_STATUS: Readonly<Record<Release['status'], string>> = {
-  open: 'Open',
-  merged: 'Merged, building the final image',
-  published: 'Published',
-};
-
 /** How often the page refreshes while a build is running or a release is open. */
 const REFRESH_MS = 5_000;
 
 /** One application: its repository, versions, builds and releases. */
 @Component({
   selector: 'app-application-detail',
-  imports: [DatePipe, ReactiveFormsModule, RouterLink, StepList, DeploymentsPanel],
+  imports: [DatePipe, ReactiveFormsModule, RouterLink, StepList, StatusBadge, DeploymentsPanel],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <p><a routerLink="/applications">← Applications</a></p>
@@ -127,20 +114,18 @@ const REFRESH_MS = 5_000;
           <div class="release">
             <h3>
               {{ release.kind === 'release' ? 'Release' : 'Hotfix' }} {{ release.version }}
-              <span class="status" [attr.data-status]="release.status === 'published' ? 'active' : null">
-                {{ releaseStatus(release) }}
-              </span>
+              <app-status [status]="releaseState(release)" />
             </h3>
             <ul class="ability-list">
               @for (candidate of release.candidates; track candidate.number) {
                 <li>
                   <code>{{ candidate.tag }}</code> on <code>{{ candidate.commit.slice(0, 7) }}</code>:
-                  {{ candidate.buildStatus ? statusLabel(candidate.buildStatus) : 'Waiting' }}
+                  {{ candidate.buildStatus ? buildText(candidate.buildStatus) : 'Queued' }}
                 </li>
               }
               @if (release.finalBuildStatus; as status) {
                 <li>
-                  Final image <code>{{ release.version }}</code>: {{ statusLabel(status) }}
+                  Final image <code>{{ release.version }}</code>: {{ buildText(status) }}
                   @if (status === 'failed' && canStartReleases()) {
                     <button type="button" class="button" [disabled]="working()" (click)="rebuild(release)">
                       Build it again
@@ -231,7 +216,7 @@ const REFRESH_MS = 5_000;
                     </td>
                     <td>{{ kindLabel(build.kind) }}</td>
                     <td>
-                      <span class="status" [attr.data-status]="statusStyle(build.status)">{{ statusLabel(build.status) }}</span>
+                      <app-status [status]="buildState(build.status)" />
                       <app-step-list [steps]="buildSteps(build)" [label]="'Steps of ' + build.tag" />
                       @if (build.failureReason) {
                         <p class="cell-note">{{ build.failureReason }}</p>
@@ -356,8 +341,13 @@ export class ApplicationDetail implements OnInit, OnDestroy {
     clearTimeout(this.#refreshTimer);
   }
 
-  protected statusLabel(status: BuildStatus): string {
-    return STATUS_LABELS[status];
+  protected buildState(status: BuildStatus): Status {
+    return buildStatus(status);
+  }
+
+  /** A build's status in a sentence, such as a release candidate's. */
+  protected buildText(status: BuildStatus): string {
+    return statusText(buildStatus(status));
   }
 
   /** Failed checks and warnings, with why and how to fix them. Passed ones are left out. */
@@ -380,16 +370,12 @@ export class ApplicationDetail implements OnInit, OnDestroy {
     }));
   }
 
-  protected statusStyle(status: BuildStatus): string | null {
-    return status === 'succeeded' ? 'active' : status === 'failed' ? 'provisioning-failed' : null;
-  }
-
   protected kindLabel(kind: BuildKind): string {
     return KIND_LABELS[kind];
   }
 
-  protected releaseStatus(release: Release): string {
-    return RELEASE_STATUS[release.status];
+  protected releaseState(release: Release): Status {
+    return releaseStatus(release.status);
   }
 
   protected vulnerabilities(build: Build): string {

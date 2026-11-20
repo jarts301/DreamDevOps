@@ -20,22 +20,10 @@ import {
   type Strategy,
 } from './delivery.api';
 import { plainStep, StepList, type Step, type StepStatus } from '../../shared/steps';
+import { deploymentStatus, type Status, StatusBadge } from '../../shared/status';
 
 const REFRESH_MS = 5_000;
 const ACTIVE: readonly DeploymentStatus[] = ['awaiting-approval', 'queued', 'committed', 'progressing', 'paused'];
-
-const STATUS_LABELS: Readonly<Record<DeploymentStatus, string>> = {
-  'awaiting-approval': 'Waiting for approval',
-  rejected: 'Rejected',
-  queued: 'Starting',
-  committed: 'Waiting for the target',
-  progressing: 'Rolling out',
-  paused: 'Waiting to switch traffic',
-  succeeded: 'Running',
-  failed: 'Failed',
-  aborted: 'Aborted',
-  superseded: 'Replaced by a newer deployment',
-};
 
 const STRATEGY_LABELS: Readonly<Record<Strategy, string>> = {
   recreate: 'Recreate',
@@ -94,7 +82,7 @@ export function deploymentSteps(deployment: Deployment): Step[] {
  */
 @Component({
   selector: 'app-deployments-panel',
-  imports: [DatePipe, ProductionConfirmationPanel, ReactiveFormsModule, StepList, RouterLink],
+  imports: [DatePipe, ProductionConfirmationPanel, ReactiveFormsModule, StepList, StatusBadge, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (error(); as message) {
@@ -285,7 +273,7 @@ export function deploymentSteps(deployment: Deployment): Step[] {
                     }
                   </td>
                   <td>
-                    <span class="status" [attr.data-status]="statusStyle(deployment.status)">{{ statusLabel(deployment.status) }}</span>
+                    <app-status [status]="deploymentState(deployment.status)" />
                     <app-step-list [steps]="steps(deployment)" [label]="'Steps of deployment ' + (deployment.version.version ?? deployment.version.tag)" />
                     @if (deployment.message) {
                       <p class="cell-note">{{ deployment.message }}</p>
@@ -387,12 +375,8 @@ export class DeploymentsPanel implements OnInit, OnDestroy {
     return deploymentSteps(deployment);
   }
 
-  protected statusLabel(status: DeploymentStatus): string {
-    return STATUS_LABELS[status];
-  }
-
-  protected statusStyle(status: DeploymentStatus): string | null {
-    return status === 'succeeded' ? 'active' : status === 'failed' || status === 'rejected' ? 'provisioning-failed' : null;
+  protected deploymentState(status: DeploymentStatus): Status {
+    return deploymentStatus(status);
   }
 
   protected strategyLabel(strategy: Strategy): string {

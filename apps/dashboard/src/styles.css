@@ -14,6 +14,8 @@
   --color-success: #1e7a3a;
   /* Orange: what's been normal lately, such as a metric's daily high. */
   --color-warning: #ea580c;
+  /* Behind what waits for someone, or works less well than it should. */
+  --color-warning-surface: #fdf0e3;
   --radius: 8px;
 }
 
@@ -32,6 +34,7 @@
     --color-success-surface: #17321f;
     --color-success: #7ad79a;
     --color-warning: #fb923c;
+    --color-warning-surface: #3a2414;
   }
 }
 
@@ -400,17 +403,49 @@ th {
 
 .status[data-status='provisioning-failed'],
 .status[data-status='suspended'],
-.status[data-status='target-lost'],
 .status[data-tone='danger'] {
   background: var(--color-error-surface);
 }
 
-.status[data-status='target-connected'] {
-  background: var(--color-success-surface);
-}
-
 .status[data-tone='progress'] {
   border-color: var(--color-primary);
+}
+
+/* The shared status vocabulary (shared/status.ts): one color, symbol and word per state. */
+.status-badge {
+  display: inline;
+}
+
+.status[data-state='passed'],
+.status[data-state='healthy'] {
+  background: var(--color-success-surface);
+  border-color: var(--color-success);
+}
+
+.status[data-state='failed'] {
+  background: var(--color-error-surface);
+  border-color: var(--color-danger);
+}
+
+.status[data-state='running'] {
+  border-color: var(--color-primary);
+}
+
+.status[data-state='awaiting-approval'],
+.status[data-state='degraded'] {
+  background: var(--color-warning-surface);
+  border-color: var(--color-warning);
+}
+
+.status[data-state='queued'],
+.status[data-state='inactive'] {
+  color: var(--color-muted);
+}
+
+.status-detail {
+  margin-left: 6px;
+  color: var(--color-muted);
+  font-size: 0.85rem;
 }
 
 .cell-actions {
